@@ -12,7 +12,13 @@ class Settings(BaseSettings):
     # Baidu OCR
     baidu_ocr_api_key: str = ""
     baidu_ocr_secret_key: str = ""
-    ocr_provider: str = "baidu"  # baidu / gpt4o
+
+    # OCR Provider: baidu / gpt4o / deepseek
+    ocr_provider: str = "baidu"
+
+    # DeepSeek-OCR 本地模型配置
+    deepseek_ocr_venv: str = r"F:\Python-Project\DeepseekOcrTEst\venv"
+    deepseek_ocr_model: str = "deepseek-ai/DeepSeek-OCR"
 
     # LLM Provider
     llm_provider: str = "openai"  # openai / azure / deepseek / claude

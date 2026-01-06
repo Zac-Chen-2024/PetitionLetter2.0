@@ -544,6 +544,118 @@ def list_l1_versions(project_id: str) -> Dict[str, List[Dict]]:
     return {"analyses": analyses, "summaries": summaries}
 
 
+# ==================== 文件存储 ====================
+
+def get_files_dir(project_id: str) -> Path:
+    """获取项目文件存储目录"""
+    files_dir = get_project_dir(project_id) / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    return files_dir
+
+
+def save_uploaded_file(project_id: str, document_id: str, file_bytes: bytes, file_name: str) -> Path:
+    """保存上传的原始文件
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+        file_bytes: 文件内容
+        file_name: 原始文件名
+
+    Returns:
+        保存的文件路径
+    """
+    files_dir = get_files_dir(project_id)
+
+    # 使用 document_id 作为文件名前缀，保留原始扩展名
+    ext = Path(file_name).suffix.lower()
+    saved_path = files_dir / f"{document_id}{ext}"
+
+    with open(saved_path, 'wb') as f:
+        f.write(file_bytes)
+
+    return saved_path
+
+
+def get_uploaded_file(project_id: str, document_id: str, file_name: str) -> Optional[bytes]:
+    """读取已上传的原始文件
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+        file_name: 原始文件名（用于获取扩展名）
+
+    Returns:
+        文件内容，如果不存在返回 None
+    """
+    files_dir = get_files_dir(project_id)
+    ext = Path(file_name).suffix.lower()
+    file_path = files_dir / f"{document_id}{ext}"
+
+    if not file_path.exists():
+        return None
+
+    with open(file_path, 'rb') as f:
+        return f.read()
+
+
+def delete_uploaded_file(project_id: str, document_id: str, file_name: str) -> bool:
+    """删除已上传的原始文件"""
+    files_dir = get_files_dir(project_id)
+    ext = Path(file_name).suffix.lower()
+    file_path = files_dir / f"{document_id}{ext}"
+
+    if file_path.exists():
+        file_path.unlink()
+        return True
+    return False
+
+
+def load_uploaded_file(project_id: str, document_id: str) -> Optional[bytes]:
+    """加载已上传的原始文件（通过document_id匹配，自动查找扩展名）
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+
+    Returns:
+        文件内容，如果不存在返回 None
+    """
+    files_dir = get_files_dir(project_id)
+
+    # 尝试常见扩展名
+    for ext in ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff']:
+        file_path = files_dir / f"{document_id}{ext}"
+        if file_path.exists():
+            with open(file_path, 'rb') as f:
+                return f.read()
+
+    # 尝试匹配以 document_id 开头的文件
+    for file_path in files_dir.glob(f"{document_id}*"):
+        if file_path.is_file():
+            with open(file_path, 'rb') as f:
+                return f.read()
+
+    return None
+
+
+def delete_document_file(project_id: str, document_id: str) -> bool:
+    """删除文档相关的所有文件（通过document_id匹配）"""
+    files_dir = get_files_dir(project_id)
+    deleted = False
+
+    if files_dir.exists():
+        # 删除所有以 document_id 开头的文件
+        for file_path in files_dir.glob(f"{document_id}*"):
+            try:
+                file_path.unlink()
+                deleted = True
+            except Exception:
+                pass
+
+    return deleted
+
+
 # ==================== 辅助函数 ====================
 
 def _update_project_time(project_id: str):
@@ -572,3 +684,264 @@ def get_full_project_data(project_id: str) -> Optional[Dict]:
         "relationship_versions": list_relationship_versions(project_id),
         "writing_versions": list_writing_versions(project_id)
     }
+
+
+# ==================== 样式模板存储 ====================
+
+def get_style_templates_dir() -> Path:
+    """获取样式模板存储目录（全局，不按项目分）"""
+    templates_dir = DATA_DIR / "style_templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    return templates_dir
+
+
+def save_style_template(section: str, name: str, original_text: str, parsed_structure: str) -> Dict:
+    """保存样式模板
+
+    Args:
+        section: 段落类型 (qualifying_relationship, qualifying_employment, etc.)
+        name: 模板名称
+        original_text: 用户粘贴的原始例文
+        parsed_structure: LLM 解析出的结构（带占位符）
+
+    Returns:
+        保存的模板数据
+    """
+    templates_dir = get_style_templates_dir()
+    section_dir = templates_dir / section
+    section_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now()
+    template_id = f"tpl_{int(timestamp.timestamp() * 1000)}"
+
+    template_data = {
+        "id": template_id,
+        "section": section,
+        "name": name,
+        "original_text": original_text,
+        "parsed_structure": parsed_structure,
+        "created_at": timestamp.isoformat(),
+        "updated_at": timestamp.isoformat()
+    }
+
+    filepath = section_dir / f"{template_id}.json"
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(template_data, f, ensure_ascii=False, indent=2)
+
+    return template_data
+
+
+def get_style_templates(section: str = None) -> List[Dict]:
+    """获取样式模板列表
+
+    Args:
+        section: 可选，指定段落类型。不指定则返回所有模板
+
+    Returns:
+        模板列表
+    """
+    templates_dir = get_style_templates_dir()
+    templates = []
+
+    if section:
+        # 获取指定 section 的模板
+        section_dir = templates_dir / section
+        if section_dir.exists():
+            for f in sorted(section_dir.glob("tpl_*.json"), reverse=True):
+                with open(f, 'r', encoding='utf-8') as file:
+                    templates.append(json.load(file))
+    else:
+        # 获取所有 section 的模板
+        for section_dir in templates_dir.iterdir():
+            if section_dir.is_dir():
+                for f in sorted(section_dir.glob("tpl_*.json"), reverse=True):
+                    with open(f, 'r', encoding='utf-8') as file:
+                        templates.append(json.load(file))
+
+        # 按创建时间倒序
+        templates.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+
+    return templates
+
+
+def get_style_template(template_id: str) -> Optional[Dict]:
+    """获取单个样式模板"""
+    templates_dir = get_style_templates_dir()
+
+    # 遍历所有 section 目录查找
+    for section_dir in templates_dir.iterdir():
+        if section_dir.is_dir():
+            filepath = section_dir / f"{template_id}.json"
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+
+    return None
+
+
+def delete_style_template(template_id: str) -> bool:
+    """删除样式模板"""
+    templates_dir = get_style_templates_dir()
+
+    # 遍历所有 section 目录查找并删除
+    for section_dir in templates_dir.iterdir():
+        if section_dir.is_dir():
+            filepath = section_dir / f"{template_id}.json"
+            if filepath.exists():
+                filepath.unlink()
+                return True
+
+    return False
+
+
+# ==================== 高亮图片存储 ====================
+
+def get_highlights_dir(project_id: str) -> Path:
+    """获取项目高亮图片存储目录"""
+    highlights_dir = get_project_dir(project_id) / "highlights"
+    highlights_dir.mkdir(parents=True, exist_ok=True)
+    return highlights_dir
+
+
+def save_highlight_image(project_id: str, document_id: str, page_number: int, image_bytes: bytes) -> str:
+    """保存高亮图片
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+        page_number: 页码
+        image_bytes: 图片内容 (PNG)
+
+    Returns:
+        保存的相对 URL 路径
+    """
+    highlights_dir = get_highlights_dir(project_id)
+    filename = f"{document_id}_page_{page_number}.png"
+    file_path = highlights_dir / filename
+
+    with open(file_path, 'wb') as f:
+        f.write(image_bytes)
+
+    # 返回相对 URL
+    return f"/api/highlight/saved/{project_id}/{document_id}/{page_number}"
+
+
+# ==================== OCR 页级别存储 ====================
+
+def get_ocr_pages_dir(project_id: str, document_id: str) -> Path:
+    """获取文档 OCR 页结果目录"""
+    ocr_dir = get_project_dir(project_id) / "ocr_pages" / document_id
+    ocr_dir.mkdir(parents=True, exist_ok=True)
+    return ocr_dir
+
+
+def save_ocr_page(project_id: str, document_id: str, page_number: int, page_result: Dict):
+    """保存单页 OCR 结果
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+        page_number: 页码 (从1开始)
+        page_result: 页面OCR结果 {"page_number": 1, "markdown_text": "...", "text_blocks": [...]}
+    """
+    ocr_dir = get_ocr_pages_dir(project_id, document_id)
+    filepath = ocr_dir / f"page_{page_number}.json"
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(page_result, f, ensure_ascii=False, indent=2)
+
+
+def get_completed_pages(project_id: str, document_id: str) -> List[int]:
+    """获取已完成的页码列表
+
+    Returns:
+        已完成页码的有序列表，如 [1, 2, 3, 5] (第4页未完成)
+    """
+    project_dir = get_project_dir(project_id)
+    ocr_dir = project_dir / "ocr_pages" / document_id
+    if not ocr_dir.exists():
+        return []
+
+    completed = []
+    for f in ocr_dir.glob("page_*.json"):
+        try:
+            page_num = int(f.stem.split("_")[1])
+            completed.append(page_num)
+        except (ValueError, IndexError):
+            pass
+    return sorted(completed)
+
+
+def load_all_ocr_pages(project_id: str, document_id: str) -> List[Dict]:
+    """加载所有已完成的页结果
+
+    Returns:
+        按页码排序的页面结果列表
+    """
+    project_dir = get_project_dir(project_id)
+    ocr_dir = project_dir / "ocr_pages" / document_id
+    if not ocr_dir.exists():
+        return []
+
+    pages = []
+    for f in sorted(ocr_dir.glob("page_*.json"), key=lambda x: int(x.stem.split("_")[1])):
+        with open(f, 'r', encoding='utf-8') as file:
+            pages.append(json.load(file))
+    return pages
+
+
+def clear_ocr_pages(project_id: str, document_id: str):
+    """清除文档的所有页 OCR 结果（用于完全重新处理）"""
+    import shutil
+    project_dir = get_project_dir(project_id)
+    ocr_dir = project_dir / "ocr_pages" / document_id
+    if ocr_dir.exists():
+        shutil.rmtree(ocr_dir)
+
+
+def get_highlight_image(project_id: str, document_id: str, page_number: int) -> Optional[bytes]:
+    """获取已保存的高亮图片
+
+    Args:
+        project_id: 项目ID
+        document_id: 文档ID
+        page_number: 页码
+
+    Returns:
+        图片内容，如果不存在返回 None
+    """
+    highlights_dir = get_highlights_dir(project_id)
+    filename = f"{document_id}_page_{page_number}.png"
+    file_path = highlights_dir / filename
+
+    if not file_path.exists():
+        return None
+
+    with open(file_path, 'rb') as f:
+        return f.read()
+
+
+def update_style_template(template_id: str, updates: Dict) -> Optional[Dict]:
+    """更新样式模板"""
+    templates_dir = get_style_templates_dir()
+
+    # 遍历所有 section 目录查找
+    for section_dir in templates_dir.iterdir():
+        if section_dir.is_dir():
+            filepath = section_dir / f"{template_id}.json"
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    template = json.load(f)
+
+                # 更新字段
+                for key, value in updates.items():
+                    if key in ['name', 'original_text', 'parsed_structure'] and value is not None:
+                        template[key] = value
+
+                template['updated_at'] = datetime.now().isoformat()
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(template, f, ensure_ascii=False, indent=2)
+
+                return template
+
+    return None

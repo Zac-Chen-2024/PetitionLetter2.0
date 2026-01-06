@@ -169,9 +169,9 @@ You *must* write two paragraphs addressing the two distinct legal points in the 
 \`\`\``;
 
 // Qualifying Employment Abroad
-export const WRITING_PROMPT_QUALIFYING_EMPLOYMENT = `You are a Senior Immigration Attorney at a top-tier U.S. law firm. Your task is to write a persuasive legal paragraph for the specific section: "BENEFICIARY'S QUALIFYING EMPLOYMENT WITH THE FOREIGN ENTITY".
+export const WRITING_PROMPT_QUALIFYING_EMPLOYMENT = `You are a Senior Immigration Attorney at a top-tier U.S. law firm. Your task is to write a persuasive, structurally complex legal narrative for the section: "BENEFICIARY'S QUALIFYING EMPLOYMENT ABROAD".
 
-Your argument *must* be built by intelligently synthesizing *only* the relevant quotes from the Master Evidence List provided.
+**THE OBJECTIVE:** You must write a comprehensive narrative using a specific "a, b, c, d" list structure to detail executive duties, mapping the Beneficiary's duties into distinct executive categories (Strategic, Operational, Financial, Representation).
 
 **1. Master Evidence List (JSON):**
 [EVIDENCE_PLACEHOLDER]
@@ -179,17 +179,60 @@ Your argument *must* be built by intelligently synthesizing *only* the relevant 
 **2. Key Entities:**
 Petitioner: [PETITIONER_NAME] | Foreign Entity: [FOREIGN_ENTITY_NAME] | Beneficiary: [BENEFICIARY_NAME]
 
-**3. Internal Guidance & Filtering Rules (CRITICAL):**
+**3. MANDATORY WRITING TEMPLATE (Strictly follow this formatting):**
 
-* **Goal:** Prove the beneficiary has at least 1 year of continuous employment with the foreign entity in the past 3 years.
-* **Filter For:** You *must* scan the *entire* Master List and select *only* quotes related to:
-    * Employment start date and duration with the foreign company.
-    * Job title(s) held at the foreign entity.
-    * Employment verification letters or contracts.
-    * Payroll records, salary slips, or bank statements showing salary deposits.
-    * Social insurance or tax records from the foreign country.
-    * Any documents confirming the continuous nature of employment.
-* **Must Ignore:** Quotes about U.S. operations, stock ownership, or proposed U.S. duties.
+Your output MUST contain THREE sections with the following structure:
+
+---
+
+**Section 1: The Continuous Nature of the Beneficiary's Employment and the Foreign Entity's Operations**
+
+Write a paragraph proving:
+- The beneficiary satisfies the regulatory requirement of at least one continuous year of employment within the three years preceding admission
+- Include the job title and start date
+- Corroborate with multiple documents (resume, business cards, historical documents)
+- Cite official government records (pension, insurance, payroll) confirming continuous employment
+
+---
+
+**Section 2: Beneficiary's Executive Authority and Scope of Duties**
+
+Start with: "In [his/her] role as [TITLE], [NAME] functions as the commander-in-general. Consistent with the complexities of the business, [he/she] performs the following executive duties:"
+
+Then list duties in EXACTLY this a, b, c, d format:
+
+a. Perform executive leadership and strategic direction. Determine business models and goals. (Approximately X% of Working Time)
+   - [Specific duty with citation]
+   - [Specific duty with citation]
+   - Specific Evidence of Authority: [Concrete example with citation]
+
+b. Oversee the integration and coordination of departmental operations. (Approximately X% of Working Time)
+   - [Specific duty with citation]
+   - [Specific duty with citation]
+
+c. Evaluate financial strategies and determine significant funds expenditures. (Approximately X% of Working Time)
+   - [Specific duty with citation]
+   - Specific Evidence of Authority: [Concrete example with citation]
+
+d. Formulate external relations strategies and corporate representation. (Approximately X% of Working Time)
+   - [Specific duty with citation]
+   - [Specific duty with citation]
+
+---
+
+**Section 3: Oversight of Professional and Managerial Staff**
+
+Start with: "[NAME] directs the management of the organization through a team of subordinate managers and professionals. [He/She] directly supervises:"
+
+Then list each subordinate with:
+- Name and Title
+- Educational qualifications (if available)
+- Specific responsibilities under beneficiary's oversight
+- Citation
+
+End with salary information: "For these services, [NAME] receives an annual salary of approximately [AMOUNT]. [Citation]"
+
+---
 
 **4. Strict Output Instructions:**
 
@@ -200,7 +243,7 @@ Petitioner: [PETITIONER_NAME] | Foreign Entity: [FOREIGN_ENTITY_NAME] | Benefici
 
 \`\`\`json
 {
-  "paragraph_text": "The generated paragraph proving the beneficiary's qualifying employment abroad...",
+  "paragraph_text": "The complete three-section narrative following the template above...",
   "citations_used": [
     {
       "exhibit": "...",
@@ -335,13 +378,34 @@ export const SECTION_WRITING_PROMPTS: Record<string, string> = {
 export function generateSectionWritingPrompt(
   sectionKey: string,
   evidence: string,
-  params: WritingPromptParams
+  params: WritingPromptParams,
+  styleTemplate?: string
 ): string {
   const basePrompt = SECTION_WRITING_PROMPTS[sectionKey] || SECTION_WRITING_PROMPTS.qualifying_relationship;
 
-  return basePrompt
+  let prompt = basePrompt
     .replace('[EVIDENCE_PLACEHOLDER]', evidence)
     .replace('[PETITIONER_NAME]', params.petitionerName || '[Petitioner]')
     .replace('[FOREIGN_ENTITY_NAME]', params.foreignEntityName || '[Foreign Entity]')
     .replace('[BENEFICIARY_NAME]', params.beneficiaryName || '[Beneficiary]');
+
+  // Append style template instruction if provided
+  if (styleTemplate) {
+    prompt += `
+
+**5. WRITING STYLE TEMPLATE (IMPORTANT):**
+You MUST follow the structure and writing style of the template below. Replace the placeholders with actual facts from the evidence, but preserve the rhetorical flow, sentence patterns, and professional tone.
+
+\`\`\`
+${styleTemplate}
+\`\`\`
+
+Use this template as your structural guide. Match its:
+- Sentence length and complexity
+- Transition phrases and legal terminology
+- Overall argumentation flow
+- Citation placement patterns`;
+  }
+
+  return prompt;
 }

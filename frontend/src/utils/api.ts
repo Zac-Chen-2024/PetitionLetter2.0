@@ -56,6 +56,80 @@ export const documentApi = {
 
     return response.json();
   },
+
+  // Delete a single document
+  deleteDocument: (documentId: string) =>
+    fetchApi<{ success: boolean; message: string; document_id: string }>(
+      `/api/document/${documentId}`,
+      { method: 'DELETE' }
+    ),
+
+  // Delete multiple documents
+  deleteDocumentsBatch: (projectId: string, documentIds: string[]) =>
+    fetchApi<{
+      success: boolean;
+      deleted_count: number;
+      total_requested: number;
+      errors?: { document_id: string; error: string }[];
+    }>(`/api/document/batch/${projectId}`, {
+      method: 'DELETE',
+      body: JSON.stringify(documentIds),
+    }),
+};
+
+// OCR APIs - 手动触发 OCR（与上传解耦）
+export const ocrApi = {
+  // Trigger OCR for a single document
+  triggerSingle: (documentId: string) =>
+    fetchApi<{ success: boolean; message: string; document_id: string }>(
+      `/api/ocr/${documentId}`,
+      { method: 'POST' }
+    ),
+
+  // Trigger OCR for all pending documents in a project
+  triggerBatch: (projectId: string) =>
+    fetchApi<{
+      success: boolean;
+      message: string;
+      total: number;
+      batch_id: string | null;
+    }>(`/api/ocr/batch/${projectId}`, { method: 'POST' }),
+
+  // Get batch OCR status
+  getBatchStatus: (batchId: string) =>
+    fetchApi<{
+      batch_id: string;
+      project_id: string;
+      total: number;
+      completed: number;
+      failed: number;
+      processing: number;
+      pending: number;
+      progress_percent: number;
+      started_at: string;
+      finished_at: string | null;
+      is_finished: boolean;
+      documents: Record<string, { status: string; file_name: string; error?: string }>;
+    }>(`/api/ocr/status/${batchId}`),
+
+  // Get project OCR progress
+  getProgress: (projectId: string) =>
+    fetchApi<{
+      project_id: string;
+      total: number;
+      pending: number;
+      processing: number;
+      completed: number;
+      failed: number;
+      progress_percent: number;
+      documents: Array<{
+        id: string;
+        file_name: string;
+        exhibit_number: string;
+        ocr_status: string;
+        page_count: number;
+      }>;
+    }>(`/api/ocr/progress/${projectId}`),
 };
 
 // L-1 Analysis APIs
@@ -255,31 +329,43 @@ export interface EntityNames {
   beneficiaryName: string;
 }
 
+// Project type
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string | null;
+  beneficiaryName: string | null;
+  petitionerName: string | null;
+  foreignEntityName: string | null;
+}
+
 // Project APIs
 export const projectApi = {
+  // List all projects
+  listProjects: () =>
+    fetchApi<Project[]>('/api/projects'),
+
+  // Create a new project
+  createProject: (name: string) =>
+    fetchApi<Project>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  // Delete a project
+  deleteProject: (projectId: string) =>
+    fetchApi<{ success: boolean; message: string }>(`/api/projects/${projectId}`, {
+      method: 'DELETE',
+    }),
+
   // Get project info
   getProject: (projectId: string) =>
-    fetchApi<{
-      id: string;
-      name: string;
-      createdAt: string;
-      updatedAt: string | null;
-      beneficiaryName: string | null;
-      petitionerName: string | null;
-      foreignEntityName: string | null;
-    }>(`/api/projects/${projectId}`),
+    fetchApi<Project>(`/api/projects/${projectId}`),
 
   // Update project meta (beneficiary name, etc.)
   updateProject: (projectId: string, updates: { beneficiaryName?: string; petitionerName?: string; foreignEntityName?: string }) =>
-    fetchApi<{
-      id: string;
-      name: string;
-      createdAt: string;
-      updatedAt: string | null;
-      beneficiaryName: string | null;
-      petitionerName: string | null;
-      foreignEntityName: string | null;
-    }>(`/api/projects/${projectId}`, {
+    fetchApi<Project>(`/api/projects/${projectId}`, {
       method: 'PATCH',
       body: JSON.stringify(updates),
     }),
@@ -298,3 +384,212 @@ export const healthApi = {
       openai: string;
     }>('/api/health'),
 };
+
+// Style Template types
+export interface StyleTemplate {
+  id: string;
+  section: string;
+  name: string;
+  original_text: string;
+  parsed_structure: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParsedStyleResult {
+  structure_analysis: string;
+  template: string;
+  placeholders: Array<{
+    name: string;
+    description: string;
+    example: string;
+  }>;
+}
+
+// Highlight types
+export interface HighlightItem {
+  id: string;
+  text_content: string | null;
+  category: string | null;
+  category_cn: string | null;
+  importance: string | null;
+  reason: string | null;
+  page_number: number;
+  bbox: {
+    x1: number | null;
+    y1: number | null;
+    x2: number | null;
+    y2: number | null;
+  } | null;
+  source_block_ids: string[];
+}
+
+export interface DocumentHighlightInfo {
+  id: string;
+  file_name: string;
+  exhibit_number: string | null;
+  ocr_status: string;
+  highlight_status: string | null;
+  page_count: number;
+}
+
+// Highlight APIs
+export const highlightApi = {
+  // Trigger highlight analysis for a document
+  trigger: (documentId: string) =>
+    fetchApi<{
+      success: boolean;
+      message: string;
+      document_id: string;
+      status: string;
+    }>(`/api/highlight/${documentId}`, { method: 'POST' }),
+
+  // Trigger batch highlight for a project
+  triggerBatch: (projectId: string) =>
+    fetchApi<{
+      success: boolean;
+      message: string;
+      total: number;
+      documents: { id: string; file_name: string }[];
+    }>(`/api/highlight/batch/${projectId}`, { method: 'POST' }),
+
+  // Get highlights for a document
+  getHighlights: (documentId: string, page?: number) => {
+    const params = page ? `?page=${page}` : '';
+    return fetchApi<{
+      document_id: string;
+      file_name: string;
+      highlight_status: string | null;
+      total_highlights: number;
+      highlights: HighlightItem[];
+    }>(`/api/highlight/${documentId}${params}`);
+  },
+
+  // Get highlights grouped by page
+  getHighlightsByPage: (documentId: string) =>
+    fetchApi<{
+      document_id: string;
+      file_name: string;
+      highlight_status: string | null;
+      page_count: number;
+      highlights_by_page: Record<number, HighlightItem[]>;
+    }>(`/api/highlight/by-page/${documentId}`),
+
+  // Get highlight status for a document
+  getStatus: (documentId: string) =>
+    fetchApi<{
+      document_id: string;
+      highlight_status: string | null;
+      highlight_count: number;
+      ocr_status: string;
+      has_text_blocks: boolean;
+    }>(`/api/highlight/status/${documentId}`),
+
+  // Get project highlight progress
+  getProgress: (projectId: string) =>
+    fetchApi<{
+      project_id: string;
+      total: number;
+      not_started: number;
+      pending: number;
+      processing: number;
+      completed: number;
+      failed: number;
+      progress_percent: number;
+      documents: DocumentHighlightInfo[];
+    }>(`/api/highlight/progress/${projectId}`),
+
+  // Get document page as image
+  getPageImage: (documentId: string, pageNumber: number, dpi?: number) => {
+    const params = dpi ? `?dpi=${dpi}` : '';
+    return `${API_BASE}/api/highlight/page/${documentId}/${pageNumber}/image${params}`;
+  },
+
+  // Save highlighted image
+  saveImage: (documentId: string, pageNumber: number, imageBase64: string) =>
+    fetchApi<{
+      success: boolean;
+      document_id: string;
+      page_number: number;
+      url: string;
+    }>(`/api/highlight/${documentId}/save`, {
+      method: 'POST',
+      body: JSON.stringify({
+        page_number: pageNumber,
+        image_base64: imageBase64,
+      }),
+    }),
+
+  // Get saved highlight images
+  getSavedImages: (documentId: string) =>
+    fetchApi<{
+      document_id: string;
+      image_urls: Record<string, string>;
+      total_saved: number;
+    }>(`/api/highlight/${documentId}/saved-images`),
+};
+
+// Style Template APIs
+export const styleTemplateApi = {
+  // Parse sample text to extract structure
+  parse: (section: string, sampleText: string) =>
+    fetchApi<{
+      success: boolean;
+      section: string;
+      parsed: ParsedStyleResult;
+    }>('/api/style-templates/parse', {
+      method: 'POST',
+      body: JSON.stringify({
+        section,
+        sample_text: sampleText,
+      }),
+    }),
+
+  // Save a new style template
+  create: (data: {
+    section: string;
+    name: string;
+    original_text: string;
+    parsed_structure: string;
+  }) =>
+    fetchApi<{
+      success: boolean;
+      template: StyleTemplate;
+    }>('/api/style-templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Get all templates (optionally filtered by section)
+  list: (section?: string) => {
+    const params = section ? `?section=${section}` : '';
+    return fetchApi<{
+      templates: StyleTemplate[];
+      count: number;
+    }>(`/api/style-templates${params}`);
+  },
+
+  // Get a single template by ID
+  get: (templateId: string) =>
+    fetchApi<StyleTemplate>(`/api/style-templates/${templateId}`),
+
+  // Update a template
+  update: (templateId: string, data: { name?: string; parsed_structure?: string }) =>
+    fetchApi<{
+      success: boolean;
+      template: StyleTemplate;
+    }>(`/api/style-templates/${templateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  // Delete a template
+  delete: (templateId: string) =>
+    fetchApi<{
+      success: boolean;
+      deleted: string;
+    }>(`/api/style-templates/${templateId}`, {
+      method: 'DELETE',
+    }),
+};
+

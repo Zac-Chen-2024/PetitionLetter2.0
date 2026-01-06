@@ -8,7 +8,7 @@ Document Pipeline Router - 文档处理流水线
 4. LLM3撰写层: 生成带引用的段落
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, BackgroundTasks, Body
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
@@ -19,9 +19,16 @@ import base64
 import uuid
 
 from app.core.config import settings
-from app.db.database import get_db
-from app.models.document import Document, DocumentAnalysis, OCRStatus
+from app.db.database import get_db, SessionLocal
+from app.models.document import Document, DocumentAnalysis, OCRStatus, TextBlock
 from app.services import storage
+from app.services import deepseek_ocr
+from app.services import bbox_matcher
+from app.services.ocr_queue import ocr_queue
+from app.services.storage import (
+    save_style_template, get_style_templates, get_style_template,
+    delete_style_template, update_style_template
+)
 from app.services.l1_analyzer import get_l1_analysis_prompt, parse_analysis_result, L1_STANDARDS
 from app.services.quote_merger import merge_chunk_analyses, generate_summary, prepare_for_writing, format_citation
 
@@ -168,8 +175,28 @@ async def call_baidu_ocr_single(image_bytes: bytes) -> str:
         return "\n".join([item["words"] for item in words_result])
 
 
-async def perform_ocr(file_bytes: bytes, file_name: str, file_type: str) -> tuple[str, int]:
-    """执行 OCR，返回 (text, page_count)"""
+async def perform_ocr(file_bytes: bytes, file_name: str, file_type: str) -> tuple[str, int, list]:
+    """执行 OCR，返回 (text, page_count, text_blocks)
+
+    text_blocks 仅在使用 DeepSeek-OCR 时返回非空列表
+    """
+    text_blocks = []
+
+    # DeepSeek-OCR provider
+    if OCR_PROVIDER == "deepseek":
+        if not deepseek_ocr.is_available():
+            raise ValueError("DeepSeek-OCR environment not available")
+
+        # PDF 处理
+        if file_type == "application/pdf" or file_name.lower().endswith('.pdf'):
+            result = await deepseek_ocr.process_pdf_async(file_bytes)
+            return result["markdown_text"], result["total_pages"], result["text_blocks"]
+
+        # 图片处理
+        result = await deepseek_ocr.process_image_async(file_bytes)
+        return result["markdown_text"], 1, result["text_blocks"]
+
+    # Baidu OCR provider (默认)
     # PDF 处理
     if file_type == "application/pdf" or file_name.lower().endswith('.pdf'):
         if not PDF_SUPPORT:
@@ -185,52 +212,166 @@ async def perform_ocr(file_bytes: bytes, file_name: str, file_type: str) -> tupl
             except Exception as e:
                 all_texts.append(f"--- Page {i + 1} ---\n[OCR Error: {str(e)}]")
 
-        return "\n\n".join(all_texts), len(images)
+        return "\n\n".join(all_texts), len(images), []
 
     # 图片处理
     text = await call_baidu_ocr_single(file_bytes)
-    return text, 1
+    return text, 1, []
 
 
-async def process_ocr_background(document_id: str, file_bytes: bytes, file_name: str, file_type: str, db: Session):
-    """后台执行 OCR"""
+def perform_ocr_sync(file_bytes: bytes, file_name: str, file_type: str) -> tuple:
+    """同步版本的 OCR 执行函数，用于后台任务"""
+    text_blocks = []
+
+    # DeepSeek-OCR provider
+    if OCR_PROVIDER == "deepseek":
+        if not deepseek_ocr.is_available():
+            raise ValueError("DeepSeek-OCR environment not available")
+
+        # PDF 处理 - 使用同步版本
+        if file_type == "application/pdf" or file_name.lower().endswith('.pdf'):
+            print(f"[OCR] Calling DeepSeek-OCR process_pdf (sync)...", flush=True)
+            result = deepseek_ocr.process_pdf(file_bytes)
+            return result["markdown_text"], result["total_pages"], result["text_blocks"]
+
+        # 图片处理 - 使用同步版本
+        print(f"[OCR] Calling DeepSeek-OCR process_image_bytes (sync)...", flush=True)
+        result = deepseek_ocr.process_image_bytes(file_bytes)
+        return result["markdown_text"], 1, result["text_blocks"]
+
+    # Baidu OCR provider - 需要异步处理
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # PDF 处理
+        if file_type == "application/pdf" or file_name.lower().endswith('.pdf'):
+            if not PDF_SUPPORT:
+                raise ValueError("PDF support not available")
+
+            images = pdf_to_images(file_bytes)
+            all_texts = []
+
+            for i, img_bytes in enumerate(images):
+                try:
+                    page_text = loop.run_until_complete(call_baidu_ocr_single(img_bytes))
+                    all_texts.append(f"--- Page {i + 1} ---\n{page_text}")
+                except Exception as e:
+                    all_texts.append(f"--- Page {i + 1} ---\n[OCR Error: {str(e)}]")
+
+            return "\n\n".join(all_texts), len(images), []
+
+        # 图片处理
+        text = loop.run_until_complete(call_baidu_ocr_single(file_bytes))
+        return text, 1, []
+    finally:
+        loop.close()
+
+
+def process_ocr_background(document_id: str, file_bytes: bytes, file_name: str, file_type: str):
+    """后台执行 OCR - 同步函数"""
+    print(f"[OCR] Starting background OCR for document: {document_id}", flush=True)
+
+    db = SessionLocal()
     try:
         doc = db.query(Document).filter(Document.id == document_id).first()
         if not doc:
+            print(f"[OCR] Document not found: {document_id}", flush=True)
             return
 
         doc.ocr_status = OCRStatus.PROCESSING.value
         db.commit()
+        print(f"[OCR] Set status to PROCESSING for: {document_id}", flush=True)
 
-        text, page_count = await perform_ocr(file_bytes, file_name, file_type)
+        # 使用同步版本的 OCR 函数
+        text, page_count, text_blocks = perform_ocr_sync(file_bytes, file_name, file_type)
+
+        print(f"[OCR] OCR completed for {document_id}: {page_count} pages, {len(text)} chars", flush=True)
 
         doc.ocr_text = text
         doc.ocr_status = OCRStatus.COMPLETED.value
         doc.page_count = page_count
         doc.ocr_completed_at = datetime.utcnow()
+
+        # 如果有 text_blocks (DeepSeek-OCR)，保存到数据库
+        if text_blocks:
+            # 先删除该文档的旧 text_blocks
+            db.query(TextBlock).filter(TextBlock.document_id == document_id).delete()
+
+            # 保存新的 text_blocks
+            for block in text_blocks:
+                bbox = block.get("bbox", {})
+                text_block = TextBlock(
+                    document_id=document_id,
+                    block_id=block.get("block_id", ""),
+                    page_number=block.get("page_number", 1),
+                    text_content=block.get("text_content", ""),
+                    block_type=block.get("block_type", ""),
+                    bbox_x1=bbox.get("x1"),
+                    bbox_y1=bbox.get("y1"),
+                    bbox_x2=bbox.get("x2"),
+                    bbox_y2=bbox.get("y2"),
+                    confidence=block.get("confidence")
+                )
+                db.add(text_block)
+
         db.commit()
+        print(f"[OCR] Successfully saved results for: {document_id}", flush=True)
 
     except Exception as e:
+        print(f"[OCR] ERROR for {document_id}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         doc = db.query(Document).filter(Document.id == document_id).first()
         if doc:
             doc.ocr_status = OCRStatus.FAILED.value
             doc.ocr_error = str(e)
             db.commit()
+    finally:
+        db.close()
+        print(f"[OCR] Finished processing: {document_id}", flush=True)
 
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: str = Form(...),
+    folder: Optional[str] = Form(None),
     exhibit_number: Optional[str] = Form(None),
     exhibit_title: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Stage 1: 上传文档并执行 OCR"""
+    """Stage 1: 上传文档（不自动执行 OCR，需手动触发）
+
+    参数:
+    - folder: 文件夹 (A/B/C/D)，如果提供则自动生成 exhibit_number
+    - exhibit_number: 直接指定 exhibit number (优先于 folder)
+    """
     file_bytes = await file.read()
     file_name = file.filename or "unknown"
     file_type = file.content_type or "application/octet-stream"
+
+    # 如果指定了 folder，自动生成 exhibit_number
+    final_exhibit_number = exhibit_number
+    if not final_exhibit_number and folder:
+        # 查找该项目中该文件夹的最大编号
+        existing_docs = db.query(Document).filter(
+            Document.project_id == project_id,
+            Document.exhibit_number.like(f"{folder.upper()}-%")
+        ).all()
+
+        max_num = 0
+        for doc in existing_docs:
+            if doc.exhibit_number:
+                match = doc.exhibit_number.split('-')
+                if len(match) == 2:
+                    try:
+                        num = int(match[1])
+                        max_num = max(max_num, num)
+                    except ValueError:
+                        pass
+
+        final_exhibit_number = f"{folder.upper()}-{max_num + 1}"
 
     document = Document(
         id=str(uuid.uuid4()),
@@ -240,7 +381,7 @@ async def upload_document(
         file_size=len(file_bytes),
         ocr_status=OCRStatus.PENDING.value,
         ocr_provider=OCR_PROVIDER,
-        exhibit_number=exhibit_number,
+        exhibit_number=final_exhibit_number,
         exhibit_title=exhibit_title or file_name.replace('.', '_')
     )
 
@@ -248,7 +389,10 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
-    background_tasks.add_task(process_ocr_background, document.id, file_bytes, file_name, file_type, db)
+    # 保存原始文件到本地存储（用于后续 OCR）
+    storage.save_uploaded_file(project_id, document.id, file_bytes, file_name)
+
+    # 不再自动启动 OCR，需要手动调用 /ocr/{document_id} 或 /ocr/batch/{project_id}
 
     return DocumentResponse(
         id=document.id,
@@ -293,6 +437,912 @@ async def get_documents(project_id: str, db: Session = Depends(get_db)):
         }
 
     return {"documents": [], "total": 0}
+
+
+@router.delete("/document/{document_id}")
+async def delete_document(document_id: str, db: Session = Depends(get_db)):
+    """删除单个文档"""
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    project_id = document.project_id
+
+    # 删除关联的 text_blocks
+    db.query(TextBlock).filter(TextBlock.document_id == document_id).delete()
+
+    # 删除关联的分析结果
+    db.query(DocumentAnalysis).filter(DocumentAnalysis.document_id == document_id).delete()
+
+    # 删除文档记录
+    db.delete(document)
+    db.commit()
+
+    # 尝试删除本地存储的文件
+    try:
+        storage.delete_document_file(project_id, document_id)
+    except Exception:
+        pass  # 文件可能不存在，忽略错误
+
+    return {"success": True, "message": "Document deleted", "document_id": document_id}
+
+
+@router.delete("/document/batch/{project_id}")
+async def delete_documents_batch(
+    project_id: str,
+    document_ids: list[str] = Body(...),
+    db: Session = Depends(get_db)
+):
+    """批量删除文档"""
+    deleted_count = 0
+    errors = []
+
+    for doc_id in document_ids:
+        document = db.query(Document).filter(
+            Document.id == doc_id,
+            Document.project_id == project_id
+        ).first()
+
+        if document:
+            # 删除关联的 text_blocks
+            db.query(TextBlock).filter(TextBlock.document_id == doc_id).delete()
+
+            # 删除关联的分析结果
+            db.query(DocumentAnalysis).filter(DocumentAnalysis.document_id == doc_id).delete()
+
+            # 删除文档记录
+            db.delete(document)
+            deleted_count += 1
+
+            # 尝试删除本地存储的文件
+            try:
+                storage.delete_document_file(project_id, doc_id)
+            except Exception:
+                pass
+        else:
+            errors.append({"document_id": doc_id, "error": "Document not found"})
+
+    db.commit()
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "total_requested": len(document_ids),
+        "errors": errors if errors else None
+    }
+
+
+# ============== OCR 手动触发与进度监控 ==============
+
+# 全局 OCR 任务状态存储
+_ocr_batch_status: Dict[str, Dict] = {}
+
+
+def _ocr_processor_callback(document_id: str, file_bytes: bytes, file_name: str, file_type: str, batch_id: str = None) -> bool:
+    """OCR 队列处理回调函数 - 实际执行 OCR 的地方
+
+    这个函数会在队列 worker 线程中被调用，确保每次只处理一个文档。
+    支持页级别进度监控、断点续传、暂停/取消控制和页级别时间记录。
+    """
+    print(f"[OCR-Queue-Processor] Processing document: {document_id}", flush=True)
+
+    db = SessionLocal()
+    ocr_started_at = datetime.utcnow()
+
+    try:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            print(f"[OCR-Queue-Processor] Document not found: {document_id}", flush=True)
+            return False
+
+        project_id = doc.project_id
+        doc.ocr_status = OCRStatus.PROCESSING.value
+        doc.ocr_started_at = ocr_started_at
+        db.commit()
+
+        # 更新批次状态（如果有）
+        if batch_id and batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "processing"
+            _ocr_batch_status[batch_id]["processing"] += 1
+
+        # 检查已完成的页（断点续传）
+        completed_pages = storage.get_completed_pages(project_id, document_id)
+        if completed_pages:
+            print(f"[OCR-Queue-Processor] Resuming from page {max(completed_pages)+1}, skipping {len(completed_pages)} completed pages", flush=True)
+
+        # 用于记录每页开始时间
+        page_start_time = {}
+
+        # 定义进度回调 - 更新队列任务状态并记录页开始时间
+        def on_page_progress(current_page: int, total_pages: int):
+            page_start_time[current_page] = datetime.utcnow()
+            ocr_queue.update_page_progress(document_id, current_page, total_pages)
+            print(f"[OCR] {file_name}: page {current_page}/{total_pages}", flush=True)
+
+        # 定义单页完成回调 - 即时保存并记录时间
+        def on_page_complete(page_number: int, page_result: dict):
+            storage.save_ocr_page(project_id, document_id, page_number, page_result)
+
+            # 记录页级别时间
+            started_at = page_start_time.get(page_number, datetime.utcnow())
+            completed_at = datetime.utcnow()
+            ocr_queue.record_page_timing(document_id, page_number, started_at, completed_at)
+
+            print(f"[OCR] {file_name}: page {page_number} saved to disk", flush=True)
+
+        # 定义停止检查回调
+        def check_should_stop():
+            return ocr_queue.check_should_stop(document_id)
+
+        # 判断文件类型并执行 OCR
+        is_pdf = file_type == "application/pdf" or file_name.lower().endswith('.pdf')
+        stopped = None
+        stopped_at_page = None
+
+        if OCR_PROVIDER == "deepseek":
+            if not deepseek_ocr.is_available():
+                raise ValueError("DeepSeek-OCR environment not available")
+
+            if is_pdf:
+                # PDF 处理 - 带进度回调、断点续传和停止检查
+                result = deepseek_ocr.process_pdf(
+                    file_bytes,
+                    progress_callback=on_page_progress,
+                    page_callback=on_page_complete,
+                    skip_pages=completed_pages,
+                    should_stop_callback=check_should_stop
+                )
+                text = result["markdown_text"]
+                page_count = result["total_pages"]
+                text_blocks = result["text_blocks"]
+                stopped = result.get("stopped")
+                stopped_at_page = result.get("stopped_at_page")
+            else:
+                # 图片处理
+                result = deepseek_ocr.process_image_bytes(file_bytes)
+                text = result["markdown_text"]
+                page_count = 1
+                text_blocks = result["text_blocks"]
+        else:
+            # Baidu OCR - 保持原逻辑
+            text, page_count, text_blocks = perform_ocr_sync(file_bytes, file_name, file_type)
+
+        # 处理停止信号
+        if stopped:
+            completed_pages_now = storage.get_completed_pages(project_id, document_id)
+            if stopped == "pause":
+                # 暂停 - 标记状态并让队列管理器处理
+                doc.ocr_status = OCRStatus.PAUSED.value
+                doc.ocr_completed_pages = len(completed_pages_now)
+                doc.ocr_total_pages = page_count
+                ocr_queue.mark_task_paused(document_id)
+                print(f"[OCR-Queue-Processor] Paused at page {stopped_at_page}: {document_id}", flush=True)
+            elif stopped == "cancel":
+                # 取消 - 标记状态
+                if completed_pages_now:
+                    doc.ocr_status = OCRStatus.PARTIAL.value
+                    doc.ocr_completed_pages = len(completed_pages_now)
+                else:
+                    doc.ocr_status = OCRStatus.CANCELLED.value
+                doc.ocr_total_pages = page_count
+                ocr_queue.mark_task_cancelled(document_id)
+                print(f"[OCR-Queue-Processor] Cancelled at page {stopped_at_page}: {document_id}", flush=True)
+
+            db.commit()
+
+            # 更新批次状态
+            if batch_id and batch_id in _ocr_batch_status:
+                _ocr_batch_status[batch_id]["documents"][document_id]["status"] = stopped
+                if _ocr_batch_status[batch_id]["processing"] > 0:
+                    _ocr_batch_status[batch_id]["processing"] -= 1
+
+            return stopped == "pause"  # 暂停返回 True 以便后续恢复
+
+        # 如果有断点续传，需要合并所有页面结果
+        if completed_pages and is_pdf:
+            all_pages = storage.load_all_ocr_pages(project_id, document_id)
+            if all_pages:
+                # 重新合并所有页的 markdown 和 text_blocks
+                all_markdown_parts = []
+                all_text_blocks = []
+                for page_result in all_pages:
+                    page_num = page_result.get("page_number", 0)
+                    all_markdown_parts.append(f"--- Page {page_num} ---\n{page_result.get('markdown_text', '')}")
+                    all_text_blocks.extend(page_result.get("text_blocks", []))
+                text = "\n\n".join(all_markdown_parts)
+                text_blocks = all_text_blocks
+
+        # 计算总耗时
+        ocr_completed_at = datetime.utcnow()
+        total_duration = (ocr_completed_at - ocr_started_at).total_seconds()
+
+        print(f"[OCR-Queue-Processor] OCR completed: {page_count} pages, {len(text)} chars, {total_duration:.1f}s", flush=True)
+
+        doc.ocr_text = text
+        doc.ocr_status = OCRStatus.COMPLETED.value
+        doc.page_count = page_count
+        doc.ocr_completed_at = ocr_completed_at
+        doc.ocr_total_pages = page_count
+        doc.ocr_completed_pages = page_count
+        doc.ocr_total_duration = total_duration
+
+        # 保存 text_blocks
+        if text_blocks:
+            db.query(TextBlock).filter(TextBlock.document_id == document_id).delete()
+            for block in text_blocks:
+                bbox = block.get("bbox", {})
+                text_block = TextBlock(
+                    document_id=document_id,
+                    block_id=block.get("block_id", ""),
+                    page_number=block.get("page_number", 1),
+                    text_content=block.get("text_content", ""),
+                    block_type=block.get("block_type", ""),
+                    bbox_x1=bbox.get("x1"),
+                    bbox_y1=bbox.get("y1"),
+                    bbox_x2=bbox.get("x2"),
+                    bbox_y2=bbox.get("y2"),
+                    confidence=block.get("confidence")
+                )
+                db.add(text_block)
+
+        db.commit()
+
+        # 更新批次状态
+        if batch_id and batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "completed"
+            _ocr_batch_status[batch_id]["completed"] += 1
+            _ocr_batch_status[batch_id]["processing"] -= 1
+
+            # 检查是否全部完成
+            total = _ocr_batch_status[batch_id]["total"]
+            done = _ocr_batch_status[batch_id]["completed"] + _ocr_batch_status[batch_id]["failed"]
+            if done >= total:
+                _ocr_batch_status[batch_id]["finished_at"] = datetime.utcnow().isoformat()
+
+        print(f"[OCR-Queue-Processor] Successfully saved: {document_id}", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[OCR-Queue-Processor] ERROR for {document_id}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc:
+            # 检查是否有已完成的页（部分完成）
+            completed_pages = storage.get_completed_pages(doc.project_id, document_id)
+            if completed_pages:
+                doc.ocr_status = OCRStatus.PARTIAL.value
+                doc.ocr_error = f"Failed at page {max(completed_pages)+1}: {str(e)}"
+                doc.ocr_completed_pages = len(completed_pages)
+            else:
+                doc.ocr_status = OCRStatus.FAILED.value
+                doc.ocr_error = str(e)
+            db.commit()
+
+        # 更新批次状态
+        if batch_id and batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "failed"
+            _ocr_batch_status[batch_id]["documents"][document_id]["error"] = str(e)
+            _ocr_batch_status[batch_id]["failed"] += 1
+            if _ocr_batch_status[batch_id]["processing"] > 0:
+                _ocr_batch_status[batch_id]["processing"] -= 1
+
+            # 检查是否全部完成
+            total = _ocr_batch_status[batch_id]["total"]
+            done = _ocr_batch_status[batch_id]["completed"] + _ocr_batch_status[batch_id]["failed"]
+            if done >= total:
+                _ocr_batch_status[batch_id]["finished_at"] = datetime.utcnow().isoformat()
+
+        return False
+
+    finally:
+        db.close()
+
+
+# 初始化 OCR 队列处理器
+ocr_queue.set_processor(_ocr_processor_callback)
+
+
+# 注意：更具体的路由必须在通用路由之前定义
+# /ocr/batch, /ocr/reset, /ocr/status, /ocr/progress 必须在 /ocr/{document_id} 之前
+
+@router.post("/ocr/reset/{project_id}")
+async def reset_stuck_ocr(project_id: str, db: Session = Depends(get_db)):
+    """重置卡在 processing 状态的文档为 pending 状态"""
+    stuck_docs = db.query(Document).filter(
+        Document.project_id == project_id,
+        Document.ocr_status == OCRStatus.PROCESSING.value
+    ).all()
+
+    reset_count = 0
+    for doc in stuck_docs:
+        doc.ocr_status = OCRStatus.PENDING.value
+        doc.ocr_error = None
+        reset_count += 1
+
+    db.commit()
+
+    return {
+        "success": True,
+        "project_id": project_id,
+        "reset_count": reset_count,
+        "message": f"Reset {reset_count} stuck documents to pending status"
+    }
+
+
+@router.post("/ocr/retry/{document_id}")
+async def retry_ocr(
+    document_id: str,
+    force_restart: bool = False,
+    db: Session = Depends(get_db)
+):
+    """重试 OCR 处理
+
+    对于 partial 或 failed 状态的文档，重新加入队列处理。
+    - 如果 force_restart=False（默认），会从断点继续处理（跳过已完成页）
+    - 如果 force_restart=True，会清除所有已完成页，完全重新处理
+
+    Args:
+        document_id: 文档 ID
+        force_restart: 是否强制完全重新开始
+    """
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 检查状态
+    if document.ocr_status == OCRStatus.COMPLETED.value:
+        return {"success": True, "message": "Document OCR already completed", "document_id": document_id}
+    if document.ocr_status == OCRStatus.PROCESSING.value:
+        return {"success": True, "message": "Document OCR already in progress", "document_id": document_id}
+
+    # 检查是否已在队列中
+    queue_status = ocr_queue.get_task_status(document_id)
+    if queue_status and queue_status["status"] in ["queued", "processing"]:
+        return {
+            "success": True,
+            "message": f"Document already in queue at position {queue_status['position']}",
+            "document_id": document_id,
+            "queue_position": queue_status["position"]
+        }
+
+    project_id = document.project_id
+
+    # 如果强制重新开始，清除已完成的页
+    if force_restart:
+        storage.clear_ocr_pages(project_id, document_id)
+        print(f"[OCR-Retry] Cleared all completed pages for {document_id}", flush=True)
+
+    # 加载文件
+    file_bytes = storage.load_uploaded_file(project_id, document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="Original file not found")
+
+    # 重置状态
+    document.ocr_status = OCRStatus.PENDING.value
+    document.ocr_error = None
+    db.commit()
+
+    # 加入队列
+    position = ocr_queue.add_task(
+        document_id=document_id,
+        project_id=project_id,
+        file_name=document.file_name,
+        file_type=document.file_type,
+        file_bytes=file_bytes
+    )
+
+    # 检查已完成的页数
+    completed_pages = storage.get_completed_pages(project_id, document_id)
+
+    return {
+        "success": True,
+        "message": f"Added to OCR queue at position {position}",
+        "document_id": document_id,
+        "queue_position": position,
+        "resume_from_page": max(completed_pages) + 1 if completed_pages else 1,
+        "completed_pages": len(completed_pages),
+        "force_restart": force_restart
+    }
+
+
+@router.post("/ocr/batch/{project_id}")
+async def trigger_ocr_batch(
+    project_id: str,
+    db: Session = Depends(get_db)
+):
+    """批量触发项目中所有待处理文档的 OCR (使用队列串行处理)
+
+    文档会被加入队列，逐个处理，避免内存溢出。
+    可以通过 /ocr/status/{batch_id} 或 /ocr/queue 查询进度。
+    """
+    # 查找所有 pending 状态的文档
+    pending_docs = db.query(Document).filter(
+        Document.project_id == project_id,
+        Document.ocr_status == OCRStatus.PENDING.value
+    ).all()
+
+    if not pending_docs:
+        return {
+            "success": True,
+            "message": "No pending documents",
+            "total": 0,
+            "batch_id": None
+        }
+
+    # 创建批次 ID
+    batch_id = str(uuid.uuid4())[:8]
+
+    # 初始化批次状态
+    _ocr_batch_status[batch_id] = {
+        "project_id": project_id,
+        "total": len(pending_docs),
+        "completed": 0,
+        "failed": 0,
+        "processing": 0,
+        "documents": {doc.id: {"status": "pending", "file_name": doc.file_name} for doc in pending_docs},
+        "started_at": datetime.utcnow().isoformat(),
+        "finished_at": None
+    }
+
+    # 将文档加入 OCR 队列（串行处理，不是并行）
+    queued_count = 0
+    for doc in pending_docs:
+        file_bytes = storage.load_uploaded_file(project_id, doc.id)
+        if file_bytes:
+            _ocr_batch_status[batch_id]["documents"][doc.id]["status"] = "queued"
+            position = ocr_queue.add_task(
+                document_id=doc.id,
+                project_id=project_id,
+                file_name=doc.file_name,
+                file_type=doc.file_type,
+                file_bytes=file_bytes,
+                batch_id=batch_id
+            )
+            _ocr_batch_status[batch_id]["documents"][doc.id]["queue_position"] = position
+            queued_count += 1
+        else:
+            _ocr_batch_status[batch_id]["documents"][doc.id]["status"] = "file_not_found"
+            _ocr_batch_status[batch_id]["failed"] += 1
+
+    return {
+        "success": True,
+        "message": f"Added {queued_count} documents to OCR queue (serial processing)",
+        "total": len(pending_docs),
+        "queued": queued_count,
+        "batch_id": batch_id,
+        "mode": "queue"  # 标记使用队列模式
+    }
+
+
+@router.post("/ocr/{document_id}")
+async def trigger_ocr_single(
+    document_id: str,
+    db: Session = Depends(get_db)
+):
+    """手动触发单个文档的 OCR (加入队列串行处理)"""
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 检查是否已完成或正在处理
+    if document.ocr_status == OCRStatus.COMPLETED.value:
+        return {"success": True, "message": "OCR already completed", "document_id": document_id}
+    if document.ocr_status == OCRStatus.PROCESSING.value:
+        return {"success": True, "message": "OCR already in progress", "document_id": document_id}
+
+    # 检查是否已在队列中
+    queue_status = ocr_queue.get_task_status(document_id)
+    if queue_status and queue_status["status"] in ["queued", "processing"]:
+        return {
+            "success": True,
+            "message": f"Document already in queue at position {queue_status['position']}",
+            "document_id": document_id,
+            "queue_position": queue_status["position"]
+        }
+
+    # 加载文件
+    file_bytes = storage.load_uploaded_file(document.project_id, document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="Original file not found")
+
+    # 加入 OCR 队列
+    position = ocr_queue.add_task(
+        document_id=document_id,
+        project_id=document.project_id,
+        file_name=document.file_name,
+        file_type=document.file_type,
+        file_bytes=file_bytes
+    )
+
+    return {
+        "success": True,
+        "message": f"Added to OCR queue at position {position}",
+        "document_id": document_id,
+        "queue_position": position,
+        "mode": "queue"
+    }
+
+
+def process_ocr_with_tracking(
+    batch_id: str,
+    document_id: str,
+    file_bytes: bytes,
+    file_name: str,
+    file_type: str
+):
+    """执行 OCR 并更新批次进度 - 同步函数，内部运行异步代码"""
+    import asyncio
+    print(f"[OCR-Batch] Starting OCR for document: {document_id} (batch: {batch_id})", flush=True)
+
+    db = SessionLocal()
+    try:
+        # 更新状态为 processing
+        if batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "processing"
+            _ocr_batch_status[batch_id]["processing"] += 1
+
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            print(f"[OCR-Batch] Document not found: {document_id}", flush=True)
+            if batch_id in _ocr_batch_status:
+                _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "error"
+                _ocr_batch_status[batch_id]["documents"][document_id]["error"] = "Document not found"
+                _ocr_batch_status[batch_id]["failed"] += 1
+                _ocr_batch_status[batch_id]["processing"] -= 1
+            return
+
+        doc.ocr_status = OCRStatus.PROCESSING.value
+        db.commit()
+
+        # 在同步函数中运行异步 OCR
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            text, page_count, text_blocks = loop.run_until_complete(
+                perform_ocr(file_bytes, file_name, file_type)
+            )
+        finally:
+            loop.close()
+
+        print(f"[OCR-Batch] OCR completed for {document_id}: {page_count} pages", flush=True)
+
+        doc.ocr_text = text
+        doc.ocr_status = OCRStatus.COMPLETED.value
+        doc.page_count = page_count
+        doc.ocr_completed_at = datetime.utcnow()
+
+        # 保存 text_blocks
+        if text_blocks:
+            db.query(TextBlock).filter(TextBlock.document_id == document_id).delete()
+            for block in text_blocks:
+                bbox = block.get("bbox", {})
+                text_block = TextBlock(
+                    document_id=document_id,
+                    block_id=block.get("block_id", ""),
+                    page_number=block.get("page_number", 1),
+                    text_content=block.get("text_content", ""),
+                    block_type=block.get("block_type", ""),
+                    bbox_x1=bbox.get("x1"),
+                    bbox_y1=bbox.get("y1"),
+                    bbox_x2=bbox.get("x2"),
+                    bbox_y2=bbox.get("y2"),
+                    confidence=block.get("confidence")
+                )
+                db.add(text_block)
+
+        db.commit()
+
+        # 更新批次状态
+        if batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "completed"
+            _ocr_batch_status[batch_id]["completed"] += 1
+            _ocr_batch_status[batch_id]["processing"] -= 1
+
+            # 检查是否全部完成
+            total = _ocr_batch_status[batch_id]["total"]
+            done = _ocr_batch_status[batch_id]["completed"] + _ocr_batch_status[batch_id]["failed"]
+            if done >= total:
+                _ocr_batch_status[batch_id]["finished_at"] = datetime.utcnow().isoformat()
+
+    except Exception as e:
+        print(f"[OCR-Batch] ERROR for {document_id}: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc:
+            doc.ocr_status = OCRStatus.FAILED.value
+            doc.ocr_error = str(e)
+            db.commit()
+
+        if batch_id in _ocr_batch_status:
+            _ocr_batch_status[batch_id]["documents"][document_id]["status"] = "failed"
+            _ocr_batch_status[batch_id]["documents"][document_id]["error"] = str(e)
+            _ocr_batch_status[batch_id]["failed"] += 1
+            _ocr_batch_status[batch_id]["processing"] -= 1
+
+            # 检查是否全部完成
+            total = _ocr_batch_status[batch_id]["total"]
+            done = _ocr_batch_status[batch_id]["completed"] + _ocr_batch_status[batch_id]["failed"]
+            if done >= total:
+                _ocr_batch_status[batch_id]["finished_at"] = datetime.utcnow().isoformat()
+    finally:
+        db.close()
+        print(f"[OCR-Batch] Finished processing: {document_id}", flush=True)
+
+
+@router.get("/ocr/queue")
+async def get_ocr_queue_status():
+    """获取 OCR 队列整体状态
+
+    返回当前队列的运行状态，包括：
+    - running: 队列是否在运行
+    - pending_count: 等待处理的文档数
+    - current_task: 当前正在处理的任务信息
+    """
+    return ocr_queue.get_queue_status()
+
+
+@router.get("/ocr/queue/{document_id}")
+async def get_ocr_queue_task_status(document_id: str):
+    """获取单个文档在队列中的状态"""
+    status = ocr_queue.get_task_status(document_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Document not found in queue")
+    return status
+
+
+@router.post("/ocr/cancel/{document_id}")
+async def cancel_ocr(document_id: str, db: Session = Depends(get_db)):
+    """取消 OCR 处理
+
+    如果文档正在处理中，会在当前页完成后停止。
+    已完成的页面会保留，文档状态变为 PARTIAL 或 CANCELLED。
+    """
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 尝试取消
+    success = ocr_queue.request_cancel(document_id)
+
+    if success:
+        return {
+            "success": True,
+            "message": "Cancel request sent. OCR will stop after current page completes.",
+            "document_id": document_id
+        }
+    else:
+        # 可能不在队列中，检查文档状态
+        if document.ocr_status in [OCRStatus.COMPLETED.value, OCRStatus.FAILED.value, OCRStatus.CANCELLED.value]:
+            return {
+                "success": False,
+                "message": f"Cannot cancel: document is already {document.ocr_status}",
+                "document_id": document_id
+            }
+        return {
+            "success": False,
+            "message": "Document not found in queue or cannot be cancelled",
+            "document_id": document_id
+        }
+
+
+@router.post("/ocr/pause/{document_id}")
+async def pause_ocr(document_id: str, db: Session = Depends(get_db)):
+    """暂停 OCR 处理
+
+    只能暂停正在处理中的文档。暂停后可以通过 resume 恢复。
+    """
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 尝试暂停
+    success = ocr_queue.request_pause(document_id)
+
+    if success:
+        return {
+            "success": True,
+            "message": "Pause request sent. OCR will pause after current page completes.",
+            "document_id": document_id
+        }
+    else:
+        # 检查状态
+        if document.ocr_status == OCRStatus.PAUSED.value:
+            return {
+                "success": False,
+                "message": "Document is already paused",
+                "document_id": document_id
+            }
+        elif document.ocr_status != OCRStatus.PROCESSING.value:
+            return {
+                "success": False,
+                "message": f"Cannot pause: document status is {document.ocr_status}",
+                "document_id": document_id
+            }
+        return {
+            "success": False,
+            "message": "Document not found in queue or cannot be paused",
+            "document_id": document_id
+        }
+
+
+@router.post("/ocr/resume/{document_id}")
+async def resume_ocr(document_id: str, db: Session = Depends(get_db)):
+    """恢复暂停的 OCR 处理
+
+    从上次暂停的页面继续处理。
+    """
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 检查状态
+    if document.ocr_status not in [OCRStatus.PAUSED.value, OCRStatus.PARTIAL.value]:
+        return {
+            "success": False,
+            "message": f"Cannot resume: document status is {document.ocr_status}",
+            "document_id": document_id
+        }
+
+    # 尝试从队列恢复（如果任务还在内存中）
+    success = ocr_queue.request_resume(document_id)
+
+    if success:
+        # 更新数据库状态
+        document.ocr_status = OCRStatus.PROCESSING.value
+        db.commit()
+        return {
+            "success": True,
+            "message": "Resume request sent. OCR will continue from last completed page.",
+            "document_id": document_id
+        }
+
+    # 任务不在内存中（可能后端重启过），需要重新加入队列
+    project_id = document.project_id
+    file_bytes = storage.load_uploaded_file(project_id, document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="Original file not found")
+
+    # 重新加入队列（会自动跳过已完成的页）
+    position = ocr_queue.add_task(
+        document_id=document_id,
+        project_id=project_id,
+        file_name=document.file_name,
+        file_type=document.file_type,
+        file_bytes=file_bytes
+    )
+
+    # 更新状态
+    document.ocr_status = OCRStatus.QUEUED.value
+    db.commit()
+
+    # 获取已完成页数
+    completed_pages = storage.get_completed_pages(project_id, document_id)
+
+    return {
+        "success": True,
+        "message": f"Added back to queue at position {position}. Will resume from page {len(completed_pages) + 1}.",
+        "document_id": document_id,
+        "queue_position": position,
+        "completed_pages": len(completed_pages)
+    }
+
+
+@router.get("/ocr/status/{batch_id}")
+async def get_ocr_batch_status(batch_id: str):
+    """获取批量 OCR 进度"""
+    if batch_id not in _ocr_batch_status:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    status = _ocr_batch_status[batch_id]
+
+    # 合并队列状态信息
+    queue_info = ocr_queue.get_batch_status(batch_id)
+    if queue_info:
+        # 使用队列的实时状态更新
+        return {
+            "batch_id": batch_id,
+            "project_id": status["project_id"],
+            "total": queue_info["total"],
+            "completed": queue_info["completed"],
+            "failed": queue_info["failed"],
+            "processing": queue_info["processing"],
+            "pending": queue_info["queued"],
+            "progress_percent": queue_info["progress_percent"],
+            "started_at": status["started_at"],
+            "finished_at": status["finished_at"] if queue_info["is_finished"] else None,
+            "is_finished": queue_info["is_finished"],
+            "current_file": queue_info.get("current_file"),
+            "documents": status["documents"],
+            "mode": "queue"
+        }
+
+    return {
+        "batch_id": batch_id,
+        "project_id": status["project_id"],
+        "total": status["total"],
+        "completed": status["completed"],
+        "failed": status["failed"],
+        "processing": status["processing"],
+        "pending": status["total"] - status["completed"] - status["failed"] - status["processing"],
+        "progress_percent": round((status["completed"] + status["failed"]) / status["total"] * 100, 1) if status["total"] > 0 else 0,
+        "started_at": status["started_at"],
+        "finished_at": status["finished_at"],
+        "is_finished": status["finished_at"] is not None,
+        "documents": status["documents"]
+    }
+
+
+@router.get("/ocr/progress/{project_id}")
+async def get_project_ocr_progress(project_id: str, db: Session = Depends(get_db)):
+    """获取项目的 OCR 总体进度，包括当前处理文档的页级别信息"""
+    documents = db.query(Document).filter(Document.project_id == project_id).all()
+
+    if not documents:
+        return {
+            "project_id": project_id,
+            "total": 0,
+            "pending": 0,
+            "queued": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+            "partial": 0,
+            "paused": 0,
+            "cancelled": 0,
+            "progress_percent": 0
+        }
+
+    total = len(documents)
+    pending = sum(1 for d in documents if d.ocr_status == OCRStatus.PENDING.value)
+    queued = sum(1 for d in documents if d.ocr_status == OCRStatus.QUEUED.value)
+    processing = sum(1 for d in documents if d.ocr_status == OCRStatus.PROCESSING.value)
+    completed = sum(1 for d in documents if d.ocr_status == OCRStatus.COMPLETED.value)
+    failed = sum(1 for d in documents if d.ocr_status == OCRStatus.FAILED.value)
+    partial = sum(1 for d in documents if d.ocr_status == OCRStatus.PARTIAL.value)
+    paused = sum(1 for d in documents if d.ocr_status == OCRStatus.PAUSED.value)
+    cancelled = sum(1 for d in documents if d.ocr_status == OCRStatus.CANCELLED.value)
+
+    # 获取当前正在处理的文档的页级别进度
+    current_processing = None
+    queue_status = ocr_queue.get_queue_status()
+    if queue_status.get("current_task"):
+        current_task = queue_status["current_task"]
+        current_processing = {
+            "document_id": current_task.get("document_id"),
+            "file_name": current_task.get("file_name"),
+            "current_page": current_task.get("current_page", 0),
+            "total_pages": current_task.get("total_pages", 0),
+            "page_status": current_task.get("page_status", "")
+        }
+
+    return {
+        "project_id": project_id,
+        "total": total,
+        "pending": pending,
+        "queued": queued,
+        "processing": processing,
+        "completed": completed,
+        "failed": failed,
+        "partial": partial,
+        "paused": paused,
+        "cancelled": cancelled,
+        "progress_percent": round(completed / total * 100, 1) if total > 0 else 0,
+        "current_processing": current_processing,
+        "documents": [
+            {
+                "id": d.id,
+                "file_name": d.file_name,
+                "exhibit_number": d.exhibit_number,
+                "ocr_status": d.ocr_status,
+                "page_count": d.page_count,
+                "ocr_error": d.ocr_error
+            }
+            for d in documents
+        ]
+    }
 
 
 # ============== 模型配置 ==============
@@ -1048,6 +2098,159 @@ async def get_writing_results(project_id: str):
     }
 
 
+# ============== 样式模板 API ==============
+
+class ParseStyleRequest(BaseModel):
+    """解析样式请求"""
+    section: str
+    sample_text: str
+
+
+class SaveStyleTemplateRequest(BaseModel):
+    """保存样式模板请求"""
+    section: str
+    name: str
+    original_text: str
+    parsed_structure: str
+
+
+class UpdateStyleTemplateRequest(BaseModel):
+    """更新样式模板请求"""
+    name: Optional[str] = None
+    parsed_structure: Optional[str] = None
+
+
+@router.post("/style-templates/parse")
+async def parse_style_template(data: ParseStyleRequest):
+    """解析例文结构
+
+    用户粘贴例文，LLM 解析出结构和公式，用占位符替代具体内容
+    """
+    section_names = {
+        "qualifying_relationship": "Qualifying Corporate Relationship & Physical Premises",
+        "qualifying_employment": "Qualifying Employment Abroad",
+        "qualifying_capacity": "Qualifying Capacity (Executive/Managerial)",
+        "doing_business": "Doing Business / Active Operations"
+    }
+
+    section_name = section_names.get(data.section, data.section)
+
+    prompt = f"""You are a legal writing expert. Analyze the following sample paragraph from an L-1 visa petition letter and extract its structural template.
+
+**Section Type:** {section_name}
+
+**Sample Paragraph:**
+{data.sample_text}
+
+**Your Task:**
+1. Identify the rhetorical structure and flow of the paragraph
+2. Extract the "formula" or pattern used
+3. Replace specific facts with descriptive placeholders
+
+**Placeholder Format:**
+- Use brackets with descriptive names: [COMPANY_NAME], [DATE], [AMOUNT], [POSITION], etc.
+- Keep legal phrases and transitional words intact
+- Preserve the sentence structure and flow
+
+**Output Format (JSON):**
+{{
+  "structure_analysis": "A brief description of the paragraph's structure and approach (2-3 sentences)",
+  "template": "The paragraph with all specific facts replaced by [PLACEHOLDERS]. Keep all legal language, transitions, and rhetorical devices intact.",
+  "placeholders": [
+    {{
+      "name": "[PLACEHOLDER_NAME]",
+      "description": "What type of information goes here",
+      "example": "The original text that was replaced"
+    }}
+  ]
+}}
+"""
+
+    global current_model
+    result = await call_llm(prompt, model_override=current_model)
+
+    return {
+        "success": True,
+        "section": data.section,
+        "parsed": result
+    }
+
+
+@router.post("/style-templates")
+async def create_style_template(data: SaveStyleTemplateRequest):
+    """保存样式模板到后端"""
+    template = save_style_template(
+        section=data.section,
+        name=data.name,
+        original_text=data.original_text,
+        parsed_structure=data.parsed_structure
+    )
+
+    return {
+        "success": True,
+        "template": template
+    }
+
+
+@router.get("/style-templates")
+async def list_style_templates(section: Optional[str] = None):
+    """获取样式模板列表
+
+    可选参数 section 过滤指定段落类型的模板
+    """
+    templates = get_style_templates(section)
+
+    return {
+        "templates": templates,
+        "count": len(templates)
+    }
+
+
+@router.get("/style-templates/{template_id}")
+async def get_style_template_by_id(template_id: str):
+    """获取单个样式模板"""
+    template = get_style_template(template_id)
+
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return template
+
+
+@router.patch("/style-templates/{template_id}")
+async def update_style_template_by_id(template_id: str, data: UpdateStyleTemplateRequest):
+    """更新样式模板"""
+    updates = {}
+    if data.name is not None:
+        updates['name'] = data.name
+    if data.parsed_structure is not None:
+        updates['parsed_structure'] = data.parsed_structure
+
+    template = update_style_template(template_id, updates)
+
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return {
+        "success": True,
+        "template": template
+    }
+
+
+@router.delete("/style-templates/{template_id}")
+async def delete_style_template_by_id(template_id: str):
+    """删除样式模板"""
+    success = delete_style_template(template_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    return {
+        "success": True,
+        "deleted": template_id
+    }
+
+
 # ============== Health Check ==============
 
 @router.get("/health")
@@ -1056,13 +2259,179 @@ async def health_check():
     global current_model
     baidu_status = "configured" if BAIDU_OCR_API_KEY and BAIDU_OCR_SECRET_KEY else "not_configured"
     openai_status = "configured" if OPENAI_API_KEY else "not_configured"
+    deepseek_ocr_status = "available" if deepseek_ocr.is_available() else "not_available"
 
     return {
         "status": "healthy",
         "ocr_provider": OCR_PROVIDER,
         "baidu_ocr": baidu_status,
+        "deepseek_ocr": deepseek_ocr_status,
         "llm_provider": LLM_PROVIDER,
         "llm_model": current_model,
         "available_models": [m["id"] for m in AVAILABLE_MODELS],
         "openai": openai_status
     }
+
+
+# ============== BBox 匹配 API ==============
+
+class MatchBBoxRequest(BaseModel):
+    """BBox 匹配请求"""
+    quotes: List[Dict[str, Any]]  # [{"quote": "...", "page": 1}, ...]
+    similarity_threshold: Optional[float] = 0.7
+
+
+@router.post("/match-bbox/{document_id}")
+async def match_bbox(document_id: str, data: MatchBBoxRequest, db: Session = Depends(get_db)):
+    """
+    将 quotes 匹配到文档的 text_blocks，获取 BBox 坐标
+
+    用于 Inline Provenance 功能：点击引用 → 跳转 PDF 页面 → 高亮对应区域
+
+    请求体:
+    {
+        "quotes": [
+            {"quote": "原文引用内容...", "page": 1}
+        ],
+        "similarity_threshold": 0.7
+    }
+
+    响应:
+    {
+        "document_id": "xxx",
+        "matches": [
+            {
+                "quote": "原文引用内容...",
+                "page_hint": 1,
+                "matched": true,
+                "matches": [
+                    {
+                        "block_id": "p1_b3",
+                        "page_number": 1,
+                        "bbox": {"x1": 10, "y1": 20, "x2": 100, "y2": 50},
+                        "match_type": "exact",
+                        "match_score": 1.0
+                    }
+                ]
+            }
+        ],
+        "stats": {
+            "total_quotes": 5,
+            "matched_count": 4,
+            "match_rate": 0.8
+        }
+    }
+    """
+    # 检查文档是否存在
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 检查是否有 text_blocks
+    block_count = db.query(TextBlock).filter(TextBlock.document_id == document_id).count()
+    if block_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No text blocks found. Document may not have been processed with DeepSeek-OCR."
+        )
+
+    # 执行批量匹配
+    results = bbox_matcher.batch_match_quotes(
+        quotes=data.quotes,
+        document_id=document_id,
+        db=db,
+        similarity_threshold=data.similarity_threshold or 0.7
+    )
+
+    # 统计
+    total = len(results)
+    matched = sum(1 for r in results if r.get("matched"))
+
+    return {
+        "document_id": document_id,
+        "matches": results,
+        "stats": {
+            "total_quotes": total,
+            "matched_count": matched,
+            "match_rate": round(matched / total, 2) if total > 0 else 0
+        }
+    }
+
+
+@router.get("/document/{document_id}/file")
+async def get_document_file(document_id: str, db: Session = Depends(get_db)):
+    """
+    获取文档的原始文件（用于预览）
+
+    返回文件的二进制内容，支持 PDF 和图片
+    """
+    from fastapi.responses import Response
+
+    # 检查文档是否存在
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 加载原始文件
+    file_bytes = storage.load_uploaded_file(doc.project_id, document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    # 确定 content type
+    content_type = doc.file_type or "application/octet-stream"
+
+    # 如果是 PDF，可能需要特殊处理
+    if doc.file_name.lower().endswith('.pdf'):
+        content_type = "application/pdf"
+    elif doc.file_name.lower().endswith(('.jpg', '.jpeg')):
+        content_type = "image/jpeg"
+    elif doc.file_name.lower().endswith('.png'):
+        content_type = "image/png"
+    elif doc.file_name.lower().endswith('.gif'):
+        content_type = "image/gif"
+
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f"inline; filename=\"{doc.file_name}\""
+        }
+    )
+
+
+@router.get("/text-blocks/{document_id}")
+async def get_text_blocks(document_id: str, page: Optional[int] = None, db: Session = Depends(get_db)):
+    """
+    获取文档的所有 text_blocks
+
+    可选参数 page 过滤指定页码
+    """
+    query = db.query(TextBlock).filter(TextBlock.document_id == document_id)
+
+    if page is not None:
+        query = query.filter(TextBlock.page_number == page)
+
+    blocks = query.order_by(TextBlock.page_number, TextBlock.block_id).all()
+
+    return {
+        "document_id": document_id,
+        "total": len(blocks),
+        "page_filter": page,
+        "blocks": [
+            {
+                "block_id": b.block_id,
+                "page_number": b.page_number,
+                "block_type": b.block_type,
+                "text_content": b.text_content,
+                "bbox": {
+                    "x1": b.bbox_x1,
+                    "y1": b.bbox_y1,
+                    "x2": b.bbox_x2,
+                    "y2": b.bbox_y2
+                }
+            }
+            for b in blocks
+        ]
+    }
+
+

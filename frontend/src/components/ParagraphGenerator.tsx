@@ -3,7 +3,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { ParagraphVersion, Citation, Quote } from '@/types';
 import { SECTION_TYPES, generateSectionWritingPrompt } from '@/utils/prompts';
-import { writingApi } from '@/utils/api';
+import { writingApi, StyleTemplate } from '@/utils/api';
+import StyleTemplatePanel from './StyleTemplatePanel';
 
 interface ParagraphGeneratorProps {
   projectId: string;
@@ -143,6 +144,9 @@ export default function ParagraphGenerator({
   const [copiedCombined, setCopiedCombined] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Style template state
+  const [activeTemplate, setActiveTemplate] = useState<StyleTemplate | null>(null);
+
   // Get current version
   const currentVersion = versions.find(v => v.id === currentVersionId);
 
@@ -153,12 +157,24 @@ export default function ParagraphGenerator({
   // Generate combined prompt + evidence using section-specific prompts
   const getCombinedPrompt = useCallback(() => {
     const evidence = formatQuotesForPrompt(allQuotes);
+
+    // Parse style template if active
+    let styleTemplateStr: string | undefined;
+    if (activeTemplate) {
+      try {
+        const parsed = JSON.parse(activeTemplate.parsed_structure);
+        styleTemplateStr = parsed.template;
+      } catch {
+        styleTemplateStr = activeTemplate.parsed_structure;
+      }
+    }
+
     return generateSectionWritingPrompt(selectedSection, evidence, {
       petitionerName,
       foreignEntityName,
       beneficiaryName,
-    });
-  }, [selectedSection, beneficiaryName, petitionerName, foreignEntityName, allQuotes]);
+    }, styleTemplateStr);
+  }, [selectedSection, beneficiaryName, petitionerName, foreignEntityName, allQuotes, activeTemplate]);
 
   // Copy to clipboard
   const copyToClipboard = async (text: string) => {
@@ -505,6 +521,15 @@ export default function ParagraphGenerator({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Style Template Panel */}
+      <div className="px-4 pt-4">
+        <StyleTemplatePanel
+          selectedSection={selectedSection}
+          onTemplateSelect={setActiveTemplate}
+          activeTemplate={activeTemplate}
+        />
       </div>
 
       {/* Content */}
