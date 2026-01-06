@@ -43,6 +43,7 @@ BAIDU_OCR_SECRET_KEY = settings.baidu_ocr_secret_key
 OCR_PROVIDER = settings.ocr_provider
 LLM_PROVIDER = settings.llm_provider
 LLM_MODEL = settings.llm_model
+LLM_API_BASE = settings.llm_api_base  # 本地 vLLM 服务地址
 
 # 百度 access_token 缓存
 _baidu_access_token: str = ""
@@ -1362,14 +1363,39 @@ current_model = LLM_MODEL
 # ============== Stage 2: LLM1 Analysis ==============
 
 async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3) -> dict:
-    """调用 LLM，支持不同模型类型，带速率限制重试"""
+    """调用 LLM，支持本地 vLLM 和云端 API，带速率限制重试
+
+    支持的 provider:
+    - local: 本地 vLLM 服务 (OpenAI 兼容 API)
+    - openai: OpenAI API
+    - azure: Azure OpenAI
+    - deepseek: DeepSeek API
+    """
     import asyncio
     import re
 
     model = model_override or current_model
+    provider = LLM_PROVIDER
 
     # 判断是否是推理模型（o 系列）
     is_reasoning_model = model.startswith("o")
+
+    # 根据 provider 选择 API 端点和认证方式
+    if provider == "local":
+        # 本地 vLLM 服务 (OpenAI 兼容 API)
+        api_base = LLM_API_BASE
+        headers = {"Content-Type": "application/json"}
+        # 本地服务通常不需要 API key，但如果配置了就使用
+        if OPENAI_API_KEY:
+            headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
+    elif provider == "deepseek":
+        # DeepSeek API
+        api_base = settings.deepseek_api_base
+        headers = {"Authorization": f"Bearer {settings.deepseek_api_key}", "Content-Type": "application/json"}
+    else:
+        # 默认使用 OpenAI API
+        api_base = OPENAI_API_BASE
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
     # 构建请求参数
     request_body = {
@@ -1387,15 +1413,17 @@ async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3
         # 标准模型使用 max_tokens
         request_body["temperature"] = 0.1
         request_body["max_tokens"] = 4000
-        request_body["response_format"] = {"type": "json_object"}
+        # 本地 vLLM 可能不支持 response_format，只对 OpenAI 启用
+        if provider == "openai":
+            request_body["response_format"] = {"type": "json_object"}
 
     last_error = None
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:  # 本地模型可能需要更长时间
                 response = await client.post(
-                    f"{OPENAI_API_BASE}/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                    f"{api_base}/chat/completions",
+                    headers=headers,
                     json=request_body
                 )
 
@@ -1421,7 +1449,7 @@ async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3
                         raise ValueError(f"Rate limit exceeded after {max_retries} retries")
 
                 if response.status_code != 200:
-                    raise ValueError(f"LLM error: {response.text}")
+                    raise ValueError(f"LLM error ({provider}): {response.text}")
 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]

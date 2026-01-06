@@ -14,15 +14,16 @@ class Settings(BaseSettings):
     baidu_ocr_secret_key: str = ""
 
     # OCR Provider: baidu / gpt4o / deepseek
-    ocr_provider: str = "baidu"
+    ocr_provider: str = "deepseek"  # 默认使用本地 DeepSeek-OCR
 
-    # DeepSeek-OCR 本地模型配置
-    deepseek_ocr_venv: str = r"F:\Python-Project\DeepseekOcrTEst\venv"
+    # DeepSeek-OCR 本地模型配置 (Linux)
+    deepseek_ocr_venv: str = "/workspace/miniconda/envs/deepseek-ocr"
     deepseek_ocr_model: str = "deepseek-ai/DeepSeek-OCR"
 
-    # LLM Provider
-    llm_provider: str = "openai"  # openai / azure / deepseek / claude
-    llm_model: str = "gpt-4o"
+    # LLM Provider: local / openai / azure / deepseek / claude
+    llm_provider: str = "local"  # 默认使用本地 vLLM
+    llm_model: str = "Qwen/Qwen3-32B"
+    llm_api_base: str = "http://localhost:8000/v1"  # 本地 vLLM 服务地址
 
     # Azure OpenAI (备选)
     azure_openai_api_key: str = ""
