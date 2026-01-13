@@ -10,37 +10,24 @@ DeepSeek-OCR 本地模型服务
 
 import os
 import re
-import sys
 import json
 import tempfile
 import subprocess
+import platform
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from pathlib import Path
 
 from app.core.config import settings
 
-# DeepSeek-OCR 虚拟环境配置 (从 config 读取)
+# DeepSeek-OCR 配置 - 从 settings 读取
 DEEPSEEK_OCR_VENV = settings.deepseek_ocr_venv
 DEEPSEEK_OCR_MODEL = settings.deepseek_ocr_model
 
-
-def get_python_executable() -> str:
-    """跨平台获取 Python 可执行文件路径"""
-    if sys.platform == "win32":
-        return os.path.join(DEEPSEEK_OCR_VENV, "Scripts", "python.exe")
-    else:
-        # Linux/macOS: 检查 conda 环境或 venv
-        conda_python = os.path.join(DEEPSEEK_OCR_VENV, "bin", "python")
-        venv_python = os.path.join(DEEPSEEK_OCR_VENV, "bin", "python3")
-        if os.path.exists(conda_python):
-            return conda_python
-        elif os.path.exists(venv_python):
-            return venv_python
-        else:
-            return conda_python  # 默认返回 conda 路径
-
-
-DEEPSEEK_OCR_PYTHON = get_python_executable()
+# 根据操作系统选择 Python 路径
+if platform.system() == "Windows":
+    DEEPSEEK_OCR_PYTHON = os.path.join(DEEPSEEK_OCR_VENV, "Scripts", "python.exe")
+else:
+    DEEPSEEK_OCR_PYTHON = os.path.join(DEEPSEEK_OCR_VENV, "bin", "python")
 
 # OCR 参数配置 (Gundam 模式，适合文档)
 DEFAULT_BASE_SIZE = 1024
@@ -469,31 +456,23 @@ async def process_image_async(
 
 # ============== 测试函数 ==============
 
-def test_ocr(test_image: str = None):
-    """测试 OCR 功能
-
-    Args:
-        test_image: 测试图片路径，如果不指定则只检查环境
-    """
+def test_ocr():
+    """测试 OCR 功能"""
     print("=" * 60)
     print("DeepSeek-OCR 测试")
     print("=" * 60)
 
     # 检查环境
     print(f"\n环境检查:")
-    print(f"  VENV: {DEEPSEEK_OCR_VENV}")
     print(f"  Python: {DEEPSEEK_OCR_PYTHON}")
     print(f"  可用: {is_available()}")
 
     if not is_available():
         print("DeepSeek-OCR 环境不可用!")
-        print(f"请检查路径是否正确: {DEEPSEEK_OCR_PYTHON}")
         return
 
-    if test_image is None:
-        print("\n未指定测试图片，跳过 OCR 测试")
-        print("用法: python -m app.services.deepseek_ocr /path/to/image.jpg")
-        return
+    # 测试图片
+    test_image = r"F:\Python-Project\DeepseekOcrTEst\A_extract_bbox\input\A例件：房产评估报告.jpg"
 
     if os.path.exists(test_image):
         print(f"\n测试图片: {test_image}")
@@ -505,8 +484,7 @@ def test_ocr(test_image: str = None):
 
             print(f"\n前 3 个文本块:")
             for block in result['text_blocks'][:3]:
-                text_preview = block['text_content'][:50] if block['text_content'] else "(empty)"
-                print(f"  - [{block['block_type']}] {text_preview}...")
+                print(f"  - [{block['block_type']}] {block['text_content'][:50]}...")
                 print(f"    BBox: {block['bbox']}")
 
         except Exception as e:
@@ -518,6 +496,4 @@ def test_ocr(test_image: str = None):
 
 
 if __name__ == '__main__':
-    import sys
-    test_image = sys.argv[1] if len(sys.argv) > 1 else None
-    test_ocr(test_image)
+    test_ocr()

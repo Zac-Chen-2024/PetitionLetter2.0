@@ -2,12 +2,11 @@
 Highlight Service - 高亮分析服务
 
 核心功能：
-1. 调用 LLM 分析文档中的重要信息 (支持本地 vLLM 和云端 API)
+1. 调用 OpenAI GPT-4o 分析文档中的重要信息
 2. 将 AI 识别的文本映射到 OCR 的 BBox 坐标
 3. 保存高亮结果到数据库
 """
 
-import re
 import json
 import httpx
 from typing import List, Dict, Any, Optional
@@ -19,12 +18,13 @@ from app.models.document import Document, TextBlock, Highlight, HighlightStatus
 from app.services import bbox_matcher
 
 
-# LLM 配置 (从 settings 读取)
-LLM_PROVIDER = settings.llm_provider
-LLM_MODEL = settings.llm_model
-LLM_API_BASE = settings.llm_api_base
+# LLM 配置 - 统一使用 settings 中的配置
 OPENAI_API_KEY = settings.openai_api_key
 OPENAI_API_BASE = settings.openai_api_base
+LLM_PROVIDER = settings.llm_provider
+LLM_API_BASE = settings.llm_api_base
+LLM_MODEL = settings.llm_model
+HIGHLIGHT_MODEL = LLM_MODEL  # 使用统一配置的模型
 
 
 # 重要信息类别定义
@@ -42,9 +42,9 @@ HIGHLIGHT_CATEGORIES = {
 }
 
 
-async def call_llm_for_highlights(ocr_text: str, max_highlights: int = 30) -> List[Dict[str, Any]]:
+async def call_openai_for_highlights(ocr_text: str, max_highlights: int = 30) -> List[Dict[str, Any]]:
     """
-    调用 LLM 分析文档中的重要信息 (支持本地 vLLM 和云端 API)
+    调用 OpenAI GPT-4o 分析文档中的重要信息
 
     Args:
         ocr_text: 文档的 OCR 文本 (Markdown 格式)
@@ -56,7 +56,7 @@ async def call_llm_for_highlights(ocr_text: str, max_highlights: int = 30) -> Li
     prompt = f"""You are a document analysis expert. Analyze the following document and identify the most important pieces of information that should be highlighted.
 
 **Document Content:**
-{ocr_text[:15000]}
+{ocr_text[:15000]}  # 限制长度避免超出 token 限制
 
 **Your Task:**
 Find the most important information in this document. Focus on:
@@ -82,7 +82,7 @@ Do NOT paraphrase or modify the text. The text must match exactly for highlighti
       "category": "company_name|person_name|date|amount|address|position|key_fact|legal_term|signature|other",
       "importance": "high|medium|low",
       "reason": "Brief explanation of why this is important",
-      "page_hint": 1
+      "page_hint": 1  // Optional: if the page number is mentioned or can be inferred
     }}
   ]
 }}
@@ -90,27 +90,16 @@ Do NOT paraphrase or modify the text. The text must match exactly for highlighti
 Return at most {max_highlights} highlights, prioritizing the most important ones first.
 """
 
-    # 根据 provider 选择 API 端点和认证方式
+    # 根据 LLM_PROVIDER 选择 API 配置
     if LLM_PROVIDER == "local":
-        # 本地 vLLM 服务 (OpenAI 兼容 API)
         api_base = LLM_API_BASE
-        model = LLM_MODEL
-        headers = {"Content-Type": "application/json"}
-        if OPENAI_API_KEY:
-            headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
-    elif LLM_PROVIDER == "deepseek":
-        # DeepSeek API
-        api_base = settings.deepseek_api_base
-        model = LLM_MODEL
-        headers = {"Authorization": f"Bearer {settings.deepseek_api_key}", "Content-Type": "application/json"}
+        api_key = OPENAI_API_KEY or "not-needed"
     else:
-        # 默认使用 OpenAI API
         api_base = OPENAI_API_BASE
-        model = LLM_MODEL if LLM_MODEL else "gpt-4o"
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        api_key = OPENAI_API_KEY
 
     request_body = {
-        "model": model,
+        "model": HIGHLIGHT_MODEL,
         "messages": [
             {"role": "system", "content": "You are a precise document analyzer. Return ONLY valid JSON."},
             {"role": "user", "content": prompt}
@@ -119,19 +108,19 @@ Return at most {max_highlights} highlights, prioritizing the most important ones
         "max_tokens": 4000,
     }
 
-    # 只有 OpenAI 支持 response_format
-    if LLM_PROVIDER == "openai":
+    # 本地模型可能不完全支持 response_format，但 vLLM + Qwen/DeepSeek 支持
+    if LLM_PROVIDER != "local" or "qwen" in HIGHLIGHT_MODEL.lower() or "deepseek" in HIGHLIGHT_MODEL.lower():
         request_body["response_format"] = {"type": "json_object"}
 
-    async with httpx.AsyncClient(timeout=300.0) as client:  # 本地模型可能需要更长时间
+    async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{api_base}/chat/completions",
-            headers=headers,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=request_body
         )
 
         if response.status_code != 200:
-            raise ValueError(f"LLM API error ({LLM_PROVIDER}): {response.text}")
+            raise ValueError(f"LLM API error: {response.text}")
 
         data = response.json()
         content = data["choices"][0]["message"]["content"]
@@ -140,18 +129,7 @@ Return at most {max_highlights} highlights, prioritizing the most important ones
             result = json.loads(content)
             return result.get("highlights", [])
         except json.JSONDecodeError:
-            # 尝试从内容中提取 JSON
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                result = json.loads(json_match.group())
-                return result.get("highlights", [])
-            raise ValueError(f"Failed to parse LLM response as JSON: {content[:200]}")
-
-
-# 保持向后兼容
-async def call_openai_for_highlights(ocr_text: str, max_highlights: int = 30) -> List[Dict[str, Any]]:
-    """向后兼容的别名"""
-    return await call_llm_for_highlights(ocr_text, max_highlights)
+            raise ValueError(f"Failed to parse OpenAI response as JSON: {content[:200]}")
 
 
 def match_highlights_to_bbox(
