@@ -21,10 +21,16 @@ from app.services import bbox_matcher
 # LLM 配置 - 统一使用 settings 中的配置
 OPENAI_API_KEY = settings.openai_api_key
 OPENAI_API_BASE = settings.openai_api_base
-LLM_PROVIDER = settings.llm_provider
 LLM_API_BASE = settings.llm_api_base
 LLM_MODEL = settings.llm_model
 HIGHLIGHT_MODEL = LLM_MODEL  # 使用统一配置的模型
+
+
+def _get_llm_provider() -> str:
+    """获取当前 LLM Provider（动态读取，支持运行时切换）"""
+    # 延迟导入避免循环引用
+    from app.routers.pipeline import get_current_llm_provider
+    return get_current_llm_provider()
 
 
 # 重要信息类别定义
@@ -53,10 +59,12 @@ async def call_openai_for_highlights(ocr_text: str, max_highlights: int = 30) ->
     Returns:
         重要信息列表
     """
-    prompt = f"""You are a document analysis expert. Analyze the following document and identify the most important pieces of information that should be highlighted.
+    # /no_think 禁用 Qwen3 思考模式（高光分析是简单任务，不需要深度推理）
+    prompt = f"""/no_think
+You are a document analysis expert. Analyze the following document and identify the most important pieces of information that should be highlighted.
 
 **Document Content:**
-{ocr_text[:15000]}  # 限制长度避免超出 token 限制
+{ocr_text[:12000]}  # 限制文档长度
 
 **Your Task:**
 Find the most important information in this document. Focus on:
@@ -90,29 +98,38 @@ Do NOT paraphrase or modify the text. The text must match exactly for highlighti
 Return at most {max_highlights} highlights, prioritizing the most important ones first.
 """
 
+    # 动态获取当前 LLM Provider（支持运行时切换）
+    llm_provider = _get_llm_provider()
+
     # 根据 LLM_PROVIDER 选择 API 配置
-    if LLM_PROVIDER == "local":
+    if llm_provider == "ollama":
+        api_base = settings.ollama_api_base
+        api_key = "ollama"
+        model = settings.ollama_model
+    elif llm_provider == "local":
         api_base = LLM_API_BASE
         api_key = OPENAI_API_KEY or "not-needed"
+        model = HIGHLIGHT_MODEL
     else:
         api_base = OPENAI_API_BASE
         api_key = OPENAI_API_KEY
+        model = HIGHLIGHT_MODEL
 
     request_body = {
-        "model": HIGHLIGHT_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": "You are a precise document analyzer. Return ONLY valid JSON."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.1,
-        "max_tokens": 4000,
+        "max_tokens": 4000,  # 禁用思考模式后不需要太多 tokens
     }
 
-    # 本地模型可能不完全支持 response_format，但 vLLM + Qwen/DeepSeek 支持
-    if LLM_PROVIDER != "local" or "qwen" in HIGHLIGHT_MODEL.lower() or "deepseek" in HIGHLIGHT_MODEL.lower():
+    # 本地模型可能不完全支持 response_format，但 vLLM 和 Ollama 支持
+    if llm_provider == "ollama" or llm_provider != "local" or "qwen" in model.lower() or "deepseek" in model.lower():
         request_body["response_format"] = {"type": "json_object"}
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=180.0) as client:  # 3 分钟超时
         response = await client.post(
             f"{api_base}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -123,13 +140,29 @@ Return at most {max_highlights} highlights, prioritizing the most important ones
             raise ValueError(f"LLM API error: {response.text}")
 
         data = response.json()
-        content = data["choices"][0]["message"]["content"]
+        message = data["choices"][0]["message"]
+        content = message.get("content", "")
+
+        # Qwen3 思考模式：如果 content 为空，尝试从 reasoning 字段获取
+        if not content and "reasoning" in message:
+            # 从 reasoning 中提取 JSON（通常在思考结束后会有 JSON 输出）
+            reasoning = message.get("reasoning", "")
+            # 尝试找到 JSON 部分
+            import re
+            json_match = re.search(r'\{[\s\S]*"highlights"[\s\S]*\}', reasoning)
+            if json_match:
+                content = json_match.group()
+            else:
+                raise ValueError(f"Qwen3 reasoning mode returned no valid JSON. Reasoning: {reasoning[:500]}")
+
+        if not content:
+            raise ValueError("LLM returned empty content")
 
         try:
             result = json.loads(content)
             return result.get("highlights", [])
         except json.JSONDecodeError:
-            raise ValueError(f"Failed to parse OpenAI response as JSON: {content[:200]}")
+            raise ValueError(f"Failed to parse LLM response as JSON: {content[:200]}")
 
 
 def match_highlights_to_bbox(

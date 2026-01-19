@@ -4,6 +4,7 @@ DeepSeek-OCR 本地模型服务
 使用 DeepSeek-OCR 3B 模型进行本地 OCR 识别
 - 输出 BBox 坐标数据（用于 UI 高亮回溯）
 - 输出 Markdown 结构化文本（用于 LLM 分析）
+- 批量 GPU 处理模式：一次加载模型，处理所有页面
 
 参考: https://github.com/deepseek-ai/DeepSeek-OCR
 """
@@ -132,107 +133,185 @@ def extract_markdown_from_grounding(text: str) -> str:
     return '\n\n'.join(clean_lines)
 
 
-def call_deepseek_ocr_subprocess(image_path: str) -> Tuple[str, List[Dict]]:
+def call_deepseek_ocr_batch_gpu(
+    image_paths: List[str],
+    progress_callback: Callable[[int, int, str], None] = None
+) -> List[str]:
     """
-    通过子进程调用 DeepSeek-OCR
+    批量 GPU 处理：一次加载模型，处理所有图片
 
     Args:
-        image_path: 图片文件路径
+        image_paths: 图片文件路径列表
+        progress_callback: 进度回调 (current, total, status_message)
 
     Returns:
-        (raw_output, bbox_results) 元组
+        每个图片的 OCR 原始输出列表
     """
     if not is_available():
         raise RuntimeError(f"DeepSeek-OCR 环境不可用: {DEEPSEEK_OCR_PYTHON}")
 
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"图片文件不存在: {image_path}")
+    if not image_paths:
+        return []
 
-    # 创建临时输出目录
+    # 验证所有文件存在
+    for path in image_paths:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"图片文件不存在: {path}")
+
+    # 创建临时目录存放结果
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Python 脚本内容 - 使用与 test_deepseek_ocr.py 一致的加载方式
+        # 创建图片列表文件
+        image_list_file = os.path.join(temp_dir, "image_list.json")
+        with open(image_list_file, 'w', encoding='utf-8') as f:
+            json.dump(image_paths, f)
+
+        results_file = os.path.join(temp_dir, "results.json")
+        progress_file = os.path.join(temp_dir, "progress.txt")
+
+        # 批量处理脚本 - 一次加载模型，处理所有图片
         script = f'''
 import os
 import sys
+import json
 import io
 from contextlib import redirect_stdout
 
+# 强制使用 GPU
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-from transformers import AutoModel, AutoTokenizer
 import torch
+if not torch.cuda.is_available():
+    print("ERROR: CUDA not available!", file=sys.stderr)
+    sys.exit(1)
+
+from transformers import AutoModel, AutoTokenizer
 
 model_name = "{DEEPSEEK_OCR_MODEL}"
-image_file = r"{image_path}"
-output_path = r"{temp_dir}"
+image_list_file = r"{image_list_file}"
+results_file = r"{results_file}"
+progress_file = r"{progress_file}"
 
-# 加载模型 - 先加载到 CPU，再移到 GPU
+# 读取图片列表
+with open(image_list_file, 'r') as f:
+    image_paths = json.load(f)
+
+total = len(image_paths)
+print(f"[GPU-OCR] Loading model to GPU...", flush=True)
+
+# 一次性加载模型到 GPU
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 model = AutoModel.from_pretrained(
     model_name,
     trust_remote_code=True,
     use_safetensors=True,
+    torch_dtype=torch.bfloat16,
+    device_map="cuda:0"
 )
-model = model.eval().cuda().to(torch.bfloat16)
+model = model.eval()
+
+print(f"[GPU-OCR] Model loaded. GPU memory: {{torch.cuda.memory_allocated()/1024**3:.2f}} GB", flush=True)
 
 # 使用 grounding prompt 获取 bbox
 prompt = "<image>\\n<|grounding|>Convert the document to markdown. "
 
-# 捕获输出
-captured = io.StringIO()
-with redirect_stdout(captured):
-    res = model.infer(
-        tokenizer,
-        prompt=prompt,
-        image_file=image_file,
-        output_path=output_path,
-        base_size={DEFAULT_BASE_SIZE},
-        image_size={DEFAULT_IMAGE_SIZE},
-        crop_mode={DEFAULT_CROP_MODE},
-        save_results=False
-    )
+results = []
 
-raw_output = captured.getvalue()
+for idx, image_file in enumerate(image_paths):
+    page_num = idx + 1
 
-# 输出标记
-print("===DEEPSEEK_OCR_OUTPUT_START===")
-print(raw_output)
-print("===DEEPSEEK_OCR_OUTPUT_END===")
+    # 写入进度文件
+    with open(progress_file, 'w') as pf:
+        pf.write(f"{{page_num}}/{{total}}")
+
+    print(f"[GPU-OCR] Processing page {{page_num}}/{{total}}: {{os.path.basename(image_file)}}", flush=True)
+
+    try:
+        # 捕获输出
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            res = model.infer(
+                tokenizer,
+                prompt=prompt,
+                image_file=image_file,
+                output_path=r"{temp_dir}",
+                base_size={DEFAULT_BASE_SIZE},
+                image_size={DEFAULT_IMAGE_SIZE},
+                crop_mode={DEFAULT_CROP_MODE},
+                save_results=False
+            )
+
+        raw_output = captured.getvalue()
+        results.append({{"page": page_num, "output": raw_output, "error": None}})
+        print(f"[GPU-OCR] Page {{page_num}} completed", flush=True)
+
+    except Exception as e:
+        print(f"[GPU-OCR] Page {{page_num}} error: {{e}}", flush=True)
+        results.append({{"page": page_num, "output": "", "error": str(e)}})
+
+# 保存结果
+with open(results_file, 'w', encoding='utf-8') as f:
+    json.dump(results, f, ensure_ascii=False)
+
+print(f"[GPU-OCR] All {{total}} pages completed", flush=True)
 '''
 
-        # 写入临时脚本文件 (避免中文路径编码问题)
-        script_file = os.path.join(temp_dir, "ocr_script.py")
+        # 写入脚本文件
+        script_file = os.path.join(temp_dir, "batch_ocr.py")
         with open(script_file, 'w', encoding='utf-8') as f:
             f.write(script)
 
-        # 执行子进程
-        result = subprocess.run(
+        # 执行批量 OCR
+        print(f"[DeepSeek-OCR] Starting batch GPU processing for {len(image_paths)} images...")
+
+        process = subprocess.Popen(
             [DEEPSEEK_OCR_PYTHON, script_file],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=600,  # 10 分钟超时 (首次加载模型需要较长时间)
             encoding='utf-8',
             errors='replace'
         )
 
-        if result.returncode != 0:
-            error_msg = result.stderr or result.stdout
-            raise RuntimeError(f"DeepSeek-OCR 执行失败: {error_msg}")
+        # 实时读取输出并回调进度
+        last_progress = 0
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            if line:
+                print(line.strip())
+                # 解析进度
+                if "[GPU-OCR] Processing page" in line:
+                    try:
+                        parts = line.split("page")[1].split("/")
+                        current = int(parts[0].strip())
+                        if progress_callback and current != last_progress:
+                            progress_callback(current, len(image_paths), f"OCR page {current}/{len(image_paths)}")
+                            last_progress = current
+                    except:
+                        pass
 
-        # 提取输出
-        output = result.stdout
-        start_marker = "===DEEPSEEK_OCR_OUTPUT_START==="
-        end_marker = "===DEEPSEEK_OCR_OUTPUT_END==="
+        process.wait()
 
-        start_idx = output.find(start_marker)
-        end_idx = output.find(end_marker)
+        if process.returncode != 0:
+            raise RuntimeError(f"批量 OCR 执行失败，返回码: {process.returncode}")
 
-        if start_idx == -1 or end_idx == -1:
-            raise RuntimeError(f"无法解析 OCR 输出: {output[:500]}")
+        # 读取结果
+        if not os.path.exists(results_file):
+            raise RuntimeError("OCR 结果文件未生成")
 
-        raw_output = output[start_idx + len(start_marker):end_idx].strip()
+        with open(results_file, 'r', encoding='utf-8') as f:
+            results = json.load(f)
 
-        return raw_output
+        # 提取输出列表
+        outputs = []
+        for r in results:
+            if r.get("error"):
+                outputs.append(f"[OCR Error: {r['error']}]")
+            else:
+                outputs.append(r.get("output", ""))
+
+        return outputs
 
 
 def process_single_image(
@@ -241,19 +320,10 @@ def process_single_image(
 ) -> Dict[str, Any]:
     """
     处理单张图片，返回 BBox 数据和 Markdown 文本
-
-    Args:
-        image_path: 图片文件路径
-        page_number: 页码
-
-    Returns:
-        {
-            "page_number": 1,
-            "markdown_text": "...",
-            "text_blocks": [...]
-        }
+    使用批量 GPU 模式（即使只有一张图片）
     """
-    raw_output = call_deepseek_ocr_subprocess(image_path)
+    outputs = call_deepseek_ocr_batch_gpu([image_path])
+    raw_output = outputs[0] if outputs else ""
 
     # 解析 grounding 输出获取 bbox
     text_blocks = parse_grounding_output(raw_output, page_number)
@@ -275,13 +345,6 @@ def process_image_bytes(
 ) -> Dict[str, Any]:
     """
     处理图片字节数据
-
-    Args:
-        image_bytes: 图片字节数据
-        page_number: 页码
-
-    Returns:
-        处理结果字典
     """
     # 保存为临时文件
     with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as f:
@@ -292,7 +355,6 @@ def process_image_bytes(
         result = process_single_image(temp_path, page_number)
         return result
     finally:
-        # 清理临时文件
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
@@ -307,26 +369,20 @@ def process_pdf(
     should_stop_callback: Callable[[], Optional[str]] = None
 ) -> Dict[str, Any]:
     """
-    处理 PDF 文件，逐页 OCR 并合并结果
+    处理 PDF 文件 - 批量 GPU 模式
+    一次加载模型，处理所有页面，大幅提升速度
 
     Args:
         pdf_bytes: PDF 文件字节数据
         max_pages: 最大处理页数
         dpi: 图片 DPI
-        progress_callback: 进度回调函数 (current_page, total_pages)，每页开始处理时调用
-        page_callback: 单页完成回调函数 (page_number, page_result)，用于即时保存
+        progress_callback: 进度回调函数 (current_page, total_pages)
+        page_callback: 单页完成回调函数 (page_number, page_result)
         skip_pages: 跳过的页码列表（已完成的页），页码从1开始
-        should_stop_callback: 检查是否应停止的回调，返回 None 继续，"cancel" 取消，"pause" 暂停
+        should_stop_callback: 检查是否应停止的回调
 
     Returns:
-        {
-            "total_pages": 10,
-            "markdown_text": "完整 Markdown 文本",
-            "text_blocks": [所有页面的文本块],
-            "pages": [每页的详细结果],
-            "stopped": None | "cancel" | "pause",
-            "stopped_at_page": 页码（如果被中断）
-        }
+        处理结果字典
     """
     try:
         import fitz  # PyMuPDF
@@ -339,76 +395,110 @@ def process_pdf(
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
     num_pages = min(pdf_document.page_count, max_pages)
 
-    all_text_blocks = []
-    all_markdown_parts = []
-    pages_results = []
-    stopped = None
-    stopped_at_page = None
+    # 检查是否需要停止
+    if should_stop_callback:
+        stop_signal = should_stop_callback()
+        if stop_signal:
+            pdf_document.close()
+            return {
+                "total_pages": num_pages,
+                "markdown_text": "",
+                "text_blocks": [],
+                "pages": [],
+                "stopped": stop_signal,
+                "stopped_at_page": 1
+            }
 
-    for page_num in range(num_pages):
-        page_number = page_num + 1  # 页码从1开始
+    # 第一步：将所有需要处理的页面转换为图片
+    print(f"[DeepSeek-OCR] Converting {num_pages} PDF pages to images...")
 
-        # 检查是否应该停止（在每页开始前检查）
-        if should_stop_callback:
-            stop_signal = should_stop_callback()
-            if stop_signal:
-                stopped = stop_signal
-                stopped_at_page = page_number
-                print(f"[DeepSeek-OCR] Stopping at page {page_number}: {stop_signal}")
-                break
+    temp_dir = tempfile.mkdtemp()
+    image_paths = []
+    page_numbers = []
 
-        # 通知进度（即使跳过也通知）
-        if progress_callback:
-            progress_callback(page_number, num_pages)
+    try:
+        for page_num in range(num_pages):
+            page_number = page_num + 1
 
-        # 跳过已完成的页
-        if page_number in skip_pages:
-            continue
+            # 跳过已完成的页
+            if page_number in skip_pages:
+                continue
 
-        page = pdf_document[page_num]
+            page = pdf_document[page_num]
 
-        # 转换为图片
-        zoom = dpi / 72
-        mat = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("jpeg", jpg_quality=90)
+            # 转换为图片
+            zoom = dpi / 72
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
 
-        # OCR 处理
-        try:
-            page_result = process_image_bytes(img_bytes, page_number)
+            # 保存临时图片
+            img_path = os.path.join(temp_dir, f"page_{page_number:04d}.jpg")
+            pix.save(img_path)
 
-            # 即时回调保存
+            image_paths.append(img_path)
+            page_numbers.append(page_number)
+
+        pdf_document.close()
+
+        if not image_paths:
+            return {
+                "total_pages": num_pages,
+                "markdown_text": "",
+                "text_blocks": [],
+                "pages": [],
+                "stopped": None,
+                "stopped_at_page": None
+            }
+
+        # 第二步：批量 GPU OCR 处理
+        def batch_progress(current, total, msg):
+            if progress_callback:
+                progress_callback(page_numbers[current-1] if current <= len(page_numbers) else current, num_pages)
+
+        outputs = call_deepseek_ocr_batch_gpu(image_paths, batch_progress)
+
+        # 第三步：解析结果
+        all_text_blocks = []
+        all_markdown_parts = []
+        pages_results = []
+
+        for idx, (page_number, raw_output) in enumerate(zip(page_numbers, outputs)):
+            # 解析 grounding 输出
+            text_blocks = parse_grounding_output(raw_output, page_number)
+            markdown_text = extract_markdown_from_grounding(raw_output)
+
+            page_result = {
+                "page_number": page_number,
+                "markdown_text": markdown_text,
+                "text_blocks": text_blocks,
+                "raw_output": raw_output
+            }
+
+            # 回调保存
             if page_callback:
                 page_callback(page_number, page_result)
 
-            all_text_blocks.extend(page_result["text_blocks"])
-            all_markdown_parts.append(f"--- Page {page_number} ---\n{page_result['markdown_text']}")
+            all_text_blocks.extend(text_blocks)
+            all_markdown_parts.append(f"--- Page {page_number} ---\n{markdown_text}")
             pages_results.append(page_result)
 
-        except Exception as e:
-            # 记录错误但继续处理其他页面
-            error_result = {
-                "page_number": page_number,
-                "markdown_text": f"[OCR Error: {str(e)}]",
-                "text_blocks": [],
-                "error": str(e)
-            }
-            all_markdown_parts.append(f"--- Page {page_number} ---\n[OCR Error: {str(e)}]")
-            pages_results.append(error_result)
+        # 合并结果
+        combined_markdown = "\n\n".join(all_markdown_parts)
 
-    pdf_document.close()
+        return {
+            "total_pages": num_pages,
+            "markdown_text": combined_markdown,
+            "text_blocks": all_text_blocks,
+            "pages": pages_results,
+            "stopped": None,
+            "stopped_at_page": None
+        }
 
-    # 合并结果
-    combined_markdown = "\n\n".join(all_markdown_parts)
-
-    return {
-        "total_pages": num_pages,
-        "markdown_text": combined_markdown,
-        "text_blocks": all_text_blocks,
-        "pages": pages_results,
-        "stopped": stopped,
-        "stopped_at_page": stopped_at_page
-    }
+    finally:
+        # 清理临时文件
+        import shutil
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 
 async def process_pdf_async(
@@ -459,7 +549,7 @@ async def process_image_async(
 def test_ocr():
     """测试 OCR 功能"""
     print("=" * 60)
-    print("DeepSeek-OCR 测试")
+    print("DeepSeek-OCR 批量 GPU 模式测试")
     print("=" * 60)
 
     # 检查环境
@@ -471,28 +561,16 @@ def test_ocr():
         print("DeepSeek-OCR 环境不可用!")
         return
 
-    # 测试图片
-    test_image = r"F:\Python-Project\DeepseekOcrTEst\A_extract_bbox\input\A例件：房产评估报告.jpg"
-
-    if os.path.exists(test_image):
-        print(f"\n测试图片: {test_image}")
-        try:
-            result = process_single_image(test_image)
-            print(f"\n识别结果:")
-            print(f"  文本块数量: {len(result['text_blocks'])}")
-            print(f"  Markdown 长度: {len(result['markdown_text'])} 字符")
-
-            print(f"\n前 3 个文本块:")
-            for block in result['text_blocks'][:3]:
-                print(f"  - [{block['block_type']}] {block['text_content'][:50]}...")
-                print(f"    BBox: {block['bbox']}")
-
-        except Exception as e:
-            print(f"测试失败: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(f"\n测试图片不存在: {test_image}")
+    # 检查 GPU
+    try:
+        result = subprocess.run(
+            [DEEPSEEK_OCR_PYTHON, "-c", "import torch; print('CUDA:', torch.cuda.is_available())"],
+            capture_output=True,
+            text=True
+        )
+        print(f"  GPU: {result.stdout.strip()}")
+    except Exception as e:
+        print(f"  GPU 检查失败: {e}")
 
 
 if __name__ == '__main__':

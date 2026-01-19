@@ -31,6 +31,7 @@ from app.services.storage import (
 )
 from app.services.l1_analyzer import get_l1_analysis_prompt, parse_analysis_result, L1_STANDARDS
 from app.services.quote_merger import merge_chunk_analyses, generate_summary, prepare_for_writing, format_citation
+from app.services.model_preloader import get_preload_state
 
 router = APIRouter(prefix="/api", tags=["pipeline"])
 
@@ -1370,11 +1371,16 @@ async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3
     model = model_override or current_model
 
     # 根据 LLM_PROVIDER 选择 API 配置
-    if LLM_PROVIDER == "local":
+    if LLM_PROVIDER == "ollama":
+        api_base = settings.ollama_api_base  # http://localhost:11434/v1
+        api_key = "ollama"  # Ollama 不需要真实 key
+        is_reasoning_model = False
+        model = model_override or settings.ollama_model
+    elif LLM_PROVIDER == "local":
         api_base = LLM_API_BASE
         api_key = OPENAI_API_KEY or "not-needed"  # 本地模型通常不需要 key
         is_reasoning_model = False  # 本地模型按标准模型处理
-    else:
+    else:  # openai / azure / deepseek / claude
         api_base = OPENAI_API_BASE
         api_key = OPENAI_API_KEY
         # 判断是否是推理模型（o 系列）
@@ -1396,8 +1402,8 @@ async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3
         # 标准模型使用 max_tokens
         request_body["temperature"] = 0.1
         request_body["max_tokens"] = 4000
-        # 本地模型可能不支持 response_format，但 vLLM 支持
-        if LLM_PROVIDER != "local" or "qwen" in model.lower() or "deepseek" in model.lower():
+        # 本地模型可能不支持 response_format，但 vLLM 和 Ollama 支持
+        if LLM_PROVIDER == "ollama" or LLM_PROVIDER != "local" or "qwen" in model.lower() or "deepseek" in model.lower():
             request_body["response_format"] = {"type": "json_object"}
 
     last_error = None
@@ -1435,7 +1441,21 @@ async def call_llm(prompt: str, model_override: str = None, max_retries: int = 3
                     raise ValueError(f"LLM error: {response.text}")
 
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
+                message = data["choices"][0]["message"]
+                content = message.get("content", "")
+
+                # Qwen3 思考模式：如果 content 为空，尝试从 reasoning 字段获取
+                if not content and "reasoning" in message:
+                    reasoning = message.get("reasoning", "")
+                    # 尝试找到 JSON 部分
+                    json_match = re.search(r'\{[\s\S]*\}', reasoning)
+                    if json_match:
+                        content = json_match.group()
+                    else:
+                        raise ValueError(f"Qwen3 reasoning mode returned no valid JSON. Reasoning: {reasoning[:500]}")
+
+                if not content:
+                    raise ValueError("LLM returned empty content")
 
                 # 尝试解析 JSON（推理模型可能返回带有额外文本的 JSON）
                 try:
@@ -1779,6 +1799,63 @@ async def set_model(model_id: str):
         "success": True,
         "current": current_model,
         "message": f"Model switched to {model_id}"
+    }
+
+
+# ============== LLM Provider 管理 ==============
+
+# 可用的 LLM Providers
+AVAILABLE_PROVIDERS = [
+    {"id": "ollama", "name": "Ollama (本地)", "description": "本地 Ollama 服务 (推荐)"},
+    {"id": "openai", "name": "OpenAI", "description": "OpenAI API"},
+    {"id": "local", "name": "vLLM (本地)", "description": "本地 vLLM 服务"},
+]
+
+
+def get_current_llm_provider() -> str:
+    """获取当前 LLM Provider（供其他模块导入使用）"""
+    global LLM_PROVIDER
+    return LLM_PROVIDER
+
+
+def set_current_llm_provider(provider_id: str) -> bool:
+    """设置当前 LLM Provider（供其他模块导入使用）"""
+    global LLM_PROVIDER
+    valid_ids = [p["id"] for p in AVAILABLE_PROVIDERS]
+    if provider_id not in valid_ids:
+        return False
+    LLM_PROVIDER = provider_id
+    return True
+
+
+@router.get("/llm-providers")
+async def list_llm_providers():
+    """获取可用的 LLM Provider 列表"""
+    global LLM_PROVIDER
+    return {
+        "providers": AVAILABLE_PROVIDERS,
+        "current": LLM_PROVIDER
+    }
+
+
+@router.post("/llm-providers/{provider_id}")
+async def set_llm_provider(provider_id: str):
+    """切换 LLM Provider（运行时切换，重启后恢复默认）"""
+    global LLM_PROVIDER
+
+    # 验证 provider 是否有效
+    valid_ids = [p["id"] for p in AVAILABLE_PROVIDERS]
+    if provider_id not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Invalid provider: {provider_id}. Available: {valid_ids}")
+
+    old_provider = LLM_PROVIDER
+    LLM_PROVIDER = provider_id
+
+    return {
+        "success": True,
+        "current": provider_id,
+        "previous": old_provider,
+        "message": f"LLM Provider switched from {old_provider} to {provider_id}"
     }
 
 
@@ -2272,6 +2349,9 @@ async def health_check():
     openai_status = "configured" if OPENAI_API_KEY else "not_configured"
     deepseek_ocr_status = "available" if deepseek_ocr.is_available() else "not_available"
 
+    # 获取预加载状态
+    preload_state = get_preload_state()
+
     return {
         "status": "healthy",
         "ocr_provider": OCR_PROVIDER,
@@ -2280,8 +2360,20 @@ async def health_check():
         "llm_provider": LLM_PROVIDER,
         "llm_model": current_model,
         "available_models": [m["id"] for m in AVAILABLE_MODELS],
-        "openai": openai_status
+        "openai": openai_status,
+        "models_ready": preload_state.is_ready,
+        "models_loading": preload_state.is_loading,
     }
+
+
+@router.get("/preload-status")
+async def get_preload_status():
+    """获取模型预加载状态
+
+    返回 OCR 和 LLM 模型的加载状态，前端可用于显示加载进度
+    """
+    state = get_preload_state()
+    return state.to_dict()
 
 
 # ============== BBox 匹配 API ==============
@@ -2444,5 +2536,210 @@ async def get_text_blocks(document_id: str, page: Optional[int] = None, db: Sess
             for b in blocks
         ]
     }
+
+
+# ============== Chunked Upload API ==============
+# 分块上传 API，用于大文件上传
+
+import os
+import shutil
+from pathlib import Path
+
+# 分块临时存储目录
+CHUNKS_DIR = Path(__file__).parent.parent.parent / "data" / "chunks"
+
+# 存储上传会话元信息
+_upload_sessions: Dict[str, Dict[str, Any]] = {}
+
+
+class InitUploadRequest(BaseModel):
+    project_id: str
+    file_name: str
+    file_size: int
+    total_chunks: int
+    exhibit_number: Optional[str] = None
+    exhibit_title: Optional[str] = None
+
+
+class InitUploadResponse(BaseModel):
+    upload_id: str
+    chunk_size: int
+
+
+class ChunkUploadResponse(BaseModel):
+    success: bool
+    upload_id: str
+    chunk_index: int
+    chunks_received: int
+    total_chunks: int
+
+
+@router.post("/upload/init", response_model=InitUploadResponse)
+async def init_chunked_upload(request: InitUploadRequest):
+    """初始化分块上传，返回 upload_id"""
+    upload_id = str(uuid.uuid4())
+
+    # 创建临时目录
+    upload_dir = CHUNKS_DIR / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存上传会话信息
+    _upload_sessions[upload_id] = {
+        "project_id": request.project_id,
+        "file_name": request.file_name,
+        "file_size": request.file_size,
+        "total_chunks": request.total_chunks,
+        "exhibit_number": request.exhibit_number,
+        "exhibit_title": request.exhibit_title,
+        "chunks_received": set(),
+        "created_at": datetime.now().isoformat()
+    }
+
+    # 5MB chunk size
+    chunk_size = 5 * 1024 * 1024
+
+    return InitUploadResponse(
+        upload_id=upload_id,
+        chunk_size=chunk_size
+    )
+
+
+@router.post("/upload/chunk/{upload_id}/{chunk_index}", response_model=ChunkUploadResponse)
+async def upload_chunk(
+    upload_id: str,
+    chunk_index: int,
+    chunk: UploadFile = File(...)
+):
+    """上传单个分块"""
+    if upload_id not in _upload_sessions:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    session = _upload_sessions[upload_id]
+
+    if chunk_index >= session["total_chunks"]:
+        raise HTTPException(status_code=400, detail="Invalid chunk index")
+
+    # 保存分块
+    upload_dir = CHUNKS_DIR / upload_id
+    chunk_path = upload_dir / f"chunk_{chunk_index:06d}"
+
+    chunk_data = await chunk.read()
+    with open(chunk_path, 'wb') as f:
+        f.write(chunk_data)
+
+    # 更新会话
+    session["chunks_received"].add(chunk_index)
+
+    return ChunkUploadResponse(
+        success=True,
+        upload_id=upload_id,
+        chunk_index=chunk_index,
+        chunks_received=len(session["chunks_received"]),
+        total_chunks=session["total_chunks"]
+    )
+
+
+@router.post("/upload/complete/{upload_id}", response_model=DocumentResponse)
+async def complete_chunked_upload(upload_id: str, db: Session = Depends(get_db)):
+    """完成分块上传，合并分块并创建文档"""
+    if upload_id not in _upload_sessions:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    session = _upload_sessions[upload_id]
+
+    # 检查是否所有分块都已上传
+    if len(session["chunks_received"]) != session["total_chunks"]:
+        missing = set(range(session["total_chunks"])) - session["chunks_received"]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing chunks: {sorted(missing)}"
+        )
+
+    # 合并分块
+    upload_dir = CHUNKS_DIR / upload_id
+    merged_data = bytearray()
+
+    for i in range(session["total_chunks"]):
+        chunk_path = upload_dir / f"chunk_{i:06d}"
+        with open(chunk_path, 'rb') as f:
+            merged_data.extend(f.read())
+
+    file_bytes = bytes(merged_data)
+    file_name = session["file_name"]
+
+    # 确定文件类型
+    if file_name.lower().endswith('.pdf'):
+        file_type = "application/pdf"
+    elif file_name.lower().endswith('.png'):
+        file_type = "image/png"
+    elif file_name.lower().endswith(('.jpg', '.jpeg')):
+        file_type = "image/jpeg"
+    elif file_name.lower().endswith(('.tif', '.tiff')):
+        file_type = "image/tiff"
+    else:
+        file_type = "application/octet-stream"
+
+    # 创建文档记录
+    document = Document(
+        id=str(uuid.uuid4()),
+        project_id=session["project_id"],
+        file_name=file_name,
+        file_type=file_type,
+        file_size=len(file_bytes),
+        ocr_status=OCRStatus.PENDING.value,
+        ocr_provider=OCR_PROVIDER,
+        exhibit_number=session["exhibit_number"],
+        exhibit_title=session["exhibit_title"] or file_name.replace('.', '_')
+    )
+
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    # 保存原始文件到本地存储
+    storage.save_uploaded_file(session["project_id"], document.id, file_bytes, file_name)
+
+    # 清理临时文件
+    try:
+        shutil.rmtree(upload_dir)
+    except Exception as e:
+        print(f"[Chunked Upload] Warning: Failed to clean up temp dir: {e}")
+
+    # 清理会话
+    del _upload_sessions[upload_id]
+
+    return DocumentResponse(
+        id=document.id,
+        project_id=document.project_id,
+        file_name=document.file_name,
+        file_type=document.file_type,
+        file_size=document.file_size,
+        page_count=document.page_count or 0,
+        ocr_text=document.ocr_text,
+        ocr_status=document.ocr_status,
+        exhibit_number=document.exhibit_number,
+        exhibit_title=document.exhibit_title,
+        created_at=document.created_at
+    )
+
+
+@router.delete("/upload/cancel/{upload_id}")
+async def cancel_chunked_upload(upload_id: str):
+    """取消分块上传，清理临时文件"""
+    if upload_id not in _upload_sessions:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    # 清理临时文件
+    upload_dir = CHUNKS_DIR / upload_id
+    try:
+        if upload_dir.exists():
+            shutil.rmtree(upload_dir)
+    except Exception as e:
+        print(f"[Chunked Upload] Warning: Failed to clean up temp dir: {e}")
+
+    # 清理会话
+    del _upload_sessions[upload_id]
+
+    return {"success": True, "message": "Upload cancelled"}
 
 

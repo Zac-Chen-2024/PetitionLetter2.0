@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import os
 
 from app.db.database import engine, Base, SessionLocal
 from app.routers.pipeline import router as pipeline_router
@@ -8,6 +9,7 @@ from app.routers.projects import router as projects_router
 from app.routers.highlight import router as highlight_router
 from app.models.document import Document, OCRStatus
 from app.services import storage
+from app.services.model_preloader import preload_models_async, get_preload_state
 
 
 def recover_interrupted_ocr():
@@ -65,7 +67,16 @@ async def lifespan(app: FastAPI):
     # 启动时执行
     print("[Startup] Document Pipeline API starting...")
     recover_interrupted_ocr()
-    print("[Startup] Ready to serve requests")
+
+    # 预加载模型 (异步，不阻塞启动)
+    skip_preload = os.environ.get("SKIP_MODEL_PRELOAD", "").lower() in ("1", "true", "yes")
+    if not skip_preload:
+        print("[Startup] Starting model preload in background...")
+        preload_models_async()
+    else:
+        print("[Startup] Skipping model preload (SKIP_MODEL_PRELOAD=1)")
+
+    print("[Startup] Ready to serve requests (models loading in background)")
 
     yield
 

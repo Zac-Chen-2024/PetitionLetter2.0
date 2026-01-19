@@ -29,6 +29,13 @@ try:
 except ImportError:
     PDF_SUPPORT = False
 
+try:
+    from PIL import Image, ImageDraw
+    import io
+    PIL_SUPPORT = True
+except ImportError:
+    PIL_SUPPORT = False
+
 router = APIRouter(prefix="/api/highlight", tags=["highlight"])
 
 
@@ -343,6 +350,154 @@ async def get_document_page_image(
                 "Content-Disposition": f"inline; filename=\"{doc.file_name}\""
             }
         )
+
+
+# ============== 高光预览图片 API ==============
+
+# 高光类别颜色 (RGBA)
+HIGHLIGHT_COLORS = {
+    'key_fact': (59, 130, 246, 80),      # blue
+    'evidence': (16, 185, 129, 80),      # green
+    'timeline': (245, 158, 11, 80),      # yellow/orange
+    'date': (245, 158, 11, 80),          # yellow/orange (same as timeline)
+    'entity': (139, 92, 246, 80),        # purple
+    'financial': (236, 72, 153, 80),     # pink
+    'company_name': (139, 92, 246, 80),  # purple (same as entity)
+    'address': (16, 185, 129, 80),       # green (same as evidence)
+    'default': (251, 191, 36, 80),       # amber
+}
+
+
+@router.get("/page/{document_id}/{page_number}/preview")
+async def get_page_with_highlights(
+    document_id: str,
+    page_number: int,
+    dpi: int = 150,
+    db: Session = Depends(get_db)
+):
+    """
+    获取带高光标注的页面预览图片
+
+    将高光框直接渲染到 PDF 页面图片上返回，用于调试和预览。
+    坐标转换: normalized (0-1000) -> pixel coordinates
+    """
+    if not PDF_SUPPORT:
+        raise HTTPException(status_code=500, detail="PDF support not available")
+
+    if not PIL_SUPPORT:
+        raise HTTPException(status_code=500, detail="PIL/Pillow not available")
+
+    # 检查文档是否存在
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 验证页码
+    if page_number < 1 or page_number > doc.page_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid page number. Document has {doc.page_count} pages."
+        )
+
+    # 加载原始文件
+    file_bytes = storage.load_uploaded_file(doc.project_id, document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    # 渲染 PDF 页面为图片
+    try:
+        if doc.file_name.lower().endswith('.pdf'):
+            pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+            page = pdf_document[page_number - 1]
+
+            zoom = dpi / 72
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+            img_width = pix.width
+            img_height = pix.height
+
+            pdf_document.close()
+        else:
+            # 图片文件
+            img_bytes = file_bytes
+            img = Image.open(io.BytesIO(file_bytes))
+            img_width, img_height = img.size
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to render page: {str(e)}")
+
+    # 获取该页的高光数据
+    highlights = highlight_service.get_highlights_for_document(document_id, db, page_number)
+
+    # 如果没有高光，直接返回原图
+    if not highlights:
+        return Response(
+            content=img_bytes,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f"inline; filename=\"{doc.file_name}_page_{page_number}_preview.png\""
+            }
+        )
+
+    # 使用 Pillow 绘制高光框
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+
+        # 创建一个透明图层用于绘制高光
+        overlay = Image.new('RGBA', img.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        for hl in highlights:
+            bbox = hl.get('bbox')
+            if not bbox:
+                continue
+
+            x1 = bbox.get('x1')
+            y1 = bbox.get('y1')
+            x2 = bbox.get('x2')
+            y2 = bbox.get('y2')
+
+            if x1 is None or y1 is None or x2 is None or y2 is None:
+                continue
+
+            # 转换归一化坐标 (0-1000) 到像素坐标
+            px1 = int((x1 / 1000) * img_width)
+            py1 = int((y1 / 1000) * img_height)
+            px2 = int((x2 / 1000) * img_width)
+            py2 = int((y2 / 1000) * img_height)
+
+            # 获取颜色
+            category = hl.get('category', '').lower() if hl.get('category') else ''
+            color = HIGHLIGHT_COLORS.get(category, HIGHLIGHT_COLORS['default'])
+
+            # 绘制半透明矩形
+            draw.rectangle([px1, py1, px2, py2], fill=color)
+
+            # 绘制边框 (更深的颜色)
+            border_color = (color[0], color[1], color[2], 200)
+            draw.rectangle([px1, py1, px2, py2], outline=border_color, width=2)
+
+        # 合并图层
+        img = Image.alpha_composite(img, overlay)
+
+        # 转换回 RGB 并保存为 PNG
+        img = img.convert('RGB')
+        output = io.BytesIO()
+        img.save(output, format='PNG', quality=95)
+        output.seek(0)
+
+        return Response(
+            content=output.getvalue(),
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f"inline; filename=\"{doc.file_name}_page_{page_number}_preview.png\"",
+                "X-Highlight-Count": str(len(highlights))
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to draw highlights: {str(e)}")
 
 
 # ============== 保存高亮图片 API ==============

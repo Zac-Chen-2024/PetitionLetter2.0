@@ -20,10 +20,14 @@ class Settings(BaseSettings):
     deepseek_ocr_venv: str = "/workspace/miniconda/envs/deepseek-ocr"
     deepseek_ocr_model: str = "deepseek-ai/DeepSeek-OCR"
 
-    # LLM Provider
-    llm_provider: str = "local"  # local / openai / azure / deepseek / claude
-    llm_model: str = "Qwen/Qwen3-32B"
-    llm_api_base: str = "http://localhost:8000/v1"  # 本地模型 API 地址
+    # LLM Provider: ollama (默认) / local / openai / azure / deepseek / claude
+    llm_provider: str = "ollama"
+    llm_model: str = "qwen3:30b-a3b"  # Ollama 模型名称
+    llm_api_base: str = "http://localhost:8000/v1"  # vLLM 本地模型 API
+
+    # Ollama 配置
+    ollama_api_base: str = "http://localhost:11434/v1"
+    ollama_model: str = "qwen3:30b-a3b"
 
     # Azure OpenAI (备选)
     azure_openai_api_key: str = ""
