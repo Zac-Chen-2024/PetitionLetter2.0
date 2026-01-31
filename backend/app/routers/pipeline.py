@@ -1806,21 +1806,38 @@ async def analyze_relationships(project_id: str, beneficiary_name: Optional[str]
     l1_analyses = storage.load_l1_analysis(project_id)
 
     if l1_analyses and len(l1_analyses) > 0:
-        # 使用 L-1 专项分析的所有 quotes 数据
-        # l1_analyses 是一个列表，每个元素包含 document_id, exhibit_id, file_name, quotes
+        # 使用高价值引用筛选，避免数据量过大导致 LLM 处理效果下降
+        from app.services.quote_merger import is_high_value_quote
 
         docs_data = []
+        total_quotes = 0
+        high_value_quotes = 0
+
         for doc_analysis in l1_analyses:
             exhibit_id = doc_analysis.get("exhibit_id", "Unknown")
             file_name = doc_analysis.get("file_name", "Unknown")
             quotes = doc_analysis.get("quotes", [])
 
-            if quotes:
+            # 筛选高价值引用
+            filtered_quotes = []
+            for q in quotes:
+                total_quotes += 1
+                quote_text = q.get("quote", "")
+                result = is_high_value_quote(quote_text)
+                if result["is_high_value"]:
+                    high_value_quotes += 1
+                    # 添加价值类型标记
+                    q_with_value = {**q, "value_types": result["value_types"]}
+                    filtered_quotes.append(q_with_value)
+
+            if filtered_quotes:
                 docs_data.append({
                     "exhibit_id": exhibit_id,
                     "file_name": file_name,
-                    "quotes": quotes  # 保留完整的 quote 数据
+                    "quotes": filtered_quotes
                 })
+
+        print(f"[Relationship] 高价值引用筛选: {total_quotes} -> {high_value_quotes} ({high_value_quotes*100//max(total_quotes,1)}%)")
 
         if not docs_data:
             raise HTTPException(status_code=400, detail="No L-1 analysis quotes found. Run L-1 Analysis first.")
@@ -2135,8 +2152,15 @@ class ManualAnalysisRequest(BaseModel):
 
 
 async def _run_l1_analysis_background(project_id: str, doc_list: List[Dict[str, Any]]):
-    """后台运行 L1 分析任务"""
+    """后台运行 L1 分析任务 - 支持语义分组模式"""
     global _l1_analysis_progress, current_model
+
+    # 导入语义分组函数
+    from app.services.l1_analyzer import (
+        should_use_page_mode, load_ocr_pages, group_pages_semantically,
+        LONG_DOC_THRESHOLD, MAX_PAGE_GROUP_SIZE
+    )
+    from app.services.quote_merger import merge_page_group_results
 
     total = len(doc_list)
     _l1_analysis_progress[project_id] = {
@@ -2154,24 +2178,74 @@ async def _run_l1_analysis_background(project_id: str, doc_list: List[Dict[str, 
 
     for idx, doc_info in enumerate(doc_list):
         try:
+            doc_id = doc_info["document_id"]
+            doc_text = doc_info.get("text", "")
+            text_length = len(doc_text)
+
             # 更新当前处理的文档
             _l1_analysis_progress[project_id]["current_doc"] = {
-                "document_id": doc_info["document_id"],
+                "document_id": doc_id,
                 "file_name": doc_info["file_name"],
-                "exhibit_id": doc_info["exhibit_id"]
+                "exhibit_id": doc_info["exhibit_id"],
+                "text_length": text_length
             }
 
-            # 生成 L-1 专项提示词（整文档模式）
-            prompt = get_l1_analysis_prompt(doc_info)
+            # 判断是否使用语义分组模式
+            if should_use_page_mode(project_id, doc_id, text_length):
+                # === 语义分组分析模式 ===
+                print(f"[L1] Using SEMANTIC page-group mode for {doc_info['file_name']} ({text_length:,} chars)")
 
-            # 调用 LLM (带重试)
-            llm_result = await call_llm(prompt, model_override=current_model, max_retries=3)
+                pages = load_ocr_pages(project_id, doc_id)
+                page_groups = group_pages_semantically(pages, max_chars=MAX_PAGE_GROUP_SIZE)
 
-            # 解析结果
-            parsed_quotes = parse_analysis_result(llm_result, doc_info)
+                # 打印语义分组详情
+                print(f"[L1] Split into {len(page_groups)} semantic groups:")
+                for g in page_groups:
+                    print(f"  - Group {g['group_id']}: pages {g['page_range']} | {g['type_desc']} | {g['char_count']:,} chars")
+
+                # 更新进度信息
+                _l1_analysis_progress[project_id]["current_doc"]["mode"] = "semantic_groups"
+                _l1_analysis_progress[project_id]["current_doc"]["total_groups"] = len(page_groups)
+
+                group_results = []
+                for group in page_groups:
+                    # 构建分组文档信息，包含语义上下文
+                    group_doc_info = {
+                        **doc_info,
+                        "text": group["text"],
+                        "page_group_id": group["group_id"],
+                        "page_range": group["page_range"],
+                        "semantic_type": group["semantic_type"],
+                        "semantic_desc": group["type_desc"]
+                    }
+
+                    prompt = get_l1_analysis_prompt(group_doc_info)
+                    llm_result = await call_llm(prompt, model_override=current_model, max_retries=3)
+                    group_quotes = parse_analysis_result(llm_result, group_doc_info)
+                    group_results.append(group_quotes)
+
+                    print(f"[L1] Group {group['group_id']} ({group['type_desc']}): {len(group_quotes)} quotes")
+
+                    # 更新分组进度
+                    _l1_analysis_progress[project_id]["current_doc"]["current_group"] = group["group_id"]
+
+                    await asyncio.sleep(0.5)  # Rate limit between groups
+
+                # 合并所有分组的结果并去重
+                parsed_quotes = merge_page_group_results(group_results)
+                print(f"[L1] Merged total: {len(parsed_quotes)} unique quotes from {doc_info['file_name']}")
+
+            else:
+                # === 原有整文档模式（短文档） ===
+                print(f"[L1] Using whole-doc mode for {doc_info['file_name']} ({text_length:,} chars)")
+                _l1_analysis_progress[project_id]["current_doc"]["mode"] = "whole_doc"
+
+                prompt = get_l1_analysis_prompt(doc_info)
+                llm_result = await call_llm(prompt, model_override=current_model, max_retries=3)
+                parsed_quotes = parse_analysis_result(llm_result, doc_info)
 
             doc_result = {
-                "document_id": doc_info["document_id"],
+                "document_id": doc_id,
                 "exhibit_id": doc_info["exhibit_id"],
                 "file_name": doc_info["file_name"],
                 "quotes": parsed_quotes
@@ -2186,10 +2260,18 @@ async def _run_l1_analysis_background(project_id: str, doc_list: List[Dict[str, 
             await asyncio.sleep(0.5)
 
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"[L1] Error processing {doc_info['exhibit_id']}: {e}")
+            print(f"[L1] Traceback:\n{error_traceback}")
+
+            # 捕获更详细的错误信息
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
             error_info = {
                 "document_id": doc_info["document_id"],
                 "exhibit_id": doc_info["exhibit_id"],
-                "error": str(e)
+                "error": error_msg,
+                "traceback": error_traceback[:500]  # 保存部分 traceback
             }
             errors.append(error_info)
             _l1_analysis_progress[project_id]["errors"] = errors
@@ -2458,9 +2540,15 @@ async def get_l1_standards():
 @router.get("/l1-status/{project_id}")
 async def get_l1_status(project_id: str):
     """获取 L-1 分析流程状态 - 用于判断哪些按钮应该启用"""
-    # 检查是否有 L-1 分析结果
+    # 检查是否有 L-1 分析结果（自动合并所有分析文件）
     analysis = storage.load_l1_analysis(project_id)
     has_analysis = analysis is not None and len(analysis) > 0
+
+    # 实时计算 analysis 中的总引用数
+    analysis_total_quotes = 0
+    if analysis:
+        for chunk in analysis:
+            analysis_total_quotes += len(chunk.get("quotes", []))
 
     # 检查是否有 L-1 汇总结果
     summary = storage.load_l1_summary(project_id)
@@ -2469,8 +2557,9 @@ async def get_l1_status(project_id: str):
     return {
         "has_analysis": has_analysis,
         "analysis_chunks": len(analysis) if analysis else 0,
+        "analysis_total_quotes": analysis_total_quotes,  # 新增：实时计算的引用总数
         "has_summary": has_summary,
-        "summary_quotes": summary.get('total_quotes', 0) if summary else 0
+        "summary_quotes": analysis_total_quotes  # 改为使用实时数据，而不是旧 summary
     }
 
 
@@ -2502,6 +2591,23 @@ async def l1_write_section(
     evidence_metadata = evidence.get("evidence_metadata", {})
     unique_exhibits = evidence_metadata.get("unique_exhibits", [])
     data_types = evidence_metadata.get("data_types_found", {})
+
+    # 获取分层证据（跨标准聚合）
+    primary_quotes = evidence.get("primary_quotes", evidence.get("quotes", []))
+    supporting_quotes = evidence.get("supporting_quotes", [])
+    primary_count = evidence.get("primary_quote_count", len(primary_quotes))
+    supporting_count = evidence.get("supporting_quote_count", len(supporting_quotes))
+
+    # 调试日志：打印跨标准聚合结果
+    print(f"\n{'='*60}")
+    print(f"[DEBUG] Section: {section_type}")
+    print(f"[DEBUG] Primary quotes: {primary_count}")
+    print(f"[DEBUG] Supporting quotes: {supporting_count}")
+    if supporting_quotes:
+        print(f"[DEBUG] Supporting quote value_types:")
+        for i, sq in enumerate(supporting_quotes[:5]):  # 只打印前5条
+            print(f"  [{i+1}] {sq.get('value_types', [])} - {sq.get('quote', '')[:80]}...")
+    print(f"{'='*60}\n")
 
     prompt = f"""You are a Senior Immigration Attorney at a top-tier U.S. law firm specializing in L-1 visa petitions. Your task is to write a comprehensive, persuasive paragraph for an L-1 Petition Letter that will convince USCIS to approve the petition.
 
@@ -2584,11 +2690,41 @@ SECTION 4: LEGAL LANGUAGE REQUIREMENTS
 - Repetitive phrasing
 
 ═══════════════════════════════════════════════════════════════
-SECTION 5: AVAILABLE EVIDENCE
+SECTION 5: AVAILABLE EVIDENCE (CROSS-STANDARD AGGREGATED)
 ═══════════════════════════════════════════════════════════════
 
-**Evidence JSON** (synthesize facts from these quotes):
-{json.dumps(evidence["quotes"], indent=2, ensure_ascii=False)}
+**PRIMARY EVIDENCE** ({primary_count} quotes - use these to build core arguments):
+{json.dumps(primary_quotes, indent=2, ensure_ascii=False)}
+
+**SUPPORTING EVIDENCE** ({supporting_count} quotes - high-value data to enrich the paragraph):
+{json.dumps(supporting_quotes, indent=2, ensure_ascii=False) if supporting_quotes else "No additional supporting evidence available."}
+
+═══════════════════════════════════════════════════════════════
+SECTION 6: EVIDENCE USAGE INSTRUCTIONS
+═══════════════════════════════════════════════════════════════
+
+**Writing Strategy:**
+1. Use PRIMARY EVIDENCE to construct the core legal arguments and narrative
+2. Select 2-3 high-value items from SUPPORTING EVIDENCE to enrich the paragraph with:
+   - Financial figures (revenue, projections)
+   - Employee headcounts (current staff, planned growth)
+   - Specific products/services offered
+   - Client/customer names
+   - Growth projections and business milestones
+
+**Data Usage Principles (prioritize when evidence is available):**
+
+1. **Precision over generalization** - Use exact figures from evidence rather than rounding or summarizing (e.g., use the exact dollar amount instead of rounding to millions)
+
+2. **Specificity over counts** - When client names, partner companies, or product names appear in evidence, list them rather than just stating a count
+
+3. **Include staffing details** - If employee headcount (current or projected) appears in evidence, incorporate it
+
+4. **Preserve timeline granularity** - Use year-by-year projections as stated in evidence rather than compressing into a single future date
+
+5. **Citation diversity** - Draw from multiple different Exhibits when possible to demonstrate breadth of documentation
+
+6. **Name concrete evidence types** - When referencing documentation, mention specific types (payroll records, bank statements, contracts) rather than "various documents"
 
 **Task Context:**
 - Section to Write: {section_type}
@@ -2596,7 +2732,7 @@ SECTION 5: AVAILABLE EVIDENCE
 - Petitioner Name: {petitioner_name}
 
 ═══════════════════════════════════════════════════════════════
-SECTION 6: OUTPUT FORMAT
+SECTION 7: OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════
 
 Respond with a JSON object in this EXACT format:

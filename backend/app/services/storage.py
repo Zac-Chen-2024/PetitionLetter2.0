@@ -483,26 +483,74 @@ def save_l1_analysis(project_id: str, chunk_analyses: List[Dict]) -> str:
 
 
 def load_l1_analysis(project_id: str, version_id: str = None) -> Optional[List[Dict]]:
-    """加载 L-1 分析结果"""
+    """
+    加载 L-1 分析结果
+
+    新设计：自动合并所有分析文件（灵活整合能力）
+    - 按 document_id 保留引用最多的版本
+    - 不同文档的结果可以来自不同的分析文件
+    - 解决批量分析产生多个文件导致数据分散的问题
+    """
+    from .quote_merger import hash_quote
+
     l1_dir = get_project_dir(project_id) / "l1_analysis"
     if not l1_dir.exists():
         return None
 
     if version_id:
+        # 指定版本时，只返回该版本
         filepath = l1_dir / f"l1_analysis_{version_id}.json"
-    else:
-        # 获取最新版本
-        files = sorted(l1_dir.glob("l1_analysis_*.json"), reverse=True)
-        if not files:
+        if not filepath.exists():
             return None
-        filepath = files[0]
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get("chunk_analyses", [])
 
-    if not filepath.exists():
+    # === 自动合并模式：读取所有文件，按文档保留最佳结果 ===
+    files = sorted(l1_dir.glob("l1_analysis_*.json"), reverse=True)
+    if not files:
         return None
 
-    with open(filepath, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        return data.get("chunk_analyses", [])
+    # 按 document_id 存储最佳结果
+    # 格式: {document_id: {"quotes": [...], "metadata": {...}, "quote_count": int}}
+    best_by_document: Dict[str, Dict] = {}
+
+    for filepath in files:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                chunk_analyses = data.get("chunk_analyses", [])
+
+                for chunk in chunk_analyses:
+                    doc_id = chunk.get("document_id", "")
+                    if not doc_id:
+                        continue
+
+                    quotes = chunk.get("quotes", [])
+                    quote_count = len(quotes)
+
+                    # 比较：保留引用数量更多的版本
+                    if doc_id not in best_by_document:
+                        best_by_document[doc_id] = {
+                            "chunk": chunk,
+                            "quote_count": quote_count
+                        }
+                    elif quote_count > best_by_document[doc_id]["quote_count"]:
+                        best_by_document[doc_id] = {
+                            "chunk": chunk,
+                            "quote_count": quote_count
+                        }
+        except Exception as e:
+            # 跳过无法读取的文件
+            continue
+
+    # 组装合并后的结果
+    merged_analyses = [item["chunk"] for item in best_by_document.values()]
+
+    # 按 exhibit_id 排序
+    merged_analyses.sort(key=lambda x: x.get("exhibit_id", "Z-99"))
+
+    return merged_analyses
 
 
 def save_l1_summary(project_id: str, summary: Dict) -> str:
