@@ -7,6 +7,11 @@ from app.db.database import engine, Base, SessionLocal
 from app.routers.pipeline import router as pipeline_router
 from app.routers.projects import router as projects_router
 from app.routers.highlight import router as highlight_router
+from app.routers.writing import router as writing_router
+from app.routers.provenance import router as provenance_router
+from app.routers.data import router as data_router
+from app.routers.analysis import router as analysis_router
+from app.routers.documents import router as documents_router
 from app.models.document import Document, OCRStatus
 from app.services import storage
 from app.services.model_preloader import preload_models_async, get_preload_state
@@ -107,6 +112,11 @@ app.add_middleware(
 app.include_router(pipeline_router)
 app.include_router(projects_router)
 app.include_router(highlight_router)
+app.include_router(writing_router)
+app.include_router(provenance_router)
+app.include_router(data_router)
+app.include_router(analysis_router)
+app.include_router(documents_router)
 
 
 @app.get("/")

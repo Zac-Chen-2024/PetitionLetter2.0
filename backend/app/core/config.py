@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     # OpenAI API
     openai_api_key: str = ""
     openai_api_base: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o"
 
     # Baidu OCR
     baidu_ocr_api_key: str = ""

@@ -163,7 +163,7 @@ class Entity:
     """实体节点"""
     id: str
     name: str
-    type: str  # person, company, position
+    type: str  # person | organization | publication | award | grant | metric | event | position | company
     aliases: List[str] = field(default_factory=list)
     quote_refs: List[int] = field(default_factory=list)
 
@@ -401,7 +401,17 @@ Quotes:
 {chr(10).join(quotes_text)}
 
 Return JSON:
-{{"results": [{{"quote_idx": 0, "entities": [{{"name": "...", "type": "person|company|position"}}], "relations": [{{"from": "entity name", "to": "entity name", "type": "employed_by|owns|subsidiary_of|manages|founded|works_at"}}]}}]}}
+{{"results": [{{"quote_idx": 0, "entities": [{{"name": "...", "type": "person|organization|publication|award|grant|metric|event|position"}}], "relations": [{{"from": "entity name", "to": "entity name", "type": "employed_by|owns|subsidiary_of|manages|founded|works_at|authored|received|cited_by|published_in|member_of|awarded_to"}}]}}]}}
+
+Entity types:
+- person: Individual people (researchers, executives, etc.)
+- organization: Companies, universities, institutions
+- publication: Papers, articles, books, patents
+- award: Prizes, honors, recognitions
+- grant: Research funding, grants
+- metric: Quantitative measures (citations, impact factor, revenue)
+- event: Conferences, exhibitions, performances
+- position: Job titles, roles
 
 Rules:
 - Only extract what is explicitly stated
@@ -697,8 +707,9 @@ class RelationshipDeduplicator:
         if not entities:
             return []
 
-        # 只保留 person 和 company 类型
-        filtered = [e for e in entities if e.get('type') in ['person', 'company', 'unknown']]
+        # 保留主要实体类型 (person, organization/company, publication 等)
+        valid_types = ['person', 'company', 'organization', 'publication', 'award', 'unknown']
+        filtered = [e for e in entities if e.get('type') in valid_types]
         if len(filtered) < 2:
             return []
 
