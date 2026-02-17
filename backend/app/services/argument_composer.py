@@ -62,6 +62,17 @@ EXHIBIT_TO_MEDIA = {
 # ============================================
 # P1: Membership 资格过滤规则
 # ============================================
+# Exhibit → 协会映射 (C 系列都是 SFBA 相关)
+EXHIBIT_TO_ASSOCIATION = {
+    "C1": "Shanghai Fitness Bodybuilding Association",
+    "C2": "Shanghai Fitness Bodybuilding Association",
+    "C3": "Shanghai Fitness Bodybuilding Association",
+    "C4": "Shanghai Fitness Bodybuilding Association",
+    "C5": "Shanghai Fitness Bodybuilding Association",
+    "C6": "Shanghai Fitness Bodybuilding Association",
+    "C7": "Shanghai Fitness Bodybuilding Association",
+}
+
 # 这些协会只是普通会员资格，不满足 "outstanding achievements" 要求
 DISQUALIFIED_MEMBERSHIPS = {
     "usa weightlifting",
@@ -176,6 +187,9 @@ class ArgumentComposer:
         if standard == "original_contribution":
             # Original Contribution: 合并成一个整体论点
             return [self._compose_single_argument(snippets, standard, "BAT Training System")]
+        elif standard == "awards":
+            # Awards: 合并成一个整体论点（通常只证明一个主要奖项）
+            return [self._compose_single_argument(snippets, standard, "China Fitness Industry Achievement Award")]
         else:
             # 其他标准: 按实体分组
             groups = self._group_by_entity(snippets, standard)
@@ -192,10 +206,11 @@ class ArgumentComposer:
         for snp in snippets:
             text = snp.get("text", "")
             subject = snp.get("subject", "")
+            exhibit_id = snp.get("exhibit_id", "")
 
             if standard == "membership":
-                # 按协会分组 - P1: 过滤不合格会员
-                group_key = self._extract_association_name(text, subject)
+                # 按协会分组 - P1: 使用 Exhibit 映射 + 过滤不合格会员
+                group_key = self._extract_association_name(text, subject, exhibit_id)
             elif standard == "published_material":
                 # 按媒体分组 - P0: 使用 Exhibit 映射
                 group_key = self._extract_media_name(text, snp.get("exhibit_id", ""))
@@ -214,8 +229,8 @@ class ArgumentComposer:
 
         return groups
 
-    def _extract_association_name(self, text: str, subject: str) -> str:
-        """提取协会名称 - P1: 过滤不合格会员"""
+    def _extract_association_name(self, text: str, subject: str, exhibit_id: str = "") -> str:
+        """提取协会名称 - P1: 使用 Exhibit 映射 + 过滤不合格会员"""
         text_lower = text.lower()
 
         # 检查是否是不合格会员 (普通专业认证)
@@ -223,13 +238,16 @@ class ArgumentComposer:
             if disqualified in text_lower:
                 return None  # 返回 None 表示应该被过滤
 
-        # 检查是否是合格会员
+        # P1 优化: 优先使用 Exhibit → 协会映射
+        if exhibit_id in EXHIBIT_TO_ASSOCIATION:
+            return EXHIBIT_TO_ASSOCIATION[exhibit_id]
+
+        # 从文本中识别合格会员
         for pattern, formal_name in QUALIFIED_MEMBERSHIPS.items():
             if pattern in text_lower:
                 return formal_name
 
-        # 其他协会 - 检查是否有选择性证据
-        # 如果没有明确识别，也返回 None 以避免碎片化
+        # 其他协会 - 返回 None 以避免碎片化
         return None
 
     def _extract_media_name(self, text: str, exhibit_id: str) -> str:
