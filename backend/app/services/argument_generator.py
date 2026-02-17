@@ -24,6 +24,90 @@ import uuid
 from .snippet_extractor import load_extracted_snippets
 from .relationship_analyzer import analyze_relationships
 from .unified_extractor import load_combined_extraction
+from .llm_client import call_openai
+
+
+# ==================== Prompt Templates ====================
+
+SMART_GROUPING_SYSTEM_PROMPT = """You are an expert EB-1A immigration attorney. Organize evidence snippets into
+fine-grained arguments. Each argument must have ONE clear legal purpose.
+
+ARGUMENT TYPE PATTERNS:
+
+For MEMBERSHIP evidence:
+- org_intro: Prove the organization is distinguished (combine related snippets about the same org)
+- requirement: Prove membership requires outstanding achievements
+- process: Prove rigorous selection/review process
+- peer_achievement: Use other members' credentials as benchmark
+
+For PUBLISHED_MATERIAL or PUBLICATION evidence:
+- media_coverage: For each media outlet, combine article content + media credentials into ONE argument
+  Example: "The Jakarta Post Coverage" should include both the article about the applicant AND
+  the media outlet's credentials (circulation, awards, etc.)
+- Group by MEDIA OUTLET, not by article vs credential
+
+For ORIGINAL_CONTRIBUTION or CONTRIBUTION evidence:
+- creation: Prove the applicant created something original (combine description + features)
+- commercial_success: Prove major significance via metrics (combine all metrics together)
+- institutional_adoption: Prove adoption by schools/organizations
+- testimonial: Group by PERSON - combine all snippets from the same recommender
+- expert_endorsement: Group by PERSON - combine all snippets from the same expert
+
+For LEADING_ROLE or LEADERSHIP evidence:
+- role_at_org: For each organization, combine role description + achievements into ONE argument
+- org_credential: Prove the organization's distinguished reputation
+- industry_recognition: Recognition from industry bodies
+- partner_endorsement: Group by PERSON/ORGANIZATION
+
+For AWARD evidence:
+- award: Combine award description + award criteria/prestige into ONE argument per award
+
+For JUDGING evidence:
+- judging: Combine role + venue credentials into ONE argument
+
+RULES:
+1. GROUP BY LOGICAL UNIT: Combine snippets about the same person/organization/media outlet
+2. AVOID FRAGMENTATION: Prefer 3-7 arguments over 10+ tiny ones
+3. Each argument should have 2-5 snippets ideally (unless only 1 exists)
+4. Use entity names in titles (e.g., "Tom Liaw's Endorsement", "The Jakarta Post Coverage")
+5. CRITICAL: You MUST assign ALL snippets to arguments. Every snippet_id must appear in exactly one argument.
+6. Copy snippet_ids EXACTLY as provided - do not modify or abbreviate them."""
+
+SMART_GROUPING_USER_PROMPT = """Evidence Type: {evidence_type}
+Applicant: {applicant_name}
+
+## Snippets (with simplified IDs: S1, S2, S3, etc.)
+{snippets_formatted}
+
+## Entities Found
+{entities_summary}
+
+## Relationships
+{relations_summary}
+
+Organize these snippets into logical argument groups.
+
+KEY PRINCIPLES:
+1. Group by person/organization/media outlet - don't split the same entity across arguments
+2. For recommendations: combine all snippets from the same recommender into ONE argument
+3. For media coverage: combine article content + media credentials for each outlet
+4. Aim for 3-7 arguments total (not 10+ fragmented ones)
+
+IMPORTANT: Use the simplified IDs (S1, S2, etc.). Assign ALL snippets.
+
+Return JSON:
+{{
+  "arguments": [
+    {{
+      "type": "creation|testimonial|media_coverage|org_intro|...",
+      "title": "Specific title with entity name (e.g., 'Tom Liaw Endorsement')",
+      "purpose": "What legal point this proves",
+      "snippet_ids": ["S1", "S3", "S5"],
+      "key_entity": "Main entity name",
+      "confidence": 0.9
+    }}
+  ]
+}}"""
 
 # Data storage root directory
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -87,6 +171,231 @@ class ArgumentGenerator:
             json.dump(graph_data, f, ensure_ascii=False, indent=2)
         print(f"[ArgumentGenerator] Saved relationship graph to {rel_file}")
 
+    async def _smart_group_snippets(
+        self,
+        snippets: List[Dict],
+        evidence_type: str,
+        entities: List[Dict],
+        relations: List[Dict],
+        applicant_name: str
+    ) -> List[GeneratedArgument]:
+        """
+        Use LLM to intelligently group snippets into fine-grained arguments
+
+        Args:
+            snippets: Snippets of the same evidence_type
+            evidence_type: Type like 'contribution', 'media', 'membership'
+            entities: All entities from unified extraction
+            relations: All relations from unified extraction
+            applicant_name: Name of the applicant
+
+        Returns:
+            List of GeneratedArgument with fine-grained grouping
+        """
+        # Create a simplified ID mapping to avoid LLM copying errors
+        # Use simple numeric IDs: S1, S2, S3, etc.
+        id_mapping = {}  # simple_id -> real_snippet_id
+        reverse_mapping = {}  # real_snippet_id -> simple_id
+
+        # Format snippets for prompt with simplified IDs
+        snippets_lines = []
+        for i, s in enumerate(snippets, 1):
+            real_id = s.get('snippet_id', s.get('block_id', ''))
+            simple_id = f"S{i}"
+            id_mapping[simple_id] = real_id
+            reverse_mapping[real_id] = simple_id
+
+            text = s.get('text', '')[:400]  # Increased limit for better context
+            subject = s.get('subject', '')
+            exhibit_id = s.get('exhibit_id', '')
+            snippets_lines.append(f"[{simple_id}] (Exhibit: {exhibit_id}, subject: {subject}) {text}")
+        snippets_formatted = "\n".join(snippets_lines)
+
+        # Format entities summary - filter to relevant ones
+        relevant_entity_names = set()
+        for s in snippets:
+            if s.get('subject'):
+                relevant_entity_names.add(s.get('subject').lower())
+
+        entity_lines = []
+        for e in entities:
+            name = e.get('name', '')
+            etype = e.get('type', '')
+            identity = e.get('identity', '')
+            relation = e.get('relation_to_applicant', '')
+            entity_lines.append(f"- {name} ({etype}): {identity} [relation: {relation}]")
+        entities_summary = "\n".join(entity_lines[:20])  # Limit to 20 entities
+
+        # Format relations summary
+        relation_lines = []
+        for r in relations:
+            from_e = r.get('from_entity', '')
+            to_e = r.get('to_entity', '')
+            rel_type = r.get('relation_type', '')
+            relation_lines.append(f"- {from_e} --[{rel_type}]--> {to_e}")
+        relations_summary = "\n".join(relation_lines[:15])  # Limit to 15 relations
+
+        # Build prompt
+        user_prompt = SMART_GROUPING_USER_PROMPT.format(
+            evidence_type=evidence_type,
+            applicant_name=applicant_name,
+            snippets_formatted=snippets_formatted,
+            entities_summary=entities_summary or "(No entities found)",
+            relations_summary=relations_summary or "(No relations found)"
+        )
+
+        # Add simplified ID list to prompt for validation
+        simple_id_list = ", ".join([f"S{i}" for i in range(1, len(snippets) + 1)])
+        user_prompt_with_ids = user_prompt + f"\n\nAVAILABLE SNIPPET IDS: {simple_id_list}\nYou MUST use these exact IDs. Assign ALL of them."
+
+        try:
+            result = await call_openai(
+                prompt=user_prompt_with_ids,
+                model="gpt-4o-mini",
+                system_prompt=SMART_GROUPING_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=4000
+            )
+
+            raw_arguments = result.get('arguments', [])
+            if not raw_arguments:
+                print(f"[ArgumentGenerator] LLM returned no arguments for {evidence_type}, falling back")
+                return self._create_simple_arguments(snippets, evidence_type, applicant_name)
+
+            # Convert to GeneratedArgument, mapping simple IDs back to real IDs
+            arguments = []
+            all_simple_ids = set(id_mapping.keys())
+
+            for arg in raw_arguments:
+                # Get snippet_ids and convert from simple to real IDs
+                arg_snippet_ids = arg.get('snippet_ids', [])
+                real_snippet_ids = []
+
+                for sid in arg_snippet_ids:
+                    # Handle both "S1" and "s1" formats
+                    normalized_sid = sid.upper() if isinstance(sid, str) else str(sid)
+                    if not normalized_sid.startswith('S'):
+                        normalized_sid = f"S{normalized_sid}"
+
+                    if normalized_sid in id_mapping:
+                        real_snippet_ids.append(id_mapping[normalized_sid])
+                    else:
+                        print(f"[ArgumentGenerator] Warning: Unknown snippet ID '{sid}' in LLM response")
+
+                if not real_snippet_ids:
+                    continue
+
+                # Map evidence_type to standard_key
+                standard_key = self._evidence_to_standard(evidence_type)
+
+                argument = GeneratedArgument(
+                    id=f"arg-{uuid.uuid4().hex[:8]}",
+                    title=arg.get('title', f"{applicant_name} - {evidence_type}"),
+                    subject=applicant_name,
+                    snippet_ids=real_snippet_ids,
+                    standard_key=standard_key,
+                    confidence=arg.get('confidence', 0.8),
+                    created_at=datetime.now().isoformat(),
+                    is_ai_generated=True
+                )
+                arguments.append(argument)
+
+            # Check for missed snippets and create catch-all if needed
+            used_snippet_ids = set()
+            for arg in arguments:
+                used_snippet_ids.update(arg.snippet_ids)
+
+            missed_snippets = [s for s in snippets
+                              if s.get('snippet_id', s.get('block_id', '')) not in used_snippet_ids]
+
+            if missed_snippets:
+                missed_pct = len(missed_snippets) / len(snippets) * 100
+                print(f"[ArgumentGenerator] {len(missed_snippets)} snippets ({missed_pct:.0f}%) not assigned, creating catch-all")
+                catch_all = self._create_simple_arguments(missed_snippets, evidence_type, applicant_name)
+                arguments.extend(catch_all)
+
+            print(f"[ArgumentGenerator] Smart grouped {evidence_type}: {len(arguments)} arguments from {len(snippets)} snippets")
+            return arguments
+
+        except Exception as e:
+            print(f"[ArgumentGenerator] Smart grouping failed for {evidence_type}: {e}")
+            return self._create_simple_arguments(snippets, evidence_type, applicant_name)
+
+    def _create_simple_arguments(
+        self,
+        snippets: List[Dict],
+        evidence_type: str,
+        applicant_name: str
+    ) -> List[GeneratedArgument]:
+        """
+        Create a simple argument with all snippets (fallback)
+
+        Used when:
+        - LLM grouping fails
+        - Only a few snippets (<=3)
+        """
+        if not snippets:
+            return []
+
+        snippet_ids = [s.get('snippet_id', s.get('block_id', '')) for s in snippets]
+        standard_key = self._evidence_to_standard(evidence_type)
+
+        type_display = evidence_type.replace('_', ' ').title()
+        title = f"{applicant_name} - {type_display}"
+
+        confidences = [s.get('confidence', 0.5) for s in snippets]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
+
+        argument = GeneratedArgument(
+            id=f"arg-{uuid.uuid4().hex[:8]}",
+            title=title,
+            subject=applicant_name,
+            snippet_ids=snippet_ids,
+            standard_key=standard_key,
+            confidence=round(avg_confidence, 2),
+            created_at=datetime.now().isoformat(),
+            is_ai_generated=True
+        )
+
+        return [argument]
+
+    def _evidence_to_standard(self, evidence_type: str) -> str:
+        """Map evidence_type to standard_key"""
+        mapping = {
+            'award': 'awards',
+            'awards': 'awards',
+            'membership': 'membership',
+            'membership_criteria': 'membership',      # 新增：会员资格要求
+            'membership_evaluation': 'membership',    # 新增：会员评审
+            'peer_assessment': 'membership',          # 新增：同行评价
+            'peer_achievement': 'membership',         # 新增：其他杰出会员成就（证明选择性）
+            'publication': 'published_material',
+            'publications': 'published_material',
+            'scholarly_article': 'scholarly_articles',
+            'article': 'published_material',
+            'media_coverage': 'published_material',   # 新增：媒体报道
+            'source_credibility': 'published_material', # 新增：来源资质（证明媒体权威性）
+            'quantitative_impact': 'original_contribution', # 新增：量化影响力数据
+            'contribution': 'original_contribution',
+            'original_contribution': 'original_contribution',
+            'recommendation': 'original_contribution', # 新增：推荐信
+            'judging': 'judging',
+            'leadership': 'leading_role',
+            'leading_role': 'leading_role',
+            'high_salary': 'high_salary',
+            'salary': 'high_salary',
+            'media': 'published_material',
+            'press': 'published_material',
+            'published_material': 'published_material',
+            'media_credential': 'published_material',
+            'media_article': 'published_material',
+            'exhibition': 'exhibitions',
+            'exhibitions': 'exhibitions',
+            'commercial': 'commercial_success',
+            'other': '',
+        }
+        return mapping.get(evidence_type.lower(), '')
+
     async def generate_arguments(
         self,
         progress_callback=None,
@@ -137,7 +446,10 @@ class ArgumentGenerator:
         applicant_name: Optional[str],
         progress_callback
     ) -> Dict:
-        """Generate arguments from unified extraction data (with subject attribution)"""
+        """Generate arguments from unified extraction data (with subject attribution)
+
+        Uses LLM to intelligently group snippets into fine-grained arguments
+        """
         snippets = unified_data.get('snippets', [])
         entities = unified_data.get('entities', [])
         relations = unified_data.get('relations', [])
@@ -145,7 +457,7 @@ class ArgumentGenerator:
         print(f"[ArgumentGenerator] Using unified extraction: {len(snippets)} snippets")
 
         if progress_callback:
-            progress_callback(30, 100, "Filtering applicant snippets...")
+            progress_callback(10, 100, "Filtering applicant snippets...")
 
         # Filter to only applicant's achievements
         applicant_snippets = [s for s in snippets if s.get('is_applicant_achievement', False)]
@@ -153,6 +465,18 @@ class ArgumentGenerator:
 
         print(f"[ArgumentGenerator] Filtered: {skipped_count} non-applicant snippets skipped")
         print(f"[ArgumentGenerator] {len(applicant_snippets)} applicant snippets remaining")
+
+        # === SPECIAL HANDLING: Published Material ===
+        # Media credentials (is_applicant_achievement=False) are also needed for Published Material arguments
+        # They prove the media outlet is "major" (circulation, awards, etc.)
+        publication_snippets = [s for s in snippets if s.get('evidence_type') == 'publication']
+        if publication_snippets:
+            print(f"[ArgumentGenerator] Found {len(publication_snippets)} publication snippets for Published Material")
+            # Add them to applicant_snippets with a special marker
+            for s in publication_snippets:
+                if s not in applicant_snippets:
+                    s['_is_media_credential'] = True
+                    applicant_snippets.append(s)
 
         # Determine main subject
         if applicant_name:
@@ -163,7 +487,7 @@ class ArgumentGenerator:
             main_subject = max(set(subjects), key=subjects.count) if subjects else "Applicant"
 
         if progress_callback:
-            progress_callback(50, 100, "Grouping by evidence type...")
+            progress_callback(20, 100, "Grouping by evidence type...")
 
         # Group by evidence_type
         by_evidence_type = defaultdict(list)
@@ -172,61 +496,41 @@ class ArgumentGenerator:
             by_evidence_type[evidence_type].append(s)
 
         if progress_callback:
-            progress_callback(70, 100, "Generating arguments...")
+            progress_callback(30, 100, "Smart grouping arguments...")
 
-        # Evidence type to standard_key mapping
-        evidence_to_standard = {
-            'award': 'awards',
-            'awards': 'awards',
-            'membership': 'membership',
-            'publication': 'scholarly_articles',
-            'publications': 'scholarly_articles',
-            'scholarly_article': 'scholarly_articles',
-            'contribution': 'original_contribution',
-            'original_contribution': 'original_contribution',
-            'judging': 'judging',
-            'leadership': 'leading_role',
-            'leading_role': 'leading_role',
-            'high_salary': 'high_salary',
-            'salary': 'high_salary',
-            'media': 'published_material',
-            'press': 'published_material',
-            'exhibition': 'exhibitions',
-            'exhibitions': 'exhibitions',
-            'commercial': 'commercial_success',
-        }
+        # Smart group each evidence type using LLM
+        # Lowered threshold from 3 to 2 to enable fine-grained grouping for smaller sets
+        SMART_GROUPING_THRESHOLD = 2
 
-        # Create an argument for each evidence type
         arguments = []
+        total_types = len(by_evidence_type)
+        processed_types = 0
 
         for evidence_type, type_snippets in by_evidence_type.items():
             if not type_snippets:
                 continue
 
-            snippet_ids = [s.get('snippet_id', s.get('block_id', '')) for s in type_snippets]
+            processed_types += 1
+            if progress_callback:
+                progress = 30 + int((processed_types / total_types) * 60)
+                progress_callback(progress, 100, f"Grouping {evidence_type} ({len(type_snippets)} snippets)...")
 
-            # Map to standard
-            standard_key = evidence_to_standard.get(evidence_type.lower(), '')
+            # Use smart grouping for larger groups, simple for small ones
+            if len(type_snippets) < SMART_GROUPING_THRESHOLD:
+                type_arguments = self._create_simple_arguments(type_snippets, evidence_type, main_subject)
+            else:
+                type_arguments = await self._smart_group_snippets(
+                    type_snippets,
+                    evidence_type,
+                    entities,
+                    relations,
+                    main_subject
+                )
 
-            # Create readable title
-            type_display = evidence_type.replace('_', ' ').title()
-            title = f"{main_subject} - {type_display}"
+            arguments.extend(type_arguments)
 
-            # Calculate confidence
-            confidences = [s.get('confidence', 0.5) for s in type_snippets]
-            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
-
-            argument = GeneratedArgument(
-                id=f"arg-{uuid.uuid4().hex[:8]}",
-                title=title,
-                subject=main_subject,
-                snippet_ids=snippet_ids,
-                standard_key=standard_key,
-                confidence=round(avg_confidence, 2),
-                created_at=datetime.now().isoformat(),
-                is_ai_generated=True
-            )
-            arguments.append(argument)
+            # Small delay to avoid rate limiting
+            await asyncio.sleep(0.3)
 
         # Sort by number of snippets (most evidence first)
         arguments.sort(key=lambda a: len(a.snippet_ids), reverse=True)

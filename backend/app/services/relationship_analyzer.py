@@ -48,6 +48,15 @@ RELATION_TYPES = [
     "collaborated",  # 合作
     "judged",        # 评审
     "owns",          # 拥有
+    # 推荐信相关
+    "writes_recommendation_for",  # 写推荐信给某人
+    "recommends_to",              # 推荐到某组织
+    "recommends_for_position",    # 推荐担任某职位
+    "supervised_by",              # 被监督/指导
+    "mentored_by",                # 被指导
+    "trained_by",                 # 被训练
+    "coached_by",                 # 被教练
+    "evaluated_by",               # 被评估
 ]
 
 
@@ -227,27 +236,43 @@ Snippets:
 {chr(10).join(quotes_text)}
 
 Extract:
-1. Entities: People (especially the applicant), organizations, awards, publications, positions
-2. Relationships: Who received what award, who works where, who authored what
+1. Entities: People (especially the applicant and recommendation letter writers), organizations, awards, publications, positions
+2. Relationships: ALL meaningful relationships including:
+   - Who received what award
+   - Who works at which organization
+   - Who authored what publication
+   - Who writes recommendation letters for whom
+   - Who recommends someone to which organization
+   - Who supervised/mentored/trained whom
 
 Return JSON:
 {{
   "entities": [
     {{"name": "Dr. John Smith", "type": "person", "snippet_ids": ["snp_xxx"]}},
-    {{"name": "Best Paper Award", "type": "award", "snippet_ids": ["snp_xxx"]}}
+    {{"name": "Best Paper Award", "type": "award", "snippet_ids": ["snp_xxx"]}},
+    {{"name": "Harvard University", "type": "organization", "snippet_ids": ["snp_xxx"]}}
   ],
   "relations": [
-    {{"from": "Dr. John Smith", "to": "Best Paper Award", "type": "received", "snippet_ids": ["snp_xxx"]}}
+    {{"from": "Dr. John Smith", "to": "Best Paper Award", "type": "received", "snippet_ids": ["snp_xxx"]}},
+    {{"from": "Prof. Jane Doe", "to": "Dr. John Smith", "type": "writes_recommendation_for", "snippet_ids": ["snp_xxx"]}},
+    {{"from": "Prof. Jane Doe", "to": "Harvard University", "type": "recommends_to", "snippet_ids": ["snp_xxx"]}}
   ]
 }}
 
 Entity types: person, organization, award, publication, position, project, event, metric
-Relation types: received, works_at, leads, authored, founded, member_of, published_in, cited_by, collaborated, judged, owns
+Relation types: received, works_at, leads, authored, founded, member_of, published_in, cited_by, collaborated, judged, owns, writes_recommendation_for, recommends_to, recommends_for_position, supervised_by, mentored_by, trained_by, coached_by, evaluated_by
+
+IMPORTANT for recommendation letters:
+- If someone writes a recommendation letter, create TWO relations:
+  1. "writes_recommendation_for" from writer to applicant
+  2. "recommends_to" from writer to the target organization (if mentioned)
+- Also capture supervisor/mentor relationships mentioned in letters
 
 Important:
 - Use exact names from text (but normalize applicant name variations)
 - Include snippet_ids where each entity/relation appears
-- Focus on the applicant and their achievements"""
+- Focus on the applicant and their achievements
+- Pay special attention to recommendation letter relationships"""
 
         try:
             result = await call_openai(

@@ -119,36 +119,119 @@ Your task is to analyze a document and extract THREE types of information:
 
 1. **Evidence Snippets**: Text excerpts that can support an EB-1A petition
    - Each snippet MUST have a SUBJECT: the person whose achievement/credential this describes
-   - Determine if it's the applicant's achievement or someone else's (e.g., recommender's background)
+   - CRITICAL: Consider DOCUMENT CONTEXT when determining is_applicant_achievement:
+     * If document is ABOUT the applicant (news article, media coverage, recommendation letter praising them),
+       then text describing the applicant's achievements IS is_applicant_achievement=true
+     * Recommender's OWN background ("I have 30 years at Stanford") = is_applicant_achievement=false
+     * But recommender CONFIRMING applicant's work ("The applicant did X") = is_applicant_achievement=true
 
 2. **Named Entities**: People, organizations, awards, publications, positions
    - Include their IDENTITY (role/title)
    - Include their RELATIONSHIP to the applicant
+   - For recommendation letters, note who the recommender is
 
 3. **Relationships**: How entities relate to each other
    - Subject → Action → Object format
    - Include context
+   - If in a recommendation/evaluation, note who did the evaluation
 
 CRITICAL RULES:
 - The applicant for this petition is: {applicant_name}
-- For EACH snippet, you MUST identify whose achievement this is
-- Recommender credentials/backgrounds are NOT applicant achievements
-- Be precise with subject attribution - this determines what evidence is usable
+- NAME ALIASES: The applicant may appear under DIFFERENT NAMES in documents:
+  * English name vs Chinese name (e.g., "Gabriella Qu" = "Yaruo Qu")
+  * First name only, last name only, or nickname
+  * If document is ABOUT someone with SAME SURNAME as applicant and matching context, treat as applicant
+  * Example: "Gabriella Qu founded Venus Weightlifting" in a media article = Yaruo Qu's achievement
+- DOCUMENT CONTEXT MATTERS: A media article about the applicant = applicant's achievement evidence
+- A recommendation letter confirming "applicant did X" = applicant achievement (recommender confirms it)
+- Recommender's OWN credentials ("I have PhD from Harvard") = NOT applicant achievement
+- Extract ALL supporting context, including:
+  * Membership criteria and evaluation process (proves selectivity)
+  * Media outlet credentials (proves "major" publication)
+  * Organization reputation (proves "distinguished" organization)
+- Do NOT skip low-confidence items - include them with appropriate confidence scores
 
 Evidence types for EB-1A:
 - award: Prizes or awards for excellence
 - membership: Membership in associations requiring outstanding achievements
-- publication: Published material about the person
+- membership_criteria: Criteria showing selective membership requirements
+- membership_evaluation: Formal evaluation/assessment leading to membership
+- peer_assessment: Expert peer evaluation of the applicant's work
+- publication: Published material about the person (scholarly)
+- media_coverage: News articles or media mentions about the applicant
 - judging: Participation as a judge
 - contribution: Original contributions of major significance
 - article: Authorship of scholarly articles
 - exhibition: Display of work at exhibitions
 - leadership: Leading or critical role for organizations
-- other: Other relevant evidence"""
+- recommendation: Recommendation or endorsement from recognized expert
+- peer_achievement: Achievements of OTHER members/peers (proves selectivity of group)
+- source_credibility: Credentials of media/organization (proves "major" or "distinguished")
+- quantitative_impact: Metrics, numbers, statistics showing impact
+- other: Other relevant evidence
+
+CRITICAL - Evidence Purpose (WHY this evidence matters):
+- direct_proof: Directly proves applicant's achievement (e.g., "Applicant founded X")
+- selectivity_proof: Proves selectivity/prestige of association/award (e.g., "Other members include Olympic champions")
+- credibility_proof: Proves credibility of source (e.g., "Newspaper has circulation of 40,000")
+- impact_proof: Proves quantitative impact (e.g., "100,000 page views", "trained 200,000 coaches")
+
+===== SIGNIFICANCE LAYER EXTRACTION (CRITICAL - Most Commonly Missed!) =====
+
+The SIGNIFICANCE layer answers: "WHY does this evidence matter?" - This is what separates approved petitions from RFEs!
+
+MUST EXTRACT these patterns:
+
+1. QUANTITATIVE DATA (impact_proof):
+   - Numbers with units: "40,000 copies", "100,000 views", "200,000 coaches", "5,000,000 participants"
+   - Percentages: "top 5%", "only 10% accepted"
+   - Currency: "$1M revenue", "¥500万"
+   - Counts: "300 athletes from 10 countries", "14 branch stores"
+   Pattern: Look for numbers followed by units (copies, views, users, coaches, athletes, participants, stores, countries)
+
+2. ORGANIZATION REPUTATION (credibility_proof):
+   - Credit ratings: "AAA credit rating", "信用等级AAA"
+   - Official status: "official partner of", "national association", "government-affiliated"
+   - Awards to organization: "won Adam Malik Award", "received IMPA award"
+   - Rankings: "leading", "top", "largest", "most influential"
+   Pattern: Look for ratings, "official", "national", "leading", organization awards
+
+3. PEER ACHIEVEMENTS (selectivity_proof):
+   - Other members' credentials: "members include Olympic champion", "other recipients include Nobel laureate"
+   - Competition level: "competed against 500 applicants", "selected from 1000 candidates"
+   - Evaluator credentials: "reviewed by Vice President", "evaluated by industry experts"
+   Pattern: Look for "members include", "other recipients", "reviewed by", prominent titles
+
+4. MEDIA CREDENTIALS (credibility_proof):
+   - Circulation data: "circulation of 40,000", "200,000 weekly copies"
+   - Media awards: "won journalism award", "received press award"
+   - Media ownership: "owned by Shanghai United Media Group", "subsidiary of"
+   - Media reputation: "leading newspaper", "Indonesia's largest English daily"
+   Pattern: Look for circulation numbers, media awards, ownership info, "leading"/"largest"
+
+IMPORTANT: Extract BOTH direct evidence AND supporting evidence that proves WHY the direct evidence matters!
+DO NOT SKIP significance evidence - it is what proves "major", "distinguished", "outstanding" for USCIS!"""
 
 UNIFIED_EXTRACTION_USER_PROMPT = """Analyze this document (Exhibit {exhibit_id}) and extract structured information.
 
 The applicant's name is: {applicant_name}
+
+## Step 1: Identify Document Context and Applicant Names
+First, determine: What is the PRIMARY PURPOSE of this document?
+- Recommendation letter FOR {applicant_name}? (recommender praises applicant)
+- Media coverage / news article ABOUT {applicant_name}?
+- Official certification/membership document FOR {applicant_name}?
+- Resume or CV of {applicant_name}?
+- Third-party background information?
+
+IMPORTANT - Check for NAME ALIASES:
+- The applicant "{applicant_name}" may appear under DIFFERENT NAMES:
+  * English name (e.g., "Gabriella", "Michael") vs Chinese name
+  * Abbreviated name or nickname
+  * Same surname with similar context = likely the applicant
+- If document is about someone with SAME SURNAME as "{applicant_name}" and the document is exhibit evidence for this applicant, treat that person AS the applicant.
+
+This context determines how to classify is_applicant_achievement.
 
 ## Document Text Blocks
 Each block has format: [block_id] text content
@@ -159,18 +242,80 @@ Each block has format: [block_id] text content
 
 Extract the following in a single JSON response:
 
-1. **document_summary**: Brief summary of what this document is
+1. **document_summary**: Identify document type and primary subject
 2. **snippets**: Evidence text with SUBJECT attribution
 3. **entities**: All named entities with identity and relationship to applicant
 4. **relations**: Relationships between entities
 
 For each SNIPPET, you MUST determine:
-- subject: Whose achievement/credential is this? (exact name)
-- subject_role: Is this person the "applicant", "recommender", "colleague", "mentor", or "other"?
-- is_applicant_achievement: true ONLY if this describes the applicant's own achievement
+- subject: Whose achievement/credential is this? (exact name or "{applicant_name}")
+- subject_role: "applicant", "recommender", "evaluator", "colleague", "mentor", "peer", "organization", or "other"
+- recommender_name: If this is from a recommendation/evaluation, who is the recommender?
+- is_applicant_achievement:
+  * TRUE if: subject is applicant, OR document is ABOUT applicant and confirms their achievement
+  * TRUE ALSO if: evidence SUPPORTS applicant's case (selectivity proof, credibility proof, impact proof)
+  * FALSE only if: someone else's OWN background completely unrelated to applicant's case
+- evidence_type: Choose MOST SPECIFIC type (see system prompt for full list)
+- evidence_purpose: WHY does this evidence matter?
+  * "direct_proof" - Directly proves applicant's achievement
+  * "selectivity_proof" - Proves selectivity/prestige (other members' achievements, strict criteria)
+  * "credibility_proof" - Proves source credibility (media circulation, organization reputation)
+  * "impact_proof" - Proves quantitative impact (page views, user counts, revenue)
 
-IMPORTANT: Many recommendation letters include the recommender's credentials. These are NOT applicant achievements!
-Example: "Professor John Smith, who has 30 years of experience at Stanford..." → subject="Professor John Smith", is_applicant_achievement=false"""
+CRITICAL EXAMPLES:
+
+1. DIRECT PROOF - Recommendation letter says "The applicant revolutionized X":
+   → subject="{applicant_name}", is_applicant_achievement=TRUE, evidence_purpose="direct_proof"
+
+2. NOT APPLICANT - Recommender says "I (Dr. Smith) have 20 years at Stanford":
+   → subject="Dr. Smith", is_applicant_achievement=FALSE (recommender's own background)
+
+3. DIRECT PROOF - News article says "{applicant_name} founded Venus Club":
+   → subject="{applicant_name}", is_applicant_achievement=TRUE, evidence_type="media_coverage", evidence_purpose="direct_proof"
+
+4. SELECTIVITY PROOF - Membership document says "Other members include Olympic gold medalist Ping Zhang":
+   → subject="Ping Zhang", is_applicant_achievement=TRUE, evidence_type="peer_achievement", evidence_purpose="selectivity_proof"
+   → This PROVES the association is selective, which supports applicant's membership!
+
+5. SELECTIVITY PROOF - "Membership requires 10 years experience and outstanding achievements":
+   → subject="the association", is_applicant_achievement=TRUE, evidence_type="membership_criteria", evidence_purpose="selectivity_proof"
+
+6. CREDIBILITY PROOF - "The Jakarta Post has circulation of 40,000 and won Adam Malik Award":
+   → subject="The Jakarta Post", is_applicant_achievement=TRUE, evidence_type="source_credibility", evidence_purpose="credibility_proof"
+   → This PROVES the publication is "major media", which supports applicant's media coverage!
+
+7. IMPACT PROOF - "The courses received 100,000 page views and trained 200,000 coaches":
+   → subject="{applicant_name}", is_applicant_achievement=TRUE, evidence_type="quantitative_impact", evidence_purpose="impact_proof"
+
+8. CREDIBILITY PROOF - "Company has AAA credit rating":
+   → subject="the company", is_applicant_achievement=TRUE, evidence_type="source_credibility", evidence_purpose="credibility_proof"
+   → This PROVES the organization is "distinguished", which supports applicant's leading role!
+
+9. IMPACT PROOF - "5,000,000 people participated in the event":
+   → subject="the event", is_applicant_achievement=TRUE, evidence_type="quantitative_impact", evidence_purpose="impact_proof"
+   → This PROVES the scale of applicant's leadership impact!
+
+10. IMPACT PROOF - "300 athletes from 10 countries competed":
+    → subject="the competition", is_applicant_achievement=TRUE, evidence_type="quantitative_impact", evidence_purpose="impact_proof"
+    → This PROVES international reach and significance!
+
+11. CREDIBILITY PROOF - "weekly circulation of 200,000 copies":
+    → subject="the publication", is_applicant_achievement=TRUE, evidence_type="source_credibility", evidence_purpose="credibility_proof"
+
+12. SELECTIVITY PROOF - "membership requires 10 years experience and review by board of directors":
+    → subject="the association", is_applicant_achievement=TRUE, evidence_type="membership_criteria", evidence_purpose="selectivity_proof"
+
+CRITICAL EXTRACTION PATTERNS for SIGNIFICANCE layer:
+- Numbers + units: "40,000 copies", "100,000 views", "5M participants", "14 stores", "10 countries"
+- Ratings: "AAA", "credit rating", "信用等级"
+- Awards to organizations: "won ... Award", "received ... prize"
+- Peer credentials: "members include", "other recipients", "Olympic", "champion", "gold medal"
+- Media rankings: "leading", "top", "largest", "most", "first"
+
+CRITICAL: Extract BOTH direct evidence AND supporting evidence!
+- Direct evidence: What the applicant did
+- Supporting evidence: Why it matters (selectivity, credibility, impact)
+Do NOT skip supporting evidence - it is ESSENTIAL for EB-1A petitions!"""
 
 
 UNIFIED_EXTRACTION_SCHEMA = {
@@ -201,19 +346,51 @@ UNIFIED_EXTRACTION_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["block_id", "text", "subject", "subject_role", "is_applicant_achievement", "evidence_type", "confidence", "reasoning"],
+                "required": ["block_id", "text", "subject", "subject_role", "recommender_name", "is_applicant_achievement", "evidence_type", "evidence_purpose", "evidence_layer", "confidence", "reasoning"],
                 "properties": {
                     "block_id": {"type": "string"},
                     "text": {"type": "string"},
                     "subject": {"type": "string", "description": "Person whose achievement this is"},
                     "subject_role": {
                         "type": "string",
-                        "enum": ["applicant", "recommender", "colleague", "mentor", "other"]
+                        "enum": ["applicant", "recommender", "evaluator", "colleague", "mentor", "peer", "organization", "other"]
+                    },
+                    "recommender_name": {
+                        "type": ["string", "null"],
+                        "description": "If from recommendation/evaluation, who is the recommender/evaluator? Use null if not applicable."
                     },
                     "is_applicant_achievement": {"type": "boolean"},
                     "evidence_type": {
                         "type": "string",
-                        "enum": ["award", "membership", "publication", "judging", "contribution", "article", "exhibition", "leadership", "other"]
+                        "enum": [
+                            "award",
+                            "membership",
+                            "membership_criteria",
+                            "membership_evaluation",
+                            "peer_assessment",
+                            "peer_achievement",
+                            "publication",
+                            "media_coverage",
+                            "source_credibility",
+                            "quantitative_impact",
+                            "judging",
+                            "contribution",
+                            "article",
+                            "exhibition",
+                            "leadership",
+                            "recommendation",
+                            "other"
+                        ]
+                    },
+                    "evidence_purpose": {
+                        "type": "string",
+                        "enum": ["direct_proof", "selectivity_proof", "credibility_proof", "impact_proof"],
+                        "description": "WHY this evidence matters: direct_proof (applicant achievement), selectivity_proof (proves selectivity), credibility_proof (proves source credibility), impact_proof (proves quantitative impact)"
+                    },
+                    "evidence_layer": {
+                        "type": "string",
+                        "enum": ["claim", "proof", "significance", "context"],
+                        "description": "Evidence pyramid layer: claim (what applicant did), proof (how to prove), significance (why it matters - MOST IMPORTANT), context (background)"
                     },
                     "confidence": {"type": "number"},
                     "reasoning": {"type": "string"}
@@ -284,6 +461,31 @@ def generate_entity_id(exhibit_id: str, index: int) -> str:
 def generate_relation_id(exhibit_id: str, index: int) -> str:
     """生成唯一 relation ID"""
     return f"rel_{exhibit_id}_{index}"
+
+
+def _infer_evidence_layer(item: Dict) -> str:
+    """根据 evidence_purpose 和 evidence_type 推断证据层级"""
+    purpose = item.get("evidence_purpose", "direct_proof")
+    etype = item.get("evidence_type", "other")
+
+    # significance 层：selectivity/credibility/impact proof
+    if purpose in ["selectivity_proof", "credibility_proof", "impact_proof"]:
+        return "significance"
+
+    # significance 层的证据类型
+    if etype in ["peer_achievement", "source_credibility", "quantitative_impact", "membership_criteria"]:
+        return "significance"
+
+    # proof 层：证明申请人的声明
+    if etype in ["award", "membership_evaluation", "peer_assessment", "recommendation"]:
+        return "proof"
+
+    # context 层：背景信息
+    if etype in ["other"]:
+        return "context"
+
+    # 默认 claim 层：直接声明
+    return "claim"
 
 
 def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
@@ -395,8 +597,8 @@ async def extract_exhibit_unified(
             model=model,
             system_prompt=system_prompt,
             json_schema=UNIFIED_EXTRACTION_SCHEMA,
-            temperature=0.1,
-            max_tokens=8000
+            temperature=0.2,   # 提高到 0.2：允许更多变化，更好地识别上下文
+            max_tokens=10000   # 增加到 10000：允许更详细的输出
         )
     except Exception as e:
         print(f"[UnifiedExtractor] LLM error for {exhibit_id}: {e}")
@@ -413,9 +615,26 @@ async def extract_exhibit_unified(
     raw_relations = result.get("relations", [])
 
     # 6. 处理 snippets - 添加 ID 和 bbox
+    # 使用分层置信度阈值：支持性内容（如 membership_criteria）用更低阈值
+    CONFIDENCE_THRESHOLDS = {
+        "award": 0.5,
+        "membership": 0.4,
+        "membership_criteria": 0.3,      # 低阈值：标准描述都重要
+        "membership_evaluation": 0.3,    # 低阈值：评估过程都重要
+        "peer_assessment": 0.3,          # 低阈值：同行评价都有意义
+        "media_coverage": 0.4,
+        "recommendation": 0.4,
+        "contribution": 0.4,
+        "leadership": 0.4,
+    }
+    DEFAULT_THRESHOLD = 0.35  # 默认阈值从 0.5 降低到 0.35
+
     processed_snippets = []
     for item in raw_snippets:
-        if item.get("confidence", 0) < 0.5:
+        evidence_type = item.get("evidence_type", "other")
+        threshold = CONFIDENCE_THRESHOLDS.get(evidence_type, DEFAULT_THRESHOLD)
+
+        if item.get("confidence", 0) < threshold:
             continue
 
         composite_id = item.get("block_id", "")
@@ -442,10 +661,13 @@ async def extract_exhibit_unified(
             # Subject Attribution
             "subject": item.get("subject", applicant_name),
             "subject_role": item.get("subject_role", "applicant"),
+            "recommender_name": item.get("recommender_name"),  # 新增：推荐人名称
             "is_applicant_achievement": item.get("is_applicant_achievement", True),
 
             # Evidence Classification
             "evidence_type": item.get("evidence_type", "other"),
+            "evidence_purpose": item.get("evidence_purpose", "direct_proof"),  # 证据目的
+            "evidence_layer": item.get("evidence_layer", _infer_evidence_layer(item)),  # 证据层级
             "confidence": item.get("confidence", 0.5),
             "reasoning": item.get("reasoning", ""),
 
