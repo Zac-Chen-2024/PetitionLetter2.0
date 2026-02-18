@@ -358,13 +358,31 @@ class ArgumentComposer:
         return "Media Coverage"
 
     def _extract_organization_name(self, text: str, subject: str, exhibit_id: str = "") -> Optional[str]:
-        """提取组织名称 - 使用配置映射 + 实体验证"""
+        """提取组织名称 - 使用配置映射 + 实体验证
+
+        对于 Leading Role，需要提取申请人实际领导的组织，而不是文本中任意提到的组织。
+        """
         text_lower = text.lower()
         subject_lower = subject.lower() if subject else ""
 
         # 排除申请人名字作为组织名
         if subject_lower in self.applicant_variants:
             subject = None
+
+        # 关键词检查：只有当文本表明申请人领导/创建某组织时才提取
+        leadership_keywords = ["founded", "founder", "established", "created", "co-founded",
+                               "legal representative", "ceo", "director", "president", "chairman",
+                               "创始人", "法定代表人", "董事长", "总经理"]
+        has_leadership_indicator = any(kw in text_lower for kw in leadership_keywords)
+
+        # 排除邀请性质的文本 - 这不是 leadership 证据
+        invitation_keywords = ["invite", "invitation", "invited", "as a guest", "as an industry",
+                              "sharing guest", "look forward to", "邀请"]
+        is_invitation = any(kw in text_lower for kw in invitation_keywords)
+
+        if is_invitation and not has_leadership_indicator:
+            # 这是邀请信，不是 leadership 证据
+            return None
 
         # 优先使用 Exhibit → Organization 映射 (来自 LLM 分析)
         if exhibit_id in self.exhibit_to_organization:

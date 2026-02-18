@@ -186,9 +186,38 @@ def _normalize_llm_response(result: Dict[str, Any], applicant_name: str) -> Dict
     规范化 LLM 响应格式 (处理 DeepSeek vs OpenAI 的差异)
 
     DeepSeek 可能返回:
+    - 包装在 'content' 键中
     - applicant_info 而不是 applicant
     - 不同的字段结构
     """
+    import re
+
+    # 处理 DeepSeek 的 'content' 包装
+    if isinstance(result, dict) and list(result.keys()) == ['content']:
+        content = result['content']
+        if isinstance(content, dict):
+            result = content
+        elif isinstance(content, str):
+            # 可能是 JSON 字符串，尝试解析
+            try:
+                # 清理可能的问题字符
+                cleaned = content.strip()
+                # 移除 markdown code blocks
+                if cleaned.startswith('```'):
+                    cleaned = re.sub(r'^```json?\s*', '', cleaned)
+                    cleaned = re.sub(r'\s*```$', '', cleaned)
+                result = json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                print(f"[EntityAnalyzer] JSON parse error: {e}")
+                # 尝试修复常见问题
+                try:
+                    # 替换无效的 Unicode 转义
+                    fixed = content.encode('utf-8', errors='replace').decode('utf-8')
+                    result = json.loads(fixed)
+                except:
+                    print(f"[EntityAnalyzer] Could not parse content, using empty result")
+                    result = {}
+
     normalized = {}
 
     # 规范化 applicant
