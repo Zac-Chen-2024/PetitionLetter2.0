@@ -82,7 +82,8 @@ class ArgumentComposer:
         self,
         snippets: List[Dict],
         applicant_name: str = "the applicant",
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        entity_validator: Optional[Any] = None
     ):
         """
         初始化
@@ -91,10 +92,12 @@ class ArgumentComposer:
             snippets: 提取的 snippets 列表
             applicant_name: 申请人姓名
             metadata: project_metadata 配置 (如果为 None 则使用空配置)
+            entity_validator: EntityValidator 实例 (可选，用于验证实体)
         """
         self.snippets = snippets
         self.applicant_name = applicant_name
         self.metadata = metadata or self._create_empty_metadata()
+        self.entity_validator = entity_validator
         self.snippets_by_standard = self._group_by_standard()
 
         # 从配置中提取映射
@@ -318,7 +321,7 @@ class ArgumentComposer:
         return "Media Coverage"
 
     def _extract_organization_name(self, text: str, subject: str, exhibit_id: str = "") -> Optional[str]:
-        """提取组织名称 - 使用配置映射"""
+        """提取组织名称 - 使用配置映射 + 实体验证"""
         text_lower = text.lower()
         subject_lower = subject.lower() if subject else ""
 
@@ -326,7 +329,7 @@ class ArgumentComposer:
         if subject_lower in self.applicant_variants:
             subject = None
 
-        # 优先使用 Exhibit → Organization 映射
+        # 优先使用 Exhibit → Organization 映射 (来自 LLM 分析)
         if exhibit_id in self.exhibit_to_organization:
             return self.exhibit_to_organization[exhibit_id]
 
@@ -335,17 +338,45 @@ class ArgumentComposer:
             if pattern in text_lower:
                 return canonical
 
-        # 从文本中尝试识别组织名称
+        # 使用 EntityValidator 验证组织名称 (Multi-Agent 方法)
+        if self.entity_validator:
+            # 从文本中尝试识别组织名称
+            org_patterns = [
+                r"([\w\s]+(?:Co\.|Company|Corp|Inc|Ltd|LLC|Pte)[\w\s]*)",
+                r"([\w\s]+(?:Club|Center|Academy|Institute|Association|Federation))",
+            ]
+            for p in org_patterns:
+                match = re.search(p, text, re.IGNORECASE)
+                if match:
+                    name = match.group(1).strip()
+                    # 过滤太短的名字
+                    if len(name) <= 5:
+                        continue
+                    # 过滤句子片段
+                    if any(word in name.lower() for word in ["hereby", "i ", "we ", "you ", "this ", "that "]):
+                        continue
+                    # 使用 EntityValidator 验证
+                    if self.entity_validator.is_valid_organization(name):
+                        return name
+
+            # 如果没有匹配到，尝试检查 subject
+            if subject and len(subject) > 5:
+                if not any(word in subject.lower() for word in ["hereby", "i ", "we ", "you "]):
+                    if self.entity_validator.is_valid_organization(subject):
+                        return subject
+
+            # 未通过验证 - 返回 None (过滤垃圾)
+            return None
+
+        # Fallback: 没有 EntityValidator 时使用原始 regex (不推荐)
         org_patterns = [
-            r"([\w\s]+)\s+(?:co\.|company|corp|inc|ltd|llc)",
-            r"([\w\s]+)\s+(?:club|center|academy|institute)",
-            r"(?:at|with|for)\s+([\w\s]+)",
+            r"([\w\s]+)\s+(?:co\.|company|corp|inc|ltd|llc|pte)",
+            r"([\w\s]+)\s+(?:club|center|academy|institute|association|federation)",
         ]
         for p in org_patterns:
             match = re.search(p, text, re.IGNORECASE)
             if match:
                 name = match.group(1).strip()
-                # 排除申请人名字
                 if len(name) > 3 and name.lower() not in self.applicant_variants:
                     return name.title()
 
@@ -557,7 +588,8 @@ class ArgumentComposer:
 def compose_project_arguments(
     project_id: str,
     applicant_name: str = "the applicant",
-    metadata: Optional[Dict] = None
+    metadata: Optional[Dict] = None,
+    use_entity_validator: bool = True
 ) -> Dict[str, Any]:
     """
     组合项目论点
@@ -566,6 +598,7 @@ def compose_project_arguments(
         project_id: 项目 ID
         applicant_name: 申请人姓名
         metadata: project_metadata 配置 (如果为 None 则从文件加载)
+        use_entity_validator: 是否使用 EntityValidator 验证实体 (推荐开启)
     """
     projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
     project_dir = projects_dir / project_id
@@ -586,8 +619,17 @@ def compose_project_arguments(
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
 
+    # 创建 EntityValidator (Multi-Agent: Entity Validation Agent)
+    entity_validator = None
+    if use_entity_validator:
+        try:
+            from .entity_validator import EntityValidator
+            entity_validator = EntityValidator(project_id)
+        except Exception as e:
+            print(f"[ArgumentComposer] Warning: Could not create EntityValidator: {e}")
+
     # 组合
-    composer = ArgumentComposer(snippets, applicant_name, metadata)
+    composer = ArgumentComposer(snippets, applicant_name, metadata, entity_validator)
 
     return {
         "composed": {k: [asdict(a) for a in v] for k, v in composer.compose_all().items()},
