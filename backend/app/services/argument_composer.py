@@ -173,8 +173,14 @@ class ArgumentComposer:
         return grouped
 
     def _map_to_standard(self, etype: str) -> Optional[str]:
-        """证据类型映射到标准"""
-        mapping = {
+        """证据类型映射到标准 - 支持自由分类的关键词匹配"""
+        if not etype:
+            return None
+
+        etype_lower = etype.lower()
+
+        # 先检查精确匹配（向后兼容）
+        exact_mapping = {
             "membership": "membership",
             "membership_criteria": "membership",
             "membership_evaluation": "membership",
@@ -189,7 +195,38 @@ class ArgumentComposer:
             "leadership": "leading_role",
             "award": "awards",
         }
-        return mapping.get(etype)
+
+        if etype_lower in exact_mapping:
+            return exact_mapping[etype_lower]
+
+        # 关键词匹配 - 处理自由分类的变体
+        # 注意：invitation 不应归入 leading_role
+        invitation_keywords = ["invitation", "invited", "speaking", "guest speaker", "keynote"]
+        if any(kw in etype_lower for kw in invitation_keywords):
+            # invitation 可以支持 original_contribution（证明方法被认可）
+            return "original_contribution"
+
+        leadership_keywords = ["leadership", "leading", "critical role", "founder", "director", "ceo", "legal representative"]
+        if any(kw in etype_lower for kw in leadership_keywords):
+            return "leading_role"
+
+        membership_keywords = ["membership", "member", "association", "selectivity", "criteria"]
+        if any(kw in etype_lower for kw in membership_keywords):
+            return "membership"
+
+        media_keywords = ["media", "publication", "article", "coverage", "press", "news", "journal"]
+        if any(kw in etype_lower for kw in media_keywords):
+            return "published_material"
+
+        contribution_keywords = ["contribution", "original", "innovation", "impact", "influence"]
+        if any(kw in etype_lower for kw in contribution_keywords):
+            return "original_contribution"
+
+        award_keywords = ["award", "prize", "honor", "recognition"]
+        if any(kw in etype_lower for kw in award_keywords):
+            return "awards"
+
+        return None
 
     def compose_all(self) -> Dict[str, List[ComposedArgument]]:
         """组合所有标准的论点"""

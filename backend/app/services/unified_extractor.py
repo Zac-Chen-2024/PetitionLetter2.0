@@ -151,7 +151,7 @@ CRITICAL RULES:
   * Organization reputation (proves "distinguished" organization)
 - Do NOT skip low-confidence items - include them with appropriate confidence scores
 
-Evidence types for EB-1A:
+Evidence types for EB-1A (use suggested labels for consistency, or create precise labels when needed):
 - award: Prizes or awards for excellence
 - membership: Membership in associations requiring outstanding achievements
 - membership_criteria: Criteria showing selective membership requirements
@@ -163,12 +163,14 @@ Evidence types for EB-1A:
 - contribution: Original contributions of major significance
 - article: Authorship of scholarly articles
 - exhibition: Display of work at exhibitions
-- leadership: Leading or critical role for organizations
+- invitation: Invited to speak, participate, or share expertise at events (NOT leadership!)
+- leadership: Leading or critical role IN an organization (founder, CEO, legal representative)
+  IMPORTANT: Being invited to speak ≠ leadership. Use "invitation" for speaking engagements.
 - recommendation: Recommendation or endorsement from recognized expert
 - peer_achievement: Achievements of OTHER members/peers (proves selectivity of group)
 - source_credibility: Credentials of media/organization (proves "major" or "distinguished")
 - quantitative_impact: Metrics, numbers, statistics showing impact
-- other: Other relevant evidence
+- other: Other relevant evidence (describe precisely)
 
 CRITICAL - Evidence Purpose (WHY this evidence matters):
 - direct_proof: Directly proves applicant's achievement (e.g., "Applicant founded X")
