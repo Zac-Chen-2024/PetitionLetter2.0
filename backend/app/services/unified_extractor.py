@@ -596,7 +596,7 @@ async def extract_exhibit_unified(
             system_prompt=system_prompt,
             json_schema=UNIFIED_EXTRACTION_SCHEMA,
             temperature=0.2,   # 提高到 0.2：允许更多变化，更好地识别上下文
-            max_tokens=10000   # 增加到 10000：允许更详细的输出
+            max_tokens=8000   # DeepSeek 限制 8192，使用 8000 留余量
         )
     except Exception as e:
         print(f"[UnifiedExtractor] LLM error for {exhibit_id}: {e}")
@@ -632,15 +632,44 @@ async def extract_exhibit_unified(
         evidence_type = item.get("evidence_type", "other")
         threshold = CONFIDENCE_THRESHOLDS.get(evidence_type, DEFAULT_THRESHOLD)
 
-        if item.get("confidence", 0) < threshold:
+        # 处理 confidence - DeepSeek 可能返回 None 或非数字
+        confidence = item.get("confidence")
+        if confidence is None or not isinstance(confidence, (int, float)):
+            confidence = 0.5  # 默认置信度
+
+        if confidence < threshold:
             continue
 
         composite_id = item.get("block_id", "")
+
+        # 处理合并的 block_id (如 "p2_p2_b1-p2_p2_b2")
+        # 取第一个 block_id
+        if composite_id and "-" in composite_id and "_" in composite_id:
+            composite_id = composite_id.split("-")[0]
+
         page_block = block_map.get(composite_id)
 
+        # 如果找不到，尝试模糊匹配
+        if not page_block and composite_id:
+            # 尝试去掉第一个 p{n}_ 前缀
+            for key in block_map.keys():
+                if key.endswith(composite_id.split("_")[-1]) or composite_id in key:
+                    page_block = block_map[key]
+                    composite_id = key
+                    break
+
+        # 如果 block_id 为空或找不到，创建一个占位 snippet（保留内容）
         if not page_block:
-            print(f"[Warning] Block '{composite_id}' not found in {exhibit_id}, skipping")
-            continue
+            if composite_id:
+                print(f"[Warning] Block '{composite_id}' not found in {exhibit_id}, using fallback")
+            # 使用第一个 block 作为 fallback
+            first_block_key = list(block_map.keys())[0] if block_map else None
+            if first_block_key:
+                page_block = block_map[first_block_key]
+                composite_id = first_block_key
+            else:
+                print(f"[Warning] No blocks in {exhibit_id}, skipping snippet")
+                continue
 
         page_num, block = page_block
         original_block_id = block.get("block_id", "")
