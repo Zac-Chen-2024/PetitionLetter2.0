@@ -137,29 +137,110 @@ ENTITY_ANALYSIS_USER_PROMPT = """Analyze the following extracted data from an EB
 
 ## INSTRUCTIONS
 
-Based on this data, generate a configuration that:
+Based on this data, generate a JSON configuration. You MUST output valid JSON in EXACTLY this format:
 
-1. APPLICANT: Identify the formal name and all variants (nicknames, titles like "Ms.", "Dr.", "Coach", etc.)
+```json
+{{
+  "applicant": {{
+    "formal_name": "Full Legal Name",
+    "name_variants": ["Nickname1", "Ms. Name", "Coach Name"]
+  }},
+  "exhibit_mappings": {{
+    "media": [
+      {{"exhibit_id": "D1", "name": "Media Outlet Name"}},
+      {{"exhibit_id": "D2", "name": "Another Media"}}
+    ],
+    "associations": [
+      {{"exhibit_id": "C1", "name": "Association Name"}}
+    ],
+    "organizations": [
+      {{"exhibit_id": "F1", "name": "Organization Name"}}
+    ]
+  }},
+  "entity_merges": [
+    {{"canonical": "Official Name", "variants": ["Variant1", "Variant2"]}}
+  ],
+  "disqualified_memberships": ["NSCA", "USA Weightlifting"],
+  "key_achievements": {{
+    "original_contribution": "Name of the main contribution",
+    "awards": ["Award 1", "Award 2"]
+  }}
+}}
+```
 
+RULES:
+1. APPLICANT: Identify the formal name and all variants (nicknames, titles)
 2. EXHIBIT MAPPINGS:
-   - For D-series exhibits (Published Material): Map each exhibit ID to the media outlet name
-   - For C-series exhibits (Membership): Map each exhibit ID to the association name
-   - For F-series exhibits (Leading Role): Map each exhibit ID to the organization name
-   - Group consecutive exhibits that belong to the same entity (e.g., D1-D4 might all be from "The Jakarta Post")
+   - D-series → media outlet names
+   - C-series → association names
+   - F-series → organization names
+3. ENTITY MERGES: Same entity with different names
+4. DISQUALIFIED MEMBERSHIPS: Professional certifications (NOT selective associations)
+5. KEY ACHIEVEMENTS: Original contribution and major awards
 
-3. ENTITY MERGES: Identify entities that are the same but have different names:
-   - Example: "Venus Weightlifting Club" and "Shanghai Yiqing Fitness" might be the same organization
-   - Use the formal/official name as canonical
+Output ONLY the JSON, no other text."""
 
-4. DISQUALIFIED MEMBERSHIPS: List professional certifications that are NOT selective associations:
-   - Examples: NSCA, USA Weightlifting, ACE certifications
-   - These should be filtered out from the Membership criterion
 
-5. KEY ACHIEVEMENTS: Identify:
-   - The main original contribution (e.g., training system, methodology, invention)
-   - Major awards received
+def _normalize_llm_response(result: Dict[str, Any], applicant_name: str) -> Dict[str, Any]:
+    """
+    规范化 LLM 响应格式 (处理 DeepSeek vs OpenAI 的差异)
 
-Output as JSON matching the schema."""
+    DeepSeek 可能返回:
+    - applicant_info 而不是 applicant
+    - 不同的字段结构
+    """
+    normalized = {}
+
+    # 规范化 applicant
+    if "applicant" in result:
+        normalized["applicant"] = result["applicant"]
+    elif "applicant_info" in result:
+        normalized["applicant"] = result["applicant_info"]
+    else:
+        normalized["applicant"] = {
+            "formal_name": applicant_name,
+            "name_variants": [applicant_name.lower()]
+        }
+
+    # 规范化 exhibit_mappings
+    if "exhibit_mappings" in result:
+        normalized["exhibit_mappings"] = result["exhibit_mappings"]
+    else:
+        normalized["exhibit_mappings"] = {
+            "media": [],
+            "associations": [],
+            "organizations": []
+        }
+
+    # 规范化 entity_merges
+    normalized["entity_merges"] = result.get("entity_merges", [])
+
+    # 规范化 disqualified_memberships
+    normalized["disqualified_memberships"] = result.get("disqualified_memberships", [])
+
+    # 规范化 key_achievements
+    if "key_achievements" in result:
+        ka = result["key_achievements"]
+        if isinstance(ka, dict):
+            normalized["key_achievements"] = ka
+        elif isinstance(ka, list):
+            # DeepSeek 可能返回数组
+            normalized["key_achievements"] = {
+                "original_contribution": ka[0] if ka else "",
+                "awards": ka[1:] if len(ka) > 1 else []
+            }
+        else:
+            normalized["key_achievements"] = {
+                "original_contribution": str(ka),
+                "awards": []
+            }
+    else:
+        normalized["key_achievements"] = {
+            "original_contribution": "",
+            "awards": []
+        }
+
+    return normalized
 
 
 def _convert_arrays_to_dicts(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -262,9 +343,14 @@ async def analyze_project_entities(
             temperature=0.1,
             max_tokens=4000
         )
+        # Debug: 打印原始响应
+        print(f"[EntityAnalyzer] Raw LLM response keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
     except Exception as e:
         print(f"[EntityAnalyzer] LLM error: {e}")
         return _create_empty_metadata(applicant_name)
+
+    # 规范化响应格式 (处理 DeepSeek vs OpenAI 的差异)
+    result = _normalize_llm_response(result, applicant_name)
 
     # 后处理: 将数组格式转换为字典格式 (兼容 argument_composer)
     result = _convert_arrays_to_dicts(result)
