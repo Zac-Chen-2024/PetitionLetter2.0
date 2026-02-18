@@ -26,6 +26,10 @@ from ..services.argument_composer import (
     compose_project_arguments,
     ArgumentComposer
 )
+from ..services.entity_analyzer import (
+    analyze_project_entities,
+    load_project_metadata
+)
 from dataclasses import asdict
 import json
 from datetime import datetime
@@ -351,7 +355,12 @@ async def run_relationship_analysis(project_id: str, force: bool = False):
 # ============================================
 
 @router.get("/{project_id}/composed")
-async def get_composed_arguments(project_id: str, applicant_name: str = "Ms. Qu"):
+async def get_composed_arguments(
+    project_id: str,
+    applicant_name: str = "Ms. Qu",
+    provider: str = "deepseek",
+    force_analyze: bool = False
+):
     """
     获取律师风格组合论点
 
@@ -363,9 +372,26 @@ async def get_composed_arguments(project_id: str, applicant_name: str = "Ms. Qu"
     - Awards: 合并成整体
 
     每个论点包含: Claim + Proof + Significance + Context + Conclusion
+
+    **泛化改进**: 自动调用 LLM 分析实体关系，生成 project_metadata.json
+
+    Args:
+        project_id: 项目 ID
+        applicant_name: 申请人姓名
+        provider: LLM 提供商 (deepseek/openai)
+        force_analyze: 是否强制重新分析实体
     """
     try:
-        result = compose_project_arguments(project_id, applicant_name)
+        # Step 1: 分析实体关系（如果没有 metadata 或强制重新分析）
+        metadata = await analyze_project_entities(
+            project_id=project_id,
+            applicant_name=applicant_name,
+            provider=provider,
+            force=force_analyze
+        )
+
+        # Step 2: 使用分析结果组合论点
+        result = compose_project_arguments(project_id, applicant_name, metadata)
 
         # 转换成前端友好的格式 (flat list with standard_key)
         arguments = []
@@ -402,13 +428,23 @@ async def get_composed_arguments(project_id: str, applicant_name: str = "Ms. Qu"
                     "completeness": arg.get("completeness", {})
                 })
 
+        # 使用 metadata 中的正式名称
+        formal_name = metadata.get("applicant", {}).get("formal_name", applicant_name)
+
         return {
             "project_id": project_id,
             "arguments": arguments,
-            "main_subject": applicant_name,
+            "main_subject": formal_name,
             "generated_at": datetime.now().isoformat(),
             "stats": result.get("statistics", {}),
-            "lawyer_output": result.get("lawyer_output", "")
+            "lawyer_output": result.get("lawyer_output", ""),
+            # 新增：实体分析信息
+            "entity_analysis": {
+                "provider": metadata.get("_metadata", {}).get("provider", "unknown"),
+                "entity_count": metadata.get("_metadata", {}).get("entity_count", 0),
+                "exhibit_mappings": metadata.get("exhibit_mappings", {}),
+                "key_achievements": metadata.get("key_achievements", {})
+            }
         }
 
     except Exception as e:

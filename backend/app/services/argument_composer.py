@@ -1,5 +1,5 @@
 """
-Argument Composer - 律师风格论点组合器
+Argument Composer - 律师风格论点组合器 (泛化版)
 
 将碎片化的 snippets 组合成结构化的律师风格论点：
 - Membership: 按协会分组
@@ -9,6 +9,8 @@ Argument Composer - 律师风格论点组合器
 - Awards: 按奖项分组
 
 每个论点包含: Claim + Proof + Significance + Context + Conclusion
+
+**泛化改进**: 使用 project_metadata.json 配置替代硬编码映射
 """
 
 import json
@@ -37,73 +39,15 @@ STANDARD_FORMAL_NAMES = {
     "awards": "Nationally/Internationally Recognized Awards",
 }
 
-# ============================================
-# P0: 媒体名称映射 (Exhibit → Media Name)
-# ============================================
-EXHIBIT_TO_MEDIA = {
-    # The Jakarta Post (D1-D4)
-    "D1": "The Jakarta Post",
-    "D2": "The Jakarta Post",
-    "D3": "The Jakarta Post",
-    "D4": "The Jakarta Post",
-    # China Sports Daily (D5-D8)
-    "D5": "China Sports Daily",
-    "D6": "China Sports Daily",
-    "D7": "China Sports Daily",
-    "D8": "China Sports Daily",
-    # Sixth Tone (D9-D13)
-    "D9": "Sixth Tone",
-    "D10": "Sixth Tone",
-    "D11": "Sixth Tone",
-    "D12": "Sixth Tone",
-    "D13": "Sixth Tone",
-}
-
-# ============================================
-# P1: Membership 资格过滤规则
-# ============================================
-# Exhibit → 协会映射 (C 系列都是 SFBA 相关)
-EXHIBIT_TO_ASSOCIATION = {
-    "C1": "Shanghai Fitness Bodybuilding Association",
-    "C2": "Shanghai Fitness Bodybuilding Association",
-    "C3": "Shanghai Fitness Bodybuilding Association",
-    "C4": "Shanghai Fitness Bodybuilding Association",
-    "C5": "Shanghai Fitness Bodybuilding Association",
-    "C6": "Shanghai Fitness Bodybuilding Association",
-    "C7": "Shanghai Fitness Bodybuilding Association",
-}
-
-# 这些协会只是普通会员资格，不满足 "outstanding achievements" 要求
-DISQUALIFIED_MEMBERSHIPS = {
+# 通用的不合格会员组织 (作为 fallback)
+DEFAULT_DISQUALIFIED_MEMBERSHIPS = {
     "usa weightlifting",
     "nsca",
     "national strength and conditioning association",
-}
-
-# 合格的协会（有选择性要求）
-QUALIFIED_MEMBERSHIPS = {
-    "shanghai fitness bodybuilding association": "Shanghai Fitness Bodybuilding Association",
-    "china weightlifting association": "China Weightlifting Association",
-}
-
-# ============================================
-# P2: Leading Role 组织修正规则
-# ============================================
-# 申请人名字变体（不应作为组织名）
-APPLICANT_NAME_VARIANTS = {
-    "yaruo qu", "ms. qu", "gaby", "gabriella", "coach gaby", "ms. yaruo qu",
-}
-
-# 组织合并规则 (源 → 目标)
-ORGANIZATION_MERGE = {
-    "venus weightlifting": "Shanghai Yiqing Fitness Management Co., Ltd.",
-    "venus weightlifting club": "Shanghai Yiqing Fitness Management Co., Ltd.",
-}
-
-# 合格的组织
-QUALIFIED_ORGANIZATIONS = {
-    "shanghai yiqing": "Shanghai Yiqing Fitness Management Co., Ltd.",
-    "ishtar health": "ISHTAR Health Pte. Ltd.",
+    "ace",
+    "american council on exercise",
+    "nasm",
+    "issa",
 }
 
 
@@ -132,12 +76,85 @@ class ComposedArgument:
 
 
 class ArgumentComposer:
-    """论点组合器"""
+    """论点组合器 (泛化版)"""
 
-    def __init__(self, snippets: List[Dict], applicant_name: str = "Ms. Qu"):
+    def __init__(
+        self,
+        snippets: List[Dict],
+        applicant_name: str = "the applicant",
+        metadata: Optional[Dict] = None
+    ):
+        """
+        初始化
+
+        Args:
+            snippets: 提取的 snippets 列表
+            applicant_name: 申请人姓名
+            metadata: project_metadata 配置 (如果为 None 则使用空配置)
+        """
         self.snippets = snippets
         self.applicant_name = applicant_name
+        self.metadata = metadata or self._create_empty_metadata()
         self.snippets_by_standard = self._group_by_standard()
+
+        # 从配置中提取映射
+        self._init_mappings()
+
+    def _create_empty_metadata(self) -> Dict:
+        """创建空配置"""
+        return {
+            "applicant": {
+                "formal_name": self.applicant_name,
+                "name_variants": []
+            },
+            "exhibit_mappings": {
+                "media": {},
+                "associations": {},
+                "organizations": {}
+            },
+            "entity_merges": [],
+            "disqualified_memberships": [],
+            "key_achievements": {
+                "original_contribution": "",
+                "awards": []
+            }
+        }
+
+    def _init_mappings(self):
+        """从配置初始化映射"""
+        exhibit_mappings = self.metadata.get("exhibit_mappings", {})
+
+        # Exhibit → 媒体名映射
+        self.exhibit_to_media = exhibit_mappings.get("media", {})
+
+        # Exhibit → 协会名映射
+        self.exhibit_to_association = exhibit_mappings.get("associations", {})
+
+        # Exhibit → 组织名映射
+        self.exhibit_to_organization = exhibit_mappings.get("organizations", {})
+
+        # 不合格会员列表 (配置 + 默认)
+        config_disqualified = set(
+            m.lower() for m in self.metadata.get("disqualified_memberships", [])
+        )
+        self.disqualified_memberships = config_disqualified | DEFAULT_DISQUALIFIED_MEMBERSHIPS
+
+        # 实体合并映射 (variant → canonical)
+        self.entity_merge_map = {}
+        for merge in self.metadata.get("entity_merges", []):
+            canonical = merge.get("canonical", "")
+            for variant in merge.get("variants", []):
+                self.entity_merge_map[variant.lower()] = canonical
+
+        # 申请人名字变体
+        self.applicant_variants = set(
+            v.lower() for v in self.metadata.get("applicant", {}).get("name_variants", [])
+        )
+
+        # 关键成就
+        key_achievements = self.metadata.get("key_achievements", {})
+        self.original_contribution_name = key_achievements.get("original_contribution", "Original Contribution")
+        self.award_names = key_achievements.get("awards", [])
 
     def _group_by_standard(self) -> Dict[str, List[Dict]]:
         """按标准分组"""
@@ -186,10 +203,12 @@ class ArgumentComposer:
 
         if standard == "original_contribution":
             # Original Contribution: 合并成一个整体论点
-            return [self._compose_single_argument(snippets, standard, "BAT Training System")]
+            group_key = self.original_contribution_name or "Original Contribution"
+            return [self._compose_single_argument(snippets, standard, group_key)]
         elif standard == "awards":
-            # Awards: 合并成一个整体论点（通常只证明一个主要奖项）
-            return [self._compose_single_argument(snippets, standard, "China Fitness Industry Achievement Award")]
+            # Awards: 合并成一个整体论点
+            group_key = self.award_names[0] if self.award_names else "Award"
+            return [self._compose_single_argument(snippets, standard, group_key)]
         else:
             # 其他标准: 按实体分组
             groups = self._group_by_entity(snippets, standard)
@@ -209,14 +228,14 @@ class ArgumentComposer:
             exhibit_id = snp.get("exhibit_id", "")
 
             if standard == "membership":
-                # 按协会分组 - P1: 使用 Exhibit 映射 + 过滤不合格会员
+                # 按协会分组 - 使用配置映射
                 group_key = self._extract_association_name(text, subject, exhibit_id)
             elif standard == "published_material":
-                # 按媒体分组 - P0: 使用 Exhibit 映射
-                group_key = self._extract_media_name(text, snp.get("exhibit_id", ""))
+                # 按媒体分组 - 使用配置映射
+                group_key = self._extract_media_name(text, exhibit_id)
             elif standard == "leading_role":
-                # 按组织分组 - P2: 排除申请人名，合并组织
-                group_key = self._extract_organization_name(text, subject)
+                # 按组织分组 - 使用配置映射
+                group_key = self._extract_organization_name(text, subject, exhibit_id)
             elif standard == "awards":
                 # 按奖项分组
                 group_key = self._extract_award_name(text)
@@ -229,87 +248,130 @@ class ArgumentComposer:
 
         return groups
 
-    def _extract_association_name(self, text: str, subject: str, exhibit_id: str = "") -> str:
-        """提取协会名称 - P1: 使用 Exhibit 映射 + 过滤不合格会员"""
+    def _extract_association_name(self, text: str, subject: str, exhibit_id: str = "") -> Optional[str]:
+        """提取协会名称 - 使用配置映射"""
         text_lower = text.lower()
 
         # 检查是否是不合格会员 (普通专业认证)
-        for disqualified in DISQUALIFIED_MEMBERSHIPS:
+        for disqualified in self.disqualified_memberships:
             if disqualified in text_lower:
                 return None  # 返回 None 表示应该被过滤
 
-        # P1 优化: 优先使用 Exhibit → 协会映射
-        if exhibit_id in EXHIBIT_TO_ASSOCIATION:
-            return EXHIBIT_TO_ASSOCIATION[exhibit_id]
+        # 优先使用 Exhibit → 协会映射
+        if exhibit_id in self.exhibit_to_association:
+            return self.exhibit_to_association[exhibit_id]
 
-        # 从文本中识别合格会员
-        for pattern, formal_name in QUALIFIED_MEMBERSHIPS.items():
+        # 检查实体合并映射
+        for pattern, canonical in self.entity_merge_map.items():
             if pattern in text_lower:
-                return formal_name
+                return canonical
 
-        # 其他协会 - 返回 None 以避免碎片化
+        # 从文本中尝试识别协会名称
+        association_patterns = [
+            r"([\w\s]+)\s+association",
+            r"([\w\s]+)\s+society",
+            r"member\s+of\s+([\w\s]+)",
+        ]
+        for p in association_patterns:
+            match = re.search(p, text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                if len(name) > 3 and name.lower() not in self.disqualified_memberships:
+                    return name.title()
+
+        # 未识别的协会 - 返回 None
         return None
 
-    def _extract_media_name(self, text: str, exhibit_id: str) -> str:
-        """提取媒体名称 - 使用 Exhibit 映射表"""
-        # P0: 只有 D 系列 Exhibit 才是 Published Material
-        # 其他系列 (C, E, F, G) 应该被过滤
+    def _extract_media_name(self, text: str, exhibit_id: str) -> Optional[str]:
+        """提取媒体名称 - 使用配置映射"""
+        # 只有 D 系列 Exhibit 才是 Published Material
         if not exhibit_id.startswith("D"):
-            return None  # 返回 None 表示不属于 Published Material
+            return None
 
-        # P0: 使用 Exhibit → Media 映射
-        if exhibit_id in EXHIBIT_TO_MEDIA:
-            return EXHIBIT_TO_MEDIA[exhibit_id]
+        # 优先使用 Exhibit → Media 映射
+        if exhibit_id in self.exhibit_to_media:
+            return self.exhibit_to_media[exhibit_id]
 
-        # 备用：从文本中识别
+        # 检查实体合并映射
+        text_lower = text.lower()
+        for pattern, canonical in self.entity_merge_map.items():
+            if pattern in text_lower:
+                return canonical
+
+        # 备用：从文本中识别常见媒体
         media_patterns = {
             "jakarta post": "The Jakarta Post",
             "china sports daily": "China Sports Daily",
             "sixth tone": "Sixth Tone",
-            "the paper": "Sixth Tone",  # The Paper 是 Sixth Tone 的中文版
-            "titan sports": "China Sports Daily",  # 体坛周报属于同一集团
+            "the paper": "The Paper",
+            "new york times": "The New York Times",
+            "washington post": "The Washington Post",
+            "bbc": "BBC",
+            "cnn": "CNN",
+            "reuters": "Reuters",
         }
         for pattern, name in media_patterns.items():
-            if pattern in text.lower():
+            if pattern in text_lower:
                 return name
 
         # D 系列但未识别的媒体
-        return "Other Media"
+        return "Media Coverage"
 
-    def _extract_organization_name(self, text: str, subject: str) -> str:
-        """提取组织名称 - P2: 排除申请人名，合并组织"""
+    def _extract_organization_name(self, text: str, subject: str, exhibit_id: str = "") -> Optional[str]:
+        """提取组织名称 - 使用配置映射"""
         text_lower = text.lower()
         subject_lower = subject.lower() if subject else ""
 
-        # P2: 排除申请人名字作为组织名
-        for name_variant in APPLICANT_NAME_VARIANTS:
-            if name_variant in subject_lower:
-                subject = None  # 清除申请人名作为 subject
-                break
+        # 排除申请人名字作为组织名
+        if subject_lower in self.applicant_variants:
+            subject = None
 
-        # P2: 检查是否需要合并
-        for pattern, target in ORGANIZATION_MERGE.items():
+        # 优先使用 Exhibit → Organization 映射
+        if exhibit_id in self.exhibit_to_organization:
+            return self.exhibit_to_organization[exhibit_id]
+
+        # 检查实体合并映射
+        for pattern, canonical in self.entity_merge_map.items():
             if pattern in text_lower:
-                return target
+                return canonical
 
-        # 检查合格组织
-        for pattern, formal_name in QUALIFIED_ORGANIZATIONS.items():
-            if pattern in text_lower:
-                return formal_name
+        # 从文本中尝试识别组织名称
+        org_patterns = [
+            r"([\w\s]+)\s+(?:co\.|company|corp|inc|ltd|llc)",
+            r"([\w\s]+)\s+(?:club|center|academy|institute)",
+            r"(?:at|with|for)\s+([\w\s]+)",
+        ]
+        for p in org_patterns:
+            match = re.search(p, text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                # 排除申请人名字
+                if len(name) > 3 and name.lower() not in self.applicant_variants:
+                    return name.title()
 
-        # 如果没有识别到合格组织，返回 None
+        # 未识别的组织 - 返回 None
         return None
 
     def _extract_award_name(self, text: str) -> str:
         """提取奖项名称"""
+        # 使用配置中的奖项名称
+        if self.award_names:
+            for award in self.award_names:
+                if award.lower() in text.lower():
+                    return award
+
+        # 通用奖项模式
         patterns = [
-            r"achievement award.*fitness industry",
-            r"first prize",
-            r"gold medal",
+            r"([\w\s]+)\s+award",
+            r"([\w\s]+)\s+prize",
+            r"(gold|silver|bronze)\s+medal",
+            r"first\s+(?:place|prize)",
         ]
         for p in patterns:
-            if re.search(p, text, re.IGNORECASE):
-                return "Achievement Award in Fitness Industry"
+            match = re.search(p, text, re.IGNORECASE)
+            if match:
+                return match.group(0).title()
+
         return "Award"
 
     def _compose_single_argument(self, snippets: List[Dict], standard: str, group_key: str) -> ComposedArgument:
@@ -365,7 +427,7 @@ class ArgumentComposer:
         templates = {
             "membership": f"{self.applicant_name}'s Membership in {group_key}",
             "published_material": f"{group_key} Coverage of {self.applicant_name}",
-            "original_contribution": f"{self.applicant_name}'s Original BAT Training System and Its Major Significance",
+            "original_contribution": f"{self.applicant_name}'s Original {group_key} and Its Major Significance",
             "leading_role": f"{self.applicant_name}'s Leadership at {group_key}",
             "awards": f"{self.applicant_name}'s {group_key}",
         }
@@ -436,7 +498,7 @@ class ArgumentComposer:
 
                 # Significance (最重要)
                 if arg.significance:
-                    lines.append("**SIGNIFICANCE:** ⭐")
+                    lines.append("**SIGNIFICANCE:**")
                     for item in arg.significance[:5]:
                         purpose_label = {
                             "selectivity_proof": "[Selectivity]",
@@ -446,7 +508,7 @@ class ArgumentComposer:
                         lines.append(f"- {purpose_label} {item.text[:200]}... [Exhibit {item.exhibit_id}]")
                     lines.append("")
                 else:
-                    lines.append("**SIGNIFICANCE:** ⚠️ *Missing - needs supporting evidence*")
+                    lines.append("**SIGNIFICANCE:** *Missing - needs supporting evidence*")
                     lines.append("")
 
                 # Context
@@ -492,8 +554,19 @@ class ArgumentComposer:
         return stats
 
 
-def compose_project_arguments(project_id: str, applicant_name: str = "Ms. Qu") -> Dict[str, Any]:
-    """组合项目论点"""
+def compose_project_arguments(
+    project_id: str,
+    applicant_name: str = "the applicant",
+    metadata: Optional[Dict] = None
+) -> Dict[str, Any]:
+    """
+    组合项目论点
+
+    Args:
+        project_id: 项目 ID
+        applicant_name: 申请人姓名
+        metadata: project_metadata 配置 (如果为 None 则从文件加载)
+    """
     projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
     project_dir = projects_dir / project_id
 
@@ -506,8 +579,15 @@ def compose_project_arguments(project_id: str, applicant_name: str = "Ms. Qu") -
                 data = json.load(fp)
                 snippets.extend(data.get("snippets", []))
 
+    # 如果没有提供 metadata，尝试从文件加载
+    if metadata is None:
+        metadata_file = project_dir / "project_metadata.json"
+        if metadata_file.exists():
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
     # 组合
-    composer = ArgumentComposer(snippets, applicant_name)
+    composer = ArgumentComposer(snippets, applicant_name, metadata)
 
     return {
         "composed": {k: [asdict(a) for a in v] for k, v in composer.compose_all().items()},
