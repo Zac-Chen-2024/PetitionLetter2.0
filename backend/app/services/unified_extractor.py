@@ -362,25 +362,20 @@ UNIFIED_EXTRACTION_SCHEMA = {
                     "is_applicant_achievement": {"type": "boolean"},
                     "evidence_type": {
                         "type": "string",
-                        "enum": [
-                            "award",
-                            "membership",
-                            "membership_criteria",
-                            "membership_evaluation",
-                            "peer_assessment",
-                            "peer_achievement",
-                            "publication",
-                            "media_coverage",
-                            "source_credibility",
-                            "quantitative_impact",
-                            "judging",
-                            "contribution",
-                            "article",
-                            "exhibition",
-                            "leadership",
-                            "recommendation",
-                            "other"
-                        ]
+                        "description": """Evidence type classification. Suggested labels (use these for consistency, or create more precise labels when needed):
+- award: prizes, awards, honors for excellence
+- membership: membership in selective associations
+- membership_criteria: criteria showing selectivity requirements
+- publication: published material (scholarly)
+- media_coverage: news articles, media mentions about the applicant
+- invitation: invited to speak, participate, or share expertise
+- judging: participation as judge or reviewer
+- contribution: original contributions of major significance
+- leadership: leading or critical role IN an organization (not just invited)
+- recommendation: recommendation from recognized expert
+- source_credibility: credentials of media/organization
+- quantitative_impact: metrics, statistics showing impact
+- other: use specific description if none of above fit precisely"""
                     },
                     "evidence_purpose": {
                         "type": "string",
