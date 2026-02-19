@@ -288,6 +288,8 @@ const STORAGE_KEY_WRITING_EDGES = 'evidence-system-writing-edges';
 const STORAGE_KEY_LETTER_SECTIONS = 'evidence-system-letter-sections';
 const STORAGE_KEY_WRITING_NODE_POSITIONS = 'evidence-system-writing-node-positions';
 const STORAGE_KEY_LLM_PROVIDER = 'evidence-system-llm-provider';
+const STORAGE_KEY_ARGUMENT_VIEW_MODE = 'evidence-system-argument-view-mode';
+const STORAGE_KEY_ARGUMENT_GRAPH_POSITIONS = 'evidence-system-argument-graph-positions';
 
 // Initial arguments - empty, will be created via ArgumentAssembly panel
 const initialArguments: Argument[] = [];
@@ -579,6 +581,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isMerging, setIsMerging] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState<{ current: number; total: number; currentExhibit?: string } | null>(null);
 
+  // Argument view mode (list vs graph)
+  const [argumentViewMode, setArgumentViewModeState] = useState<ArgumentViewMode>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_ARGUMENT_VIEW_MODE);
+    return (saved as ArgumentViewMode) || 'list';
+  });
+
+  // Argument graph node positions (for graph view)
+  const [argumentGraphPositions, setArgumentGraphPositions] = useState<Map<string, Position>>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_ARGUMENT_GRAPH_POSITIONS);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return new Map(Object.entries(parsed));
+    }
+    return new Map();
+  });
+
   // Selection state for creating snippets
   const [selectionState, setSelectionState] = useState<SelectionState>({
     isSelecting: false,
@@ -620,8 +638,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY_WRITING_NODE_POSITIONS, JSON.stringify(obj));
   }, [writingNodePositions]);
 
+  // Persist argument view mode
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_ARGUMENT_VIEW_MODE, argumentViewMode);
+  }, [argumentViewMode]);
+
+  // Persist argument graph positions
+  useEffect(() => {
+    const obj: Record<string, Position> = {};
+    argumentGraphPositions.forEach((v, k) => { obj[k] = v; });
+    localStorage.setItem(STORAGE_KEY_ARGUMENT_GRAPH_POSITIONS, JSON.stringify(obj));
+  }, [argumentGraphPositions]);
+
   const setViewMode = useCallback((mode: ViewMode) => {
     setViewModeState(mode);
+  }, []);
+
+  // Argument view mode setter
+  const setArgumentViewMode = useCallback((mode: ArgumentViewMode) => {
+    setArgumentViewModeState(mode);
+  }, []);
+
+  // Update argument graph position
+  const updateArgumentGraphPosition = useCallback((id: string, position: Position) => {
+    setArgumentGraphPositions(prev => {
+      const newMap = new Map(prev);
+      newMap.set(id, position);
+      return newMap;
+    });
   }, []);
 
   const clearFocus = useCallback(() => {
@@ -1409,6 +1453,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSnippetPanelBounds,
     viewMode,
     setViewMode,
+    // Argument view mode (list vs graph)
+    argumentViewMode,
+    setArgumentViewMode,
+    // Argument graph node positions
+    argumentGraphPositions,
+    updateArgumentGraphPosition,
     addSnippet,
     removeSnippet,
     selectionState,

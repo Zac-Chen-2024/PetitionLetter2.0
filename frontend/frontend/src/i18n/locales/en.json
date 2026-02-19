@@ -30,7 +30,9 @@
     "aiAssisted": "AI Assisted",
     "mappingProgress": "Mapping Progress",
     "focusModeActive": "Focus Mode Active",
-    "generateDraft": "Generate Draft"
+    "generateDraft": "Generate Draft",
+    "listView": "List View",
+    "graphView": "Graph View"
   },
   "viewMode": {
     "line": "Line View",

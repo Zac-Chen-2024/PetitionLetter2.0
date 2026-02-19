@@ -9,6 +9,7 @@ export { MaterialOrganization } from './MaterialOrganization';
 export { WritingCanvas } from './WritingCanvas';
 export { LanguageSwitcher } from './LanguageSwitcher';
 export { ArgumentAssembly } from './ArgumentAssembly';
+export { ArgumentGraph } from './ArgumentGraph';
 
 // New components for Paper renovation
 export { default as ReadOnlyPetitionPanel } from './ReadOnlyPetitionPanel';

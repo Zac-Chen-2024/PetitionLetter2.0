@@ -30,7 +30,9 @@
     "aiAssisted": "AI 辅助",
     "mappingProgress": "映射进度",
     "focusModeActive": "聚焦模式",
-    "generateDraft": "生成草稿"
+    "generateDraft": "生成草稿",
+    "listView": "列表视图",
+    "graphView": "图形视图"
   },
   "viewMode": {
     "line": "连线视图",

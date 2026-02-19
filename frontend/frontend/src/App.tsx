@@ -12,6 +12,7 @@ import {
   WritingCanvas,
   LanguageSwitcher,
   ArgumentAssembly,
+  ArgumentGraph,
 } from './components';
 
 // Error Boundary for debugging
@@ -50,7 +51,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 type PageType = 'mapping' | 'materials' | 'writing';
 
 function AppContent() {
-  const { viewMode } = useApp();
+  const { viewMode, argumentViewMode } = useApp();
   const [currentPage, setCurrentPage] = useState<PageType>('mapping');
   const { t } = useTranslation();
 
@@ -72,9 +73,13 @@ function AppContent() {
               <EvidenceCardPool />
             </div>
 
-            {/* Panel 3: Argument Assembly (35%) - includes StandardFilterBar */}
+            {/* Panel 3: Argument Assembly (35%) - list or graph view */}
             <div className="w-[35%] flex-shrink-0 bg-white overflow-hidden">
-              <ArgumentAssembly />
+              {argumentViewMode === 'list' ? (
+                <ArgumentAssembly />
+              ) : (
+                <ArgumentGraph />
+              )}
             </div>
 
             {/* SVG Connection Lines (rendered on top) */}

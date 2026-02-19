@@ -29,7 +29,7 @@ const LogoIcon = () => (
 );
 
 export function Header() {
-  const { focusState, clearFocus, connections, reloadSnippets, isLoading, llmProvider, setLlmProvider } = useApp();
+  const { focusState, clearFocus, connections, reloadSnippets, isLoading, llmProvider, setLlmProvider, argumentViewMode, setArgumentViewMode } = useApp();
   const { t } = useTranslation();
 
   const currentProvider = LLM_PROVIDERS.find(p => p.id === llmProvider) || LLM_PROVIDERS[0];
@@ -80,8 +80,41 @@ export function Header() {
         </div>
       </div>
 
-      {/* Right: LLM Provider, Focus mode indicator and actions */}
+      {/* Right: View toggle, LLM Provider, Focus mode indicator and actions */}
       <div className="flex items-center gap-3">
+        {/* Argument View Mode Toggle */}
+        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 text-xs">
+          <button
+            onClick={() => setArgumentViewMode('list')}
+            className={`px-2.5 py-1 rounded transition-colors ${
+              argumentViewMode === 'list'
+                ? 'bg-white shadow-sm text-slate-900'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+            title={t('header.listView')}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setArgumentViewMode('graph')}
+            className={`px-2.5 py-1 rounded transition-colors ${
+              argumentViewMode === 'graph'
+                ? 'bg-white shadow-sm text-slate-900'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+            title={t('header.graphView')}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="5" cy="12" r="2" strokeWidth={2} />
+              <circle cx="19" cy="6" r="2" strokeWidth={2} />
+              <circle cx="19" cy="18" r="2" strokeWidth={2} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11l10-4M7 13l10 4" />
+            </svg>
+          </button>
+        </div>
+
         {/* LLM Provider Selector */}
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-slate-500">LLM:</span>
