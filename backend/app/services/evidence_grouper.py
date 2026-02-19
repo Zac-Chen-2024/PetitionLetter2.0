@@ -232,18 +232,70 @@ async def group_evidence(
                         "reasoning": value.get("reasoning", "")
                     })
 
+        # 规范化每个 cluster 的字段名（处理 LLM 可能返回的不同格式）
+        normalized_clusters = []
+        for c in raw_clusters:
+            # 处理可能的字段名变体
+            cluster_id = c.get("cluster_id") or c.get("name") or c.get("id") or c.get("criterion", "")[:50] or ""
+            entity_name = c.get("entity_name") or c.get("organization") or ""
+            snippet_ids = c.get("snippet_ids") or c.get("snippets") or c.get("evidence_snippets") or c.get("supporting_snippets") or []
+            reasoning = c.get("reasoning") or c.get("argument") or c.get("description") or c.get("explanation") or ""
+
+            # 从 criterion 或 eb1a_criteria 推断 suggested_standard
+            suggested_standard = c.get("suggested_standard", "none")
+            if suggested_standard == "none":
+                # 检查各种可能的 criterion 字段
+                criterion_text = c.get("criterion") or ""
+                criteria_list = c.get("eb1a_criteria", [])
+                check_text = criterion_text.lower() + " " + " ".join(str(cr).lower() for cr in criteria_list)
+
+                if "leading" in check_text or "critical role" in check_text:
+                    suggested_standard = "leading_role"
+                elif "membership" in check_text:
+                    suggested_standard = "membership"
+                elif "original" in check_text or "contribution" in check_text:
+                    suggested_standard = "original_contribution"
+                elif "published" in check_text or "authorship" in check_text or "scholarly" in check_text:
+                    suggested_standard = "published_material"
+                elif "award" in check_text or "prize" in check_text or "nationally" in check_text:
+                    suggested_standard = "awards"
+                elif "judge" in check_text:
+                    suggested_standard = "judging"
+
+            # 从 relationships 或 supporting_relationships 推断 entity_name（如果为空）
+            if not entity_name:
+                rels = c.get("relationships") or c.get("supporting_relationships") or []
+                for rel_str in rels:
+                    if ":" in str(rel_str):
+                        entity_name = str(rel_str).split(":")[0].strip()
+                        break
+
+            normalized_clusters.append({
+                "cluster_id": cluster_id,
+                "entity_name": entity_name,
+                "suggested_standard": suggested_standard,
+                "snippet_ids": snippet_ids,
+                "reasoning": reasoning
+            })
+
+        raw_clusters = normalized_clusters
+
         print(f"[EvidenceGrouper] Found {len(raw_clusters)} clusters")
 
         for c in raw_clusters:
+            entity_name = c.get("entity_name", "")
+            llm_snippet_ids = c.get("snippet_ids", [])
+
+            # 从 relationship_analysis 中补充 snippet_ids
+            relationship_snippets = _get_relationship_snippets(entity_name, relationships)
+            combined_snippets = list(set(llm_snippet_ids + relationship_snippets))
+
             cluster = EvidenceCluster(
                 cluster_id=c.get("cluster_id", ""),
-                entity_name=c.get("entity_name", ""),
-                relationship_type=_infer_relationship_type(
-                    c.get("entity_name", ""),
-                    relationships
-                ),
+                entity_name=entity_name,
+                relationship_type=_infer_relationship_type(entity_name, relationships),
                 suggested_standard=c.get("suggested_standard", "none"),
-                snippet_ids=c.get("snippet_ids", []),
+                snippet_ids=combined_snippets,
                 reasoning=c.get("reasoning", "")
             )
 
@@ -294,10 +346,42 @@ async def group_evidence(
 
 def _infer_relationship_type(entity_name: str, relationships: List[Dict]) -> str:
     """从关系分析中推断实体的关系类型"""
+    entity_lower = entity_name.lower().strip()
     for r in relationships:
-        if r.get("entity_name", "").lower() == entity_name.lower():
+        r_name = r.get("entity_name", "").lower().strip()
+        # 精确匹配或部分匹配
+        if r_name == entity_lower or entity_lower in r_name or r_name in entity_lower:
             return r.get("relationship_type", "unknown")
     return "unknown"
+
+
+def _get_relationship_snippets(entity_name: str, relationships: List[Dict]) -> List[str]:
+    """
+    从关系分析中获取实体相关的 evidence_snippets
+
+    使用模糊匹配处理名称差异（如 "Co. Ltd." vs "Co., Ltd."）
+    """
+    entity_lower = entity_name.lower().strip()
+    # 规范化用于匹配
+    entity_normalized = entity_lower.replace("co., ltd.", "co ltd").replace("co. ltd.", "co ltd")
+    entity_normalized = entity_normalized.replace("pte. ltd.", "pte ltd").replace("pte ltd.", "pte ltd")
+    entity_normalized = " ".join(entity_normalized.split())
+
+    all_snippets = []
+    for r in relationships:
+        r_name = r.get("entity_name", "").lower().strip()
+        r_normalized = r_name.replace("co., ltd.", "co ltd").replace("co. ltd.", "co ltd")
+        r_normalized = r_normalized.replace("pte. ltd.", "pte ltd").replace("pte ltd.", "pte ltd")
+        r_normalized = " ".join(r_normalized.split())
+
+        # 匹配条件：精确匹配或部分包含
+        if r_normalized == entity_normalized or \
+           entity_normalized in r_normalized or \
+           r_normalized in entity_normalized:
+            snippets = r.get("evidence_snippets", [])
+            all_snippets.extend(snippets)
+
+    return list(set(all_snippets))  # 去重
 
 
 def _validate_cluster_qualification(

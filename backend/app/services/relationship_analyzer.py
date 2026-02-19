@@ -795,7 +795,8 @@ async def analyze_applicant_relationships(
     snippets: List[Dict],
     entities: List[Dict],
     applicant_name: str,
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    batch_size: int = 30
 ) -> Dict[str, Any]:
     """
     分析申请人与每个实体的关系类型 (EB-1A 专用)
@@ -805,11 +806,14 @@ async def analyze_applicant_relationships(
     - Invitation 关系 (invited_by) → 不可用于 Leading Role
     - Partnership 关系 (partner_with) → 不可用于 Leading Role
 
+    支持分批分析：将所有 snippets 分批处理，确保完整覆盖
+
     Args:
         snippets: 带上下文的 snippets
         entities: 实体列表
         applicant_name: 申请人姓名
         provider: LLM 提供商
+        batch_size: 每批处理的 snippet 数量
 
     Returns:
         {
@@ -837,131 +841,237 @@ async def analyze_applicant_relationships(
             "stats": {"total_entities": 0, "analyzed": 0}
         }
 
-    # 准备 snippets 文本 (包含上下文)
-    snippets_text = []
-    for i, s in enumerate(snippets[:50]):  # 限制数量避免 token 过多
-        text = s.get("text", "")
-        context = s.get("context", {})
-        full_context = context.get("full_context", "") if context else ""
-        snippet_id = s.get("snippet_id", f"snp_{i}")
-
-        if full_context:
-            snippets_text.append(f"[{snippet_id}] {full_context[:500]}")
-        else:
-            snippets_text.append(f"[{snippet_id}] {text[:300]}")
-
-    # 准备实体列表
+    # 准备实体列表 (所有实体，不限制数量)
     entities_list = "\n".join([
         f"- {e.get('name', '')} ({e.get('type', '')})"
-        for e in org_entities[:30]  # 限制数量
+        for e in org_entities
     ])
 
-    # 构建 prompt
-    user_prompt = EB1A_RELATIONSHIP_USER_PROMPT.format(
-        applicant_name=applicant_name,
-        entities_list=entities_list,
-        snippets_text="\n\n".join(snippets_text)
-    )
+    # 分批处理 snippets
+    total_snippets = len(snippets)
+    num_batches = (total_snippets + batch_size - 1) // batch_size
+    print(f"[EB1A-RelationshipAnalyzer] Processing {num_batches} batches (batch_size={batch_size})")
 
-    try:
-        result = await call_llm(
-            prompt=user_prompt,
-            provider=provider,
-            system_prompt=EB1A_RELATIONSHIP_SYSTEM_PROMPT,
-            json_schema=EB1A_RELATIONSHIP_SCHEMA,
-            temperature=0.1,
-            max_tokens=3000
+    all_raw_relationships = []
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, total_snippets)
+        batch_snippets = snippets[start_idx:end_idx]
+
+        print(f"[EB1A-RelationshipAnalyzer] Batch {batch_idx + 1}/{num_batches}: snippets {start_idx}-{end_idx}")
+
+        # 准备 snippets 文本 (包含上下文)
+        snippets_text = []
+        for i, s in enumerate(batch_snippets):
+            text = s.get("text", "")
+            context = s.get("context", {})
+            full_context = context.get("full_context", "") if context else ""
+            snippet_id = s.get("snippet_id", f"snp_{start_idx + i}")
+
+            if full_context:
+                snippets_text.append(f"[{snippet_id}] {full_context[:400]}")
+            else:
+                snippets_text.append(f"[{snippet_id}] {text[:250]}")
+
+        # 构建 prompt
+        user_prompt = EB1A_RELATIONSHIP_USER_PROMPT.format(
+            applicant_name=applicant_name,
+            entities_list=entities_list,
+            snippets_text="\n\n".join(snippets_text)
         )
 
-        # 调试输出
-        print(f"[EB1A-RelationshipAnalyzer] Raw result type: {type(result)}")
-        print(f"[EB1A-RelationshipAnalyzer] Raw result keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
-
-        # 解析结果 - 处理多种可能的响应格式
-        relationships = []
-        leadership_entities = []
-        non_leadership_entities = []
-
-        # 尝试获取 relationships 数组
-        raw_relationships = result.get("relationships", [])
-
-        # 如果没有 relationships 键，尝试从其他格式转换
-        if not raw_relationships and isinstance(result, dict):
-            # 可能是 {entity_name: relationship_info} 格式
-            for key, value in result.items():
-                if key == "relationships":
-                    continue
-                if isinstance(value, dict):
-                    # 转换为标准格式
-                    raw_relationships.append({
-                        "entity_name": key,
-                        "entity_type": value.get("entity_type", "organization"),
-                        "relationship_type": value.get("relationship_type", value.get("type", "unknown")),
-                        "evidence_snippets": value.get("evidence_snippets", value.get("snippets", [])),
-                        "confidence": value.get("confidence", 0.5),
-                        "reasoning": value.get("reasoning", value.get("reason", ""))
-                    })
-                elif isinstance(value, str):
-                    # 简化格式: {entity_name: relationship_type}
-                    raw_relationships.append({
-                        "entity_name": key,
-                        "entity_type": "organization",
-                        "relationship_type": value,
-                        "evidence_snippets": [],
-                        "confidence": 0.5,
-                        "reasoning": ""
-                    })
-
-        print(f"[EB1A-RelationshipAnalyzer] Parsed relationships count: {len(raw_relationships)}")
-
-        for r in raw_relationships:
-            rel = ApplicantRelationship(
-                entity_name=r.get("entity_name", ""),
-                entity_type=r.get("entity_type", "organization"),
-                relationship_type=r.get("relationship_type", "unknown"),
-                evidence_snippets=r.get("evidence_snippets", []),
-                confidence=r.get("confidence", 0.5),
-                reasoning=r.get("reasoning", "")
+        try:
+            result = await call_llm(
+                prompt=user_prompt,
+                provider=provider,
+                system_prompt=EB1A_RELATIONSHIP_SYSTEM_PROMPT,
+                json_schema=EB1A_RELATIONSHIP_SCHEMA,
+                temperature=0.1,
+                max_tokens=3000
             )
-            relationships.append(rel)
 
-            # 分类
-            if rel.qualifies_for_leadership:
-                leadership_entities.append({
-                    "name": rel.entity_name,
-                    "relationship": rel.relationship_type,
-                    "confidence": rel.confidence,
-                    "reasoning": rel.reasoning
+            # 解析结果
+            batch_relationships = _parse_relationship_result(result)
+            print(f"[EB1A-RelationshipAnalyzer] Batch {batch_idx + 1}: found {len(batch_relationships)} relationships")
+            all_raw_relationships.extend(batch_relationships)
+
+        except Exception as e:
+            print(f"[EB1A-RelationshipAnalyzer] Batch {batch_idx + 1} error: {e}")
+            continue
+
+        # 批次间延迟，避免 rate limit
+        if batch_idx < num_batches - 1:
+            import asyncio
+            await asyncio.sleep(0.5)
+
+    # 合并和去重所有批次的结果
+    print(f"[EB1A-RelationshipAnalyzer] Merging {len(all_raw_relationships)} relationships from all batches...")
+    merged_relationships = _merge_relationships(all_raw_relationships)
+
+    # 分类
+    relationships = []
+    leadership_entities = []
+    non_leadership_entities = []
+
+    for r in merged_relationships:
+        rel = ApplicantRelationship(
+            entity_name=r.get("entity_name", ""),
+            entity_type=r.get("entity_type", "organization"),
+            relationship_type=r.get("relationship_type", "unknown"),
+            evidence_snippets=r.get("evidence_snippets", []),
+            confidence=r.get("confidence", 0.5),
+            reasoning=r.get("reasoning", "")
+        )
+        relationships.append(rel)
+
+        # 分类
+        if rel.qualifies_for_leadership:
+            leadership_entities.append({
+                "name": rel.entity_name,
+                "relationship": rel.relationship_type,
+                "confidence": rel.confidence,
+                "reasoning": rel.reasoning
+            })
+        elif rel.relationship_type in ["invited_by", "partner_with"]:
+            non_leadership_entities.append({
+                "name": rel.entity_name,
+                "relationship": rel.relationship_type,
+                "confidence": rel.confidence,
+                "reasoning": rel.reasoning
+            })
+
+    print(f"[EB1A-RelationshipAnalyzer] Final: {len(relationships)} relationships")
+    print(f"[EB1A-RelationshipAnalyzer] Leadership entities: {len(leadership_entities)}")
+    print(f"[EB1A-RelationshipAnalyzer] Non-leadership entities: {len(non_leadership_entities)}")
+
+    return {
+        "relationships": [asdict(r) for r in relationships],
+        "leadership_entities": leadership_entities,
+        "non_leadership_entities": non_leadership_entities,
+        "stats": {
+            "total_entities": len(org_entities),
+            "total_snippets": total_snippets,
+            "batches_processed": num_batches,
+            "analyzed": len(relationships),
+            "leadership_count": len(leadership_entities),
+            "non_leadership_count": len(non_leadership_entities)
+        }
+    }
+
+
+def _parse_relationship_result(result: Dict) -> List[Dict]:
+    """解析 LLM 返回的关系结果"""
+    raw_relationships = result.get("relationships", [])
+
+    # 如果没有 relationships 键，尝试从其他格式转换
+    if not raw_relationships and isinstance(result, dict):
+        for key, value in result.items():
+            if key == "relationships":
+                continue
+            if isinstance(value, dict):
+                raw_relationships.append({
+                    "entity_name": key,
+                    "entity_type": value.get("entity_type", "organization"),
+                    "relationship_type": value.get("relationship_type", value.get("type", "unknown")),
+                    "evidence_snippets": value.get("evidence_snippets", value.get("snippets", [])),
+                    "confidence": value.get("confidence", 0.5),
+                    "reasoning": value.get("reasoning", value.get("reason", ""))
                 })
-            elif rel.relationship_type in ["invited_by", "partner_with"]:
-                non_leadership_entities.append({
-                    "name": rel.entity_name,
-                    "relationship": rel.relationship_type,
-                    "confidence": rel.confidence,
-                    "reasoning": rel.reasoning
+            elif isinstance(value, str):
+                raw_relationships.append({
+                    "entity_name": key,
+                    "entity_type": "organization",
+                    "relationship_type": value,
+                    "evidence_snippets": [],
+                    "confidence": 0.5,
+                    "reasoning": ""
                 })
 
-        print(f"[EB1A-RelationshipAnalyzer] Found {len(relationships)} relationships")
-        print(f"[EB1A-RelationshipAnalyzer] Leadership entities: {len(leadership_entities)}")
-        print(f"[EB1A-RelationshipAnalyzer] Non-leadership entities: {len(non_leadership_entities)}")
+    return raw_relationships
 
-        return {
-            "relationships": [asdict(r) for r in relationships],
-            "leadership_entities": leadership_entities,
-            "non_leadership_entities": non_leadership_entities,
-            "stats": {
-                "total_entities": len(org_entities),
-                "analyzed": len(relationships),
-                "leadership_count": len(leadership_entities),
-                "non_leadership_count": len(non_leadership_entities)
+
+def _merge_relationships(all_relationships: List[Dict]) -> List[Dict]:
+    """
+    合并来自多个批次的关系结果
+
+    策略：
+    - 按实体名称分组
+    - 如果同一实体有多个关系类型，选择置信度最高的
+    - 合并 evidence_snippets
+    - 如果关系类型冲突，优先选择 leadership 关系（更重要）
+    """
+    entity_map = {}
+
+    # 关系类型优先级（越高越优先）
+    relationship_priority = {
+        "founder_of": 10,
+        "executive_at": 9,
+        "employee_at": 5,
+        "member_of": 4,
+        "featured_in": 4,
+        "awarded_by": 4,
+        "contributed_to": 3,
+        "partner_with": 2,
+        "invited_by": 2,
+        "recommended_by": 1,
+        "unknown": 0
+    }
+
+    def normalize_entity_name(name: str) -> str:
+        """规范化实体名称用于去重"""
+        name = name.lower().strip()
+        # 统一公司后缀格式
+        name = name.replace("co., ltd.", "co ltd")
+        name = name.replace("co.,ltd.", "co ltd")
+        name = name.replace("co. ltd.", "co ltd")
+        name = name.replace("co.ltd.", "co ltd")
+        name = name.replace("co., ltd", "co ltd")
+        name = name.replace("pte. ltd.", "pte ltd")
+        name = name.replace("pte.ltd.", "pte ltd")
+        name = name.replace("pte ltd.", "pte ltd")
+        name = name.replace("inc.", "inc")
+        name = name.replace("corp.", "corp")
+        name = name.replace("llc.", "llc")
+        # 移除多余空格
+        name = " ".join(name.split())
+        return name
+
+    for r in all_relationships:
+        entity_name = r.get("entity_name", "").strip()
+        if not entity_name:
+            continue
+
+        # 规范化名称用于去重
+        norm_name = normalize_entity_name(entity_name)
+
+        if norm_name not in entity_map:
+            entity_map[norm_name] = {
+                "entity_name": entity_name,
+                "entity_type": r.get("entity_type", "organization"),
+                "relationship_type": r.get("relationship_type", "unknown"),
+                "evidence_snippets": list(r.get("evidence_snippets", [])),
+                "confidence": r.get("confidence", 0.5),
+                "reasoning": r.get("reasoning", "")
             }
-        }
+        else:
+            existing = entity_map[norm_name]
 
-    except Exception as e:
-        print(f"[EB1A-RelationshipAnalyzer] Error: {e}")
-        return {
-            "relationships": [],
-            "leadership_entities": [],
-            "non_leadership_entities": [],
-            "stats": {"error": str(e)}
-        }
+            # 合并 evidence_snippets
+            for snp in r.get("evidence_snippets", []):
+                if snp not in existing["evidence_snippets"]:
+                    existing["evidence_snippets"].append(snp)
+
+            # 比较关系类型优先级
+            existing_priority = relationship_priority.get(existing["relationship_type"], 0)
+            new_priority = relationship_priority.get(r.get("relationship_type", "unknown"), 0)
+
+            # 如果新关系优先级更高，或者置信度更高且优先级相同
+            new_confidence = r.get("confidence", 0.5)
+            if new_priority > existing_priority or \
+               (new_priority == existing_priority and new_confidence > existing["confidence"]):
+                existing["relationship_type"] = r.get("relationship_type", "unknown")
+                existing["confidence"] = new_confidence
+                existing["reasoning"] = r.get("reasoning", existing["reasoning"])
+
+    return list(entity_map.values())
