@@ -460,10 +460,11 @@ export function ArgumentGraph() {
   }, [updateArgumentGraphPosition]);
 
   // Handle argument position report for main page connection lines
+  // Note: ConnectionLines expects x to be RIGHT edge (same as EvidenceCardPool)
   const handleArgumentPositionReport = useCallback((id: string, rect: DOMRect) => {
     updateArgumentPosition2(id, {
       id,
-      x: rect.left,
+      x: rect.right,  // Right edge (ConnectionLines calculates left edge as x - width)
       y: rect.top + rect.height / 2,
       width: rect.width,
       height: rect.height,
