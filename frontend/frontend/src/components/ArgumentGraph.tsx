@@ -155,27 +155,27 @@ function ArgumentNodeComponent({
     >
       <div
         className={`
-          w-[200px] p-3 rounded-xl border-2 border-purple-400 bg-purple-50 shadow-md transition-all
+          w-[280px] p-4 rounded-xl border-2 border-purple-400 bg-purple-50 shadow-md transition-all
           ${isSelected ? 'ring-2 ring-offset-2 ring-purple-500 shadow-lg border-purple-500' : 'hover:shadow-lg hover:border-purple-500'}
         `}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-2 mb-2">
-          <span className="text-sm font-semibold text-purple-800 line-clamp-2">{node.data.title}</span>
+          <span className="text-base font-bold text-purple-800 line-clamp-2">{node.data.title}</span>
           {node.data.isAIGenerated && (
-            <span className="text-[9px] px-1.5 py-0.5 bg-purple-200 text-purple-700 rounded flex-shrink-0">AI</span>
+            <span className="text-[10px] px-2 py-0.5 bg-purple-200 text-purple-700 rounded flex-shrink-0">AI</span>
           )}
         </div>
 
         {/* Subject */}
-        <p className="text-xs text-purple-600 mb-2 line-clamp-1">{node.data.subject}</p>
+        <p className="text-sm text-purple-600 mb-2 line-clamp-1">{node.data.subject}</p>
 
         {/* Stats row */}
-        <div className="flex items-center justify-between text-[10px]">
+        <div className="flex items-center justify-between text-xs">
           <span className="text-purple-500">{node.data.snippetCount} snippets</span>
           {node.data.completenessScore !== undefined && (
             <div className="flex items-center gap-1">
-              <div className={`w-2 h-2 rounded-full ${getCompletenessColor(node.data.completenessScore)}`} />
+              <div className={`w-2.5 h-2.5 rounded-full ${getCompletenessColor(node.data.completenessScore)}`} />
               <span className="text-purple-500">{node.data.completenessScore}%</span>
             </div>
           )}
@@ -183,8 +183,8 @@ function ArgumentNodeComponent({
 
         {/* Standard tag if mapped */}
         {node.data.standardKey && (
-          <div className="mt-2 pt-2 border-t border-purple-200">
-            <span className="text-[10px] px-2 py-0.5 bg-purple-200 text-purple-700 rounded-full">
+          <div className="mt-3 pt-2 border-t border-purple-200">
+            <span className="text-xs px-2 py-1 bg-purple-200 text-purple-700 rounded-full">
               {node.data.standardKey}
             </span>
           </div>
@@ -250,7 +250,7 @@ function StandardNodeComponent({ node, isSelected, onSelect, onDrag, scale }: Dr
     >
       <div
         className={`
-          w-[140px] p-3 rounded-xl bg-white shadow-lg transition-all
+          w-[180px] p-4 rounded-xl bg-white shadow-lg transition-all
           ${isSelected ? 'ring-2 ring-offset-2 shadow-xl scale-105' : 'hover:shadow-xl'}
         `}
         style={{
@@ -261,15 +261,15 @@ function StandardNodeComponent({ node, isSelected, onSelect, onDrag, scale }: Dr
       >
         <div className="flex items-center gap-2">
           <div
-            className="w-4 h-4 rounded-full flex-shrink-0"
+            className="w-5 h-5 rounded-full flex-shrink-0"
             style={{ backgroundColor: node.data.color }}
           />
-          <span className="text-sm font-bold text-slate-800">{node.data.shortName}</span>
+          <span className="text-base font-bold text-slate-800">{node.data.shortName}</span>
         </div>
-        <div className="mt-1 flex items-center justify-between">
-          <span className="text-[10px] text-slate-400">Standard</span>
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs text-slate-400">Standard</span>
           {node.data.argumentCount > 0 && (
-            <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded">
+            <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">
               {node.data.argumentCount} args
             </span>
           )}
@@ -305,9 +305,9 @@ function InternalConnectionLines({ argumentNodes, standardNodes }: InternalConne
         const standardPos = standardPositions.get(standardId);
         if (!standardPos) return null;
 
-        const x1 = argNode.position.x + 100; // Right edge of argument node
+        const x1 = argNode.position.x + 140; // Right edge of argument node (280px / 2)
         const y1 = argNode.position.y;
-        const x2 = standardPos.x - 70; // Left edge of standard node
+        const x2 = standardPos.x - 90; // Left edge of standard node (180px / 2)
         const y2 = standardPos.y;
 
         const midX = (x1 + x2) / 2;
@@ -337,11 +337,11 @@ function calculateTreeLayout(
   arguments_: Argument[],
   savedPositions: Map<string, Position>
 ): { argumentNodes: ArgumentNode[]; standardNodes: StandardNode[] } {
-  const ARGUMENT_X = 150;
-  const STANDARD_X = 450;
-  const START_Y = 80;
-  const ARGUMENT_SPACING = 120;
-  const STANDARD_SPACING = 100;
+  const ARGUMENT_X = 180;
+  const STANDARD_X = 550;
+  const START_Y = 100;
+  const ARGUMENT_SPACING = 160;
+  const STANDARD_SPACING = 140;
 
   // Group arguments by standardKey
   const argumentsByStandard = new Map<string, Argument[]>();
@@ -444,7 +444,7 @@ export function ArgumentGraph() {
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(0.5);  // Start at 50% zoom for better overview
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
