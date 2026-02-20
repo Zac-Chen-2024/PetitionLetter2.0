@@ -292,7 +292,7 @@ function InternalConnectionLines({ argumentNodes, standardNodes }: InternalConne
   const standardPositions = new Map(standardNodes.map(n => [n.id, n.position]));
 
   return (
-    <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 5, pointerEvents: 'none' }}>
+    <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 35, pointerEvents: 'none' }}>
       <defs>
         <marker id="arg-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
           <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7" />
