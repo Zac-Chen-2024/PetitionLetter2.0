@@ -59,6 +59,12 @@ const FitIcon = () => (
   </svg>
 );
 
+const ArrangeIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+  </svg>
+);
+
 // ============================================
 // Node Components
 // ============================================
@@ -292,7 +298,7 @@ function InternalConnectionLines({ argumentNodes, standardNodes }: InternalConne
   const standardPositions = new Map(standardNodes.map(n => [n.id, n.position]));
 
   return (
-    <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 35, pointerEvents: 'none' }}>
+    <svg className="absolute" style={{ zIndex: 35, pointerEvents: 'none', left: 0, top: 0, width: '4000px', height: '3000px', overflow: 'visible' }}>
       <defs>
         <marker id="arg-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
           <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7" />
@@ -337,11 +343,11 @@ function calculateTreeLayout(
   arguments_: Argument[],
   savedPositions: Map<string, Position>
 ): { argumentNodes: ArgumentNode[]; standardNodes: StandardNode[] } {
-  const ARGUMENT_X = 200;
-  const STANDARD_X = 600;
+  // Position layout towards the right side (leave room for sub-arguments in the middle)
+  const ARGUMENT_X = 1300;
+  const STANDARD_X = 1700;
   const START_Y = 100;
-  const ARGUMENT_SPACING = 160;
-  const STANDARD_SPACING = 140;
+  const ARGUMENT_SPACING = 160;  // Vertical spacing between arguments
 
   // Group arguments by standardKey
   const argumentsByStandard = new Map<string, Argument[]>();
@@ -357,42 +363,56 @@ function calculateTreeLayout(
     }
   });
 
-  // Get unique standards that have arguments
-  const standardKeys = Array.from(argumentsByStandard.keys());
-  const standardsWithArgs = legalStandards.filter(s =>
-    standardKeys.some(key => STANDARD_KEY_TO_ID[key] === s.id)
-  );
+  // Helper: count arguments for a standard
+  const getArgumentCount = (standardId: string): number => {
+    let count = 0;
+    argumentsByStandard.forEach((args, key) => {
+      if (STANDARD_KEY_TO_ID[key] === standardId) {
+        count += args.length;
+      }
+    });
+    return count;
+  };
 
-  // Build standard nodes with saved positions or auto layout
-  const standardNodes: StandardNode[] = standardsWithArgs.map((s, index) => {
-    const savedPos = savedPositions.get(s.id);
-    return {
-      id: s.id,
-      type: 'standard' as const,
-      position: savedPos || { x: STANDARD_X, y: START_Y + index * STANDARD_SPACING },
-      data: {
-        name: s.name,
-        shortName: s.shortName,
-        color: s.color,
-        argumentCount: standardKeys.filter(key => STANDARD_KEY_TO_ID[key] === s.id)
-          .reduce((sum, key) => sum + (argumentsByStandard.get(key)?.length || 0), 0),
-      },
-    };
-  });
+  // Get standards that have arguments, sorted by argument count (descending)
+  const standardsWithArgs = legalStandards
+    .filter(s => {
+      return Array.from(argumentsByStandard.keys()).some(key => STANDARD_KEY_TO_ID[key] === s.id);
+    })
+    .sort((a, b) => getArgumentCount(b.id) - getArgumentCount(a.id));
 
-  // Build argument nodes
-  let argIndex = 0;
+  // Build nodes with aligned positions:
+  // - Arguments for each standard are grouped together
+  // - Standard is positioned at the vertical center of its argument group
   const argumentNodes: ArgumentNode[] = [];
+  const standardNodes: StandardNode[] = [];
 
-  // First add mapped arguments
-  standardKeys.forEach(standardKey => {
-    const args = argumentsByStandard.get(standardKey) || [];
-    args.forEach(arg => {
+  let currentY = START_Y;
+
+  // Process each standard in order (from legalStandards array)
+  standardsWithArgs.forEach((standard) => {
+    // Find all arguments for this standard
+    const standardArgs: Argument[] = [];
+    argumentsByStandard.forEach((args, key) => {
+      if (STANDARD_KEY_TO_ID[key] === standard.id) {
+        standardArgs.push(...args);
+      }
+    });
+
+    if (standardArgs.length === 0) return;
+
+    // Calculate Y positions for this group of arguments
+    const groupStartY = currentY;
+    const groupHeight = (standardArgs.length - 1) * ARGUMENT_SPACING;
+    const standardY = groupStartY + groupHeight / 2;  // Standard at center of its argument group
+
+    // Add argument nodes for this standard
+    standardArgs.forEach((arg, idx) => {
       const savedPos = savedPositions.get(arg.id);
       argumentNodes.push({
         id: arg.id,
         type: 'argument' as const,
-        position: savedPos || { x: ARGUMENT_X, y: START_Y + argIndex * ARGUMENT_SPACING },
+        position: savedPos || { x: ARGUMENT_X, y: groupStartY + idx * ARGUMENT_SPACING },
         data: {
           title: arg.title,
           subject: arg.subject,
@@ -402,17 +422,33 @@ function calculateTreeLayout(
           completenessScore: arg.completeness?.score,
         },
       });
-      argIndex++;
     });
+
+    // Add standard node at vertical center of its arguments
+    const savedStandardPos = savedPositions.get(standard.id);
+    standardNodes.push({
+      id: standard.id,
+      type: 'standard' as const,
+      position: savedStandardPos || { x: STANDARD_X, y: standardY },
+      data: {
+        name: standard.name,
+        shortName: standard.shortName,
+        color: standard.color,
+        argumentCount: standardArgs.length,
+      },
+    });
+
+    // Move currentY to after this group (with extra spacing between groups)
+    currentY = groupStartY + groupHeight + ARGUMENT_SPACING * 1.5;
   });
 
-  // Then add unmapped arguments
+  // Add unmapped arguments at the end
   unmappedArguments.forEach(arg => {
     const savedPos = savedPositions.get(arg.id);
     argumentNodes.push({
       id: arg.id,
       type: 'argument' as const,
-      position: savedPos || { x: ARGUMENT_X, y: START_Y + argIndex * ARGUMENT_SPACING },
+      position: savedPos || { x: ARGUMENT_X, y: currentY },
       data: {
         title: arg.title,
         subject: arg.subject,
@@ -422,7 +458,7 @@ function calculateTreeLayout(
         completenessScore: arg.completeness?.score,
       },
     });
-    argIndex++;
+    currentY += ARGUMENT_SPACING;
   });
 
   return { argumentNodes, standardNodes };
@@ -438,6 +474,7 @@ export function ArgumentGraph() {
     arguments: contextArguments,
     argumentGraphPositions,
     updateArgumentGraphPosition,
+    clearArgumentGraphPositions,
     setFocusState,
     focusState,
     updateArgumentPosition2,
@@ -533,6 +570,13 @@ export function ArgumentGraph() {
     setOffset({ x: 0, y: 0 });
   };
 
+  // Handle auto-arrange nodes
+  const handleArrangeNodes = useCallback(() => {
+    clearArgumentGraphPositions();
+    setScale(0.5);
+    setOffset({ x: 0, y: 0 });
+  }, [clearArgumentGraphPositions]);
+
   // Handle mouse wheel zoom
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
@@ -587,6 +631,9 @@ export function ArgumentGraph() {
           <div className="border-t border-slate-200 my-0.5" />
           <button onClick={handleFit} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Fit to View">
             <FitIcon />
+          </button>
+          <button onClick={handleArrangeNodes} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Auto Arrange">
+            <ArrangeIcon />
           </button>
         </div>
 

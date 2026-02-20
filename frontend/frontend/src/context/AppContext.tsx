@@ -178,6 +178,7 @@ interface AppContextType {
   // Argument graph node positions (for graph view)
   argumentGraphPositions: Map<string, Position>;
   updateArgumentGraphPosition: (id: string, position: Position) => void;
+  clearArgumentGraphPositions: () => void;
 
   // Snippet management
   addSnippet: (snippet: Omit<Snippet, 'id'>) => void;
@@ -666,6 +667,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       newMap.set(id, position);
       return newMap;
     });
+  }, []);
+
+  // Clear all argument graph positions (for auto-arrange)
+  const clearArgumentGraphPositions = useCallback(() => {
+    setArgumentGraphPositions(new Map());
   }, []);
 
   const clearFocus = useCallback(() => {
@@ -1459,6 +1465,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Argument graph node positions
     argumentGraphPositions,
     updateArgumentGraphPosition,
+    clearArgumentGraphPositions,
     addSnippet,
     removeSnippet,
     selectionState,
