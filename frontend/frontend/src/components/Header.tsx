@@ -29,14 +29,8 @@ const LogoIcon = () => (
 );
 
 export function Header() {
-  const { focusState, clearFocus, connections, reloadSnippets, isLoading, llmProvider, setLlmProvider, argumentViewMode, setArgumentViewMode, setCurrentPage } = useApp();
+  const { focusState, clearFocus, llmProvider, setLlmProvider, setCurrentPage } = useApp();
   const { t } = useTranslation();
-
-  const currentProvider = LLM_PROVIDERS.find(p => p.id === llmProvider) || LLM_PROVIDERS[0];
-
-  const confirmedCount = connections.filter(c => c.isConfirmed).length;
-  const totalCount = connections.length;
-  const progressPercent = totalCount > 0 ? Math.round((confirmedCount / totalCount) * 100) : 0;
 
   return (
     <header className="flex-shrink-0 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between">
@@ -54,67 +48,11 @@ export function Header() {
         </div>
       </div>
 
-      {/* Center: Progress indicator */}
-      <div className="flex items-center gap-4">
-        <button
-          onClick={reloadSnippets}
-          disabled={isLoading}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition-colors disabled:opacity-50"
-          title="Reload snippets from server"
-        >
-          <svg className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">{t('header.mappingProgress')}</span>
-          <div className="w-32 h-2 bg-slate-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-emerald-500 rounded-full transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-          <span className="text-xs font-medium text-slate-700">
-            {confirmedCount}/{totalCount}
-          </span>
-        </div>
-      </div>
+      {/* Center: spacer */}
+      <div className="flex-1" />
 
-      {/* Right: View toggle, LLM Provider, Focus mode indicator and actions */}
+      {/* Right: LLM Provider, Focus mode indicator and actions */}
       <div className="flex items-center gap-3">
-        {/* Argument View Mode Toggle */}
-        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 text-xs">
-          <button
-            onClick={() => setArgumentViewMode('list')}
-            className={`px-2.5 py-1 rounded transition-colors ${
-              argumentViewMode === 'list'
-                ? 'bg-white shadow-sm text-slate-900'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-            title={t('header.listView')}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-            </svg>
-          </button>
-          <button
-            onClick={() => setArgumentViewMode('graph')}
-            className={`px-2.5 py-1 rounded transition-colors ${
-              argumentViewMode === 'graph'
-                ? 'bg-white shadow-sm text-slate-900'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-            title={t('header.graphView')}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <circle cx="5" cy="12" r="2" strokeWidth={2} />
-              <circle cx="19" cy="6" r="2" strokeWidth={2} />
-              <circle cx="19" cy="18" r="2" strokeWidth={2} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11l10-4M7 13l10 4" />
-            </svg>
-          </button>
-        </div>
-
         {/* LLM Provider Selector */}
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-slate-500">LLM:</span>

@@ -364,7 +364,11 @@ function PDFViewer({
   );
 }
 
-export function DocumentViewer() {
+interface DocumentViewerProps {
+  compact?: boolean;  // Compact mode for Write view - hides exhibit list
+}
+
+export function DocumentViewer({ compact = false }: DocumentViewerProps) {
   const { projectId, selectedDocumentId, setSelectedDocumentId, addSnippet, allSnippets, reloadSnippets } = useApp();
   const [exhibits, setExhibits] = useState<Exhibit[]>([]);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['A', 'B']));
@@ -529,37 +533,47 @@ export function DocumentViewer() {
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
-      <div className="flex-shrink-0 px-4 py-3 bg-white border-b border-slate-200">
+      <div className="flex-shrink-0 px-4 py-2 bg-white border-b border-slate-200">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">Document Viewer</h2>
-          <button
-            onClick={() => setIsSelectMode(!isSelectMode)}
-            className={`
-              flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors
-              ${isSelectMode
-                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                : 'text-slate-600 bg-slate-100 hover:bg-slate-200'
-              }
-            `}
-          >
-            {isSelectMode ? (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                <span>Cancel</span>
-              </>
-            ) : (
-              <>
-                <PlusIcon />
-                <span>New Snippet</span>
-              </>
-            )}
-          </button>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">
+              {compact ? 'PDF Preview' : 'Document Viewer'}
+            </h2>
+            <p className="text-xs text-slate-500">
+              {compact ? (selectedExhibit?.name || 'Select an exhibit') : `${exhibits.length} exhibits`}
+            </p>
+          </div>
+          {!compact && (
+            <button
+              onClick={() => setIsSelectMode(!isSelectMode)}
+              className={`
+                flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors
+                ${isSelectMode
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'text-slate-600 bg-slate-100 hover:bg-slate-200'
+                }
+              `}
+            >
+              {isSelectMode ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  <span>Cancel</span>
+                </>
+              ) : (
+                <>
+                  <PlusIcon />
+                  <span>New Snippet</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Exhibit List */}
+      {/* Exhibit List - hidden in compact mode */}
+      {!compact && (
       <div className="flex-shrink-0 border-b border-slate-200 bg-white max-h-48 overflow-y-auto">
         <div className="px-3 py-2">
           <div className="flex items-center justify-between mb-2">
@@ -699,6 +713,7 @@ export function DocumentViewer() {
           )}
         </div>
       </div>
+      )}
 
       {/* PDF Viewer */}
       <div className="flex-1 overflow-hidden">

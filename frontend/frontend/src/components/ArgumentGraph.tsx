@@ -945,38 +945,67 @@ export function ArgumentGraph() {
   }, []);
 
   // Get generateArguments from context
-  const { generateArguments, isGeneratingArguments } = useApp();
+  const { generateArguments, isGeneratingArguments, workMode, setWorkMode } = useApp();
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
       <div className="flex-shrink-0 px-4 py-2 bg-white border-b border-slate-200">
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800">{t('header.writingTree')}</h2>
-            <p className="text-xs text-slate-500">
-              {t('graph.argumentCount', { arguments: contextArguments.length, subArguments: contextSubArguments.length })}
-            </p>
+          {/* Left side: Title + Generate button */}
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">{t('header.writingTree')}</h2>
+              <p className="text-xs text-slate-500">
+                {t('graph.argumentCount', { arguments: contextArguments.length, subArguments: contextSubArguments.length })}
+              </p>
+            </div>
+            <button
+              onClick={() => generateArguments(true)}
+              disabled={isGeneratingArguments}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGeneratingArguments ? (
+                <>
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span>Generating...</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span>Generate</span>
+                </>
+              )}
+            </button>
           </div>
+
+          {/* Right side: Write/Verify toggle button */}
           <button
-            onClick={() => generateArguments(true)}
-            disabled={isGeneratingArguments}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => setWorkMode(workMode === 'verify' ? 'write' : 'verify')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+              workMode === 'verify'
+                ? 'text-white bg-blue-600 hover:bg-blue-700'
+                : 'text-white bg-emerald-600 hover:bg-emerald-700'
+            }`}
           >
-            {isGeneratingArguments ? (
+            {workMode === 'verify' ? (
               <>
-                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
-                <span>Generating...</span>
+                <span>Write</span>
               </>
             ) : (
               <>
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span>Generate</span>
+                <span>Verify</span>
               </>
             )}
           </button>

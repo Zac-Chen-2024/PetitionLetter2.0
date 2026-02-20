@@ -89,6 +89,9 @@ export type ArgumentViewMode = 'list' | 'graph';
 // Page navigation types
 export type PageType = 'mapping' | 'materials' | 'writing';
 
+// Work mode types (verify vs write)
+export type WorkMode = 'verify' | 'write';
+
 // Selection state for creating snippets
 export interface SelectionState {
   isSelecting: boolean;

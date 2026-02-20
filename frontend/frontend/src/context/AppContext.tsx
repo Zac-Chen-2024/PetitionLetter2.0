@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import type { FocusState, Connection, ElementPosition, Snippet, ViewMode, ArgumentViewMode, SelectionState, BoundingBox, Argument, SubArgument, WritingEdge, LetterSection, Position, ArgumentClaimType, ArgumentStatus, LLMProvider, PageType } from '../types';
+import type { FocusState, Connection, ElementPosition, Snippet, ViewMode, ArgumentViewMode, SelectionState, BoundingBox, Argument, SubArgument, WritingEdge, LetterSection, Position, ArgumentClaimType, ArgumentStatus, LLMProvider, PageType, WorkMode } from '../types';
 import { legalStandards } from '../data/legalStandards';
 import { getMaterialTypeColor, STANDARD_KEY_TO_ID } from '../constants/colors';
 import { apiClient } from '../services/api';
@@ -295,6 +295,12 @@ interface AppContextType {
   // ============================================
   currentPage: PageType;
   setCurrentPage: (page: PageType) => void;
+
+  // ============================================
+  // Work Mode (Verify vs Write)
+  // ============================================
+  workMode: WorkMode;
+  setWorkMode: (mode: WorkMode) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -644,6 +650,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Page navigation state
   const [currentPage, setCurrentPage] = useState<PageType>('mapping');
 
+  // Work mode state (verify vs write)
+  const [workMode, setWorkMode] = useState<WorkMode>('verify');
+
   const setLlmProvider = useCallback((provider: LLMProvider) => {
     setLlmProviderState(provider);
     localStorage.setItem(STORAGE_KEY_LLM_PROVIDER, provider);
@@ -708,10 +717,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isMerging, setIsMerging] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState<{ current: number; total: number; currentExhibit?: string } | null>(null);
 
-  // Argument view mode (list vs graph)
+  // Argument view mode (list vs graph) - default to graph
   const [argumentViewMode, setArgumentViewModeState] = useState<ArgumentViewMode>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_ARGUMENT_VIEW_MODE);
-    return (saved as ArgumentViewMode) || 'list';
+    return (saved as ArgumentViewMode) || 'graph';
   });
 
   // Argument graph node positions (for graph view)
@@ -1771,6 +1780,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Page Navigation
     currentPage,
     setCurrentPage,
+    // Work Mode
+    workMode,
+    setWorkMode,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

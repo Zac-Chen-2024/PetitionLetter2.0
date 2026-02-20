@@ -635,20 +635,17 @@ export function EvidenceCardPool() {
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
-      <div className="flex-shrink-0 px-4 py-3 bg-white border-b border-slate-200">
+      <div className="flex-shrink-0 px-4 py-2 bg-white border-b border-slate-200">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">{t('evidence.title')}</h2>
-          <span className="text-xs text-slate-500">
-            {t('evidence.snippets', { count: snippets.length })}
-          </span>
-        </div>
-        <div className="flex items-center justify-between mt-1">
-          <p className="text-xs text-slate-500">
-            {t('evidence.dragToConnect')}
-          </p>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">{t('evidence.title')}</h2>
+            <p className="text-xs text-slate-500">
+              {t('evidence.snippets', { count: snippets.length })}
+            </p>
+          </div>
           <button
             onClick={() => setShowGraphModal(true)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
             title="View Relationship Graph"
           >
             <GraphIcon />
@@ -709,22 +706,6 @@ export function EvidenceCardPool() {
           </>
         )}
       </div>
-
-      {/* Focus mode indicator */}
-      {focusState.type !== 'none' && (
-        <div className="flex-shrink-0 px-4 py-2 bg-slate-900 text-white text-xs">
-          <span className="font-medium">{t('evidence.focusMode')}</span>{' '}
-          {focusState.type === 'snippet' && t('evidence.focusSnippet')}
-          {focusState.type === 'standard' && t('evidence.focusStandard')}
-          {focusState.type === 'document' && t('evidence.focusDocument')}
-          <button
-            onClick={() => {}}
-            className="ml-2 underline hover:no-underline"
-          >
-            {t('evidence.clearFocus')}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

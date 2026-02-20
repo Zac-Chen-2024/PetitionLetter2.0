@@ -10,9 +10,9 @@ import {
   MaterialOrganization,
   WritingCanvas,
   LanguageSwitcher,
-  ArgumentAssembly,
   ArgumentGraph,
 } from './components';
+import { LetterPanel } from './components/LetterPanel';
 
 // Error Boundary for debugging
 interface ErrorBoundaryState {
@@ -48,10 +48,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 }
 
 function AppContent() {
-  const { viewMode, argumentViewMode, currentPage, setCurrentPage } = useApp();
+  const { viewMode, currentPage, setCurrentPage, workMode } = useApp();
   const { t } = useTranslation();
 
-  // Render the appropriate view based on viewMode
+  // Render the appropriate view based on viewMode and workMode
   const renderMappingView = () => {
     switch (viewMode) {
       case 'sankey':
@@ -62,6 +62,39 @@ function AppContent() {
         );
       case 'line':
       default:
+        // Write mode: Evidence Cards + PDF (split) | Writing Tree | Letter Panel
+        if (workMode === 'write') {
+          return (
+            <>
+              {/* Panel: Evidence Cards + PDF Preview (split vertically) */}
+              <div className="w-[20%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col">
+                {/* Top: Evidence Cards (50%) */}
+                <div className="h-1/2 border-b border-slate-200 overflow-hidden">
+                  <EvidenceCardPool />
+                </div>
+                {/* Bottom: PDF Preview (50%) */}
+                <div className="h-1/2 overflow-hidden">
+                  <DocumentViewer compact />
+                </div>
+              </div>
+
+              {/* Panel: Writing Tree (flex) */}
+              <div className="flex-1 bg-white overflow-hidden">
+                <ArgumentGraph />
+              </div>
+
+              {/* Panel: Letter Panel (480px) */}
+              <div className="w-[480px] flex-shrink-0 border-l border-slate-200 overflow-hidden">
+                <LetterPanel className="h-full" />
+              </div>
+
+              {/* SVG Connection Lines (rendered on top) */}
+              <ConnectionLines />
+            </>
+          );
+        }
+
+        // Verify mode (default): Document Viewer | Evidence Cards | Writing Tree
         return (
           <>
             {/* Panel 2: Evidence Cards (20%) */}
@@ -69,13 +102,9 @@ function AppContent() {
               <EvidenceCardPool />
             </div>
 
-            {/* Panel 3: Writing Tree (60%) - list or graph view */}
+            {/* Panel 3: Writing Tree (60%) */}
             <div className="w-[60%] flex-shrink-0 bg-white overflow-hidden">
-              {argumentViewMode === 'list' ? (
-                <ArgumentAssembly />
-              ) : (
-                <ArgumentGraph />
-              )}
+              <ArgumentGraph />
             </div>
 
             {/* SVG Connection Lines (rendered on top) */}
@@ -142,12 +171,14 @@ function AppContent() {
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Panel 1: Document Viewer (20%) - z-0 to stay below connection lines */}
-        <div className="w-[20%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0">
-          <DocumentViewer />
-        </div>
+        {/* Panel 1: Document Viewer (20%) - only in Verify mode */}
+        {workMode === 'verify' && (
+          <div className="w-[20%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0 transition-all duration-300">
+            <DocumentViewer />
+          </div>
+        )}
 
-        {/* Right side: changes based on view mode */}
+        {/* Right side: changes based on view mode and work mode */}
         {renderMappingView()}
       </div>
     </div>
