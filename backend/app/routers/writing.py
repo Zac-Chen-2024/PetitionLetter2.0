@@ -1,7 +1,8 @@
 """
-Writing Router - 两步写作 API
+Writing Router - 写作 API
 
-/api/write/v2 端点
+/api/write/v2 端点 - 原版两步写作（Snippet 级别溯源）
+/api/write/v3 端点 - SubArgument 感知写作（完整溯源链）
 """
 
 from fastapi import APIRouter, HTTPException
@@ -252,3 +253,166 @@ async def get_available_standards():
         "eb1a": EB1A_STANDARDS,
         "l1": L1_STANDARDS
     }
+
+
+# ==================== V3 API - SubArgument 感知写作 ====================
+
+from app.services.petition_writer_v3 import (
+    write_petition_section_v3,
+    load_subargument_context,
+    save_writing_v3,
+    load_latest_writing_v3
+)
+
+router_v3 = APIRouter(prefix="/api/write/v3", tags=["Writing V3"])
+
+
+class WriteV3Request(BaseModel):
+    """V3 写作请求"""
+    argument_ids: Optional[List[str]] = None  # 可选，指定要生成的 Argument IDs
+    style: str = "legal"
+    additional_instructions: Optional[str] = None
+
+
+class SentenceWithProvenanceV3(BaseModel):
+    """带完整溯源的句子"""
+    text: str
+    snippet_ids: List[str]
+    subargument_id: Optional[str] = None
+    argument_id: Optional[str] = None
+    exhibit_refs: List[str] = []
+    sentence_type: str = "body"  # opening, body, closing
+
+
+class ProvenanceIndex(BaseModel):
+    """溯源索引"""
+    by_subargument: Dict[str, List[int]] = {}
+    by_argument: Dict[str, List[int]] = {}
+    by_snippet: Dict[str, List[int]] = {}
+
+
+class ValidationResult(BaseModel):
+    """验证结果"""
+    total_sentences: int
+    traced_sentences: int
+    warnings: List[str] = []
+
+
+class WriteV3Response(BaseModel):
+    """V3 写作响应"""
+    success: bool
+    section: str
+    paragraph_text: str
+    sentences: List[SentenceWithProvenanceV3]
+    provenance_index: ProvenanceIndex
+    validation: ValidationResult
+    error: Optional[str] = None
+
+
+@router_v3.post("/{project_id}/{standard_key}", response_model=WriteV3Response)
+async def write_petition_v3(
+    project_id: str,
+    standard_key: str,
+    request: WriteV3Request = None
+):
+    """
+    V3 写作端点 - SubArgument 感知的写作
+
+    基于 SubArgument 结构生成内容，输出包含完整溯源链：
+    句子 → SubArgument → Argument → Standard
+
+    Args:
+        project_id: 项目 ID
+        standard_key: 标准 key (如 "membership", "leading_role")
+        request: 写作请求参数
+
+    Returns:
+        WriteV3Response: 包含段落文本、句子列表、溯源索引
+    """
+    try:
+        req = request or WriteV3Request()
+
+        # 执行 V3 写作
+        result = await write_petition_section_v3(
+            project_id=project_id,
+            standard_key=standard_key,
+            argument_ids=req.argument_ids,
+            additional_instructions=req.additional_instructions
+        )
+
+        if not result.get("success"):
+            return WriteV3Response(
+                success=False,
+                section=standard_key,
+                paragraph_text="",
+                sentences=[],
+                provenance_index=ProvenanceIndex(),
+                validation=ValidationResult(total_sentences=0, traced_sentences=0),
+                error=result.get("error", "Unknown error")
+            )
+
+        # 保存结果
+        save_writing_v3(project_id, standard_key, result)
+
+        return WriteV3Response(
+            success=True,
+            section=result["section"],
+            paragraph_text=result["paragraph_text"],
+            sentences=[SentenceWithProvenanceV3(**s) for s in result["sentences"]],
+            provenance_index=ProvenanceIndex(**result.get("provenance_index", {})),
+            validation=ValidationResult(**result.get("validation", {}))
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router_v3.get("/{project_id}/{standard_key}")
+async def get_writing_v3(project_id: str, standard_key: str):
+    """
+    获取已生成的 V3 写作结果
+    """
+    try:
+        result = load_latest_writing_v3(project_id, standard_key)
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No V3 writing found for {standard_key}"
+            )
+
+        return {
+            "success": True,
+            **result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router_v3.get("/{project_id}/{standard_key}/context")
+async def get_subargument_context(
+    project_id: str,
+    standard_key: str,
+    argument_ids: str = None
+):
+    """
+    获取用于写作的 SubArgument 上下文
+
+    用于调试和预览将要发送给 LLM 的数据
+    """
+    try:
+        arg_ids = argument_ids.split(",") if argument_ids else None
+        context = load_subargument_context(project_id, standard_key, arg_ids)
+
+        return {
+            "success": True,
+            "context": context,
+            "argument_count": len(context.get("arguments", [])),
+            "subargument_count": sum(
+                len(a.get("sub_arguments", []))
+                for a in context.get("arguments", [])
+            )
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

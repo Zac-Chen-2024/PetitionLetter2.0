@@ -315,21 +315,44 @@ export interface WritingEdge {
   createdAt: Date;
 }
 
-// Sentence with provenance information
+// Sentence with provenance information (V3: SubArgument-aware)
 export interface SentenceWithProvenance {
   text: string;
-  snippet_ids: string[];  // IDs of source snippets
+  snippet_ids: string[];           // IDs of source snippets
+  subargument_id?: string | null;  // V3: Source SubArgument
+  argument_id?: string | null;     // V3: Source Argument
+  exhibit_refs?: string[];         // V3: Exhibit references [F-1, F-2]
+  sentence_type?: 'opening' | 'body' | 'closing';  // V3: Sentence position
+  isEdited?: boolean;              // V3: Has been manually edited
+  originalText?: string;           // V3: Original text before edit
 }
 
-// Letter section for petition document
+// Provenance index for fast lookups
+export interface ProvenanceIndex {
+  bySubArgument: Record<string, number[]>;  // subarg_id -> sentence indices
+  byArgument: Record<string, number[]>;     // arg_id -> sentence indices
+  bySnippet: Record<string, number[]>;      // snippet_id -> sentence indices
+}
+
+// Letter section for petition document (V3: with SubArgument mapping)
 export interface LetterSection {
   id: string;
   title: string;
-  standardId?: string;   // Link to EB-1A standard
+  standardId?: string;                      // Link to EB-1A standard
   content: string;
   isGenerated?: boolean;
   order?: number;
-  sentences?: SentenceWithProvenance[];  // Sentences with provenance for highlighting
+  sentences?: SentenceWithProvenance[];     // Sentences with provenance for highlighting
+
+  // V3: SubArgument-level provenance
+  provenanceIndex?: ProvenanceIndex;        // Fast lookup index
+
+  // V3: Edit tracking
+  isEdited?: boolean;
+  lastEditedAt?: Date;
+
+  // V3: UI state
+  isExpanded?: boolean;
 }
 
 // ============================================

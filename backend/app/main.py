@@ -7,7 +7,7 @@ from app.db.database import engine, Base, SessionLocal
 from app.routers.pipeline import router as pipeline_router
 from app.routers.projects import router as projects_router
 from app.routers.highlight import router as highlight_router
-from app.routers.writing import router as writing_router
+from app.routers.writing import router as writing_router, router_v3 as writing_v3_router
 from app.routers.provenance import router as provenance_router
 from app.routers.data import router as data_router
 from app.routers.analysis import router as analysis_router
@@ -115,6 +115,7 @@ app.include_router(pipeline_router)
 app.include_router(projects_router)
 app.include_router(highlight_router)
 app.include_router(writing_router)
+app.include_router(writing_v3_router)
 app.include_router(provenance_router)
 app.include_router(data_router)
 app.include_router(analysis_router)

@@ -323,54 +323,101 @@ const initialArguments: Argument[] = [];
 // Initial writing edges - empty, will be created via drag and drop
 const initialWritingEdges: WritingEdge[] = [];
 
-// Initial letter sections
+// Initial letter sections - V3 format with SubArgument provenance
 const initialLetterSections: LetterSection[] = [
   {
-    id: 'sec-intro',
-    title: 'I. Introduction',
-    content: 'Dr. Ming Zhang is a distinguished researcher in the field of artificial intelligence, with remarkable achievements in machine learning and natural language processing. This petition will demonstrate that the applicant meets the criteria for EB-1A extraordinary ability.',
+    id: 'section-membership',
+    title: 'Membership',
+    standardId: 'membership',
+    content: "Ms. Qu satisfies the criterion for membership in associations in the field of endeavor that require outstanding achievements of their members, as evidenced by her selective admission to the prestigious Shanghai Fitness Bodybuilding Association. Ms. Qu's membership was granted only after a formal application and review process, as detailed in the Association's implementation guidelines [Exhibit C2, p.2]. This membership is reserved for senior management of prominent industry enterprises who have devoted many years to their specialty, and her admission was personally reviewed and certified by the Association's Vice President and other senior experts [Exhibit C2, p.3]. The Association is a significant industry body that provides critical services to its members, including market information, technology consultation, and legal aid [Exhibit C4, p.2]. It holds substantial authority, as it formulates industry quality specifications, service standards, and participates in setting product standards, demonstrating its role in governing the profession [Exhibit C4, p.3]. Its formal governance structure, including a Council elected through a re-election meeting, further confirms its standing as a major professional organization [Exhibit C5, p.2]. The Association's leadership includes individuals of the highest caliber, such as Ping Zhang, a bodybuilding athlete widely recognized for winning the first gold medal for China in the Asian Bodybuilding and Fitness Championships and for holding the record for the most gold medals [Exhibit C6, p.2]. Therefore, Ms. Qu's membership in this selective, authoritative association, which is comprised of and led by distinguished industry leaders, clearly meets the regulatory standard for membership based on outstanding achievements.",
     isGenerated: true,
-    order: 1,
-  },
-  {
-    id: 'sec-awards',
-    title: 'II. Awards - Internationally Recognized Awards',
-    standardId: 'std-awards',
-    content: 'The applicant received the NeurIPS Best Paper Award in 2023, one of the most influential international conferences in artificial intelligence. This award fully demonstrates the applicant\'s outstanding contribution to the field.\n\nSee Exhibit A.',
-    isGenerated: true,
-    order: 2,
-  },
-  {
-    id: 'sec-salary',
-    title: 'III. High Salary',
-    standardId: 'std-salary',
-    content: 'The applicant\'s current annual salary is $280,000, placing them in the top 5% of the industry. According to the Bureau of Labor Statistics, the median annual salary for software engineers is $120,000, and the applicant\'s salary far exceeds this level.\n\nSee Exhibit B.',
-    isGenerated: true,
-    order: 3,
-  },
-  {
-    id: 'sec-leading',
-    title: 'IV. Leading Role - Critical Leadership Position',
-    standardId: 'std-leading',
-    content: 'The applicant serves as the head of the AI research team, managing 15 researchers and overseeing the technical direction of the company\'s core AI products. Under their leadership, the team has successfully delivered multiple critical projects.\n\nSee Exhibit C.',
-    isGenerated: true,
-    order: 4,
-  },
-  {
-    id: 'sec-contribution',
-    title: 'V. Original Contribution',
-    standardId: 'std-contribution',
-    content: 'The applicant\'s innovative algorithms have been cited by 500+ academic papers, and their open-source code is widely used by researchers globally. This work has made significant contributions to advancing the AI field.\n\nSee Exhibit D.',
-    isGenerated: false,
-    order: 5,
-  },
-  {
-    id: 'sec-conclusion',
-    title: 'VI. Conclusion',
-    content: 'In summary, the applicant\'s outstanding achievements in artificial intelligence fully meet the EB-1A criteria. We respectfully request USCIS to approve this petition.',
-    isGenerated: false,
-    order: 6,
-  },
+    order: 0,
+    sentences: [
+      {
+        text: "Ms. Qu satisfies the criterion for membership in associations in the field of endeavor that require outstanding achievements of their members, as evidenced by her selective admission to the prestigious Shanghai Fitness Bodybuilding Association.",
+        snippet_ids: [],
+        subargument_id: null,
+        argument_id: "arg-001",
+        exhibit_refs: [],
+        sentence_type: "opening"
+      },
+      {
+        text: "Ms. Qu's membership was granted only after a formal application and review process, as detailed in the Association's implementation guidelines [Exhibit C2, p.2].",
+        snippet_ids: ["snip_e983ce38"],
+        subargument_id: "subarg-7308a09f",
+        argument_id: "arg-001",
+        exhibit_refs: ["C2-2"],
+        sentence_type: "body"
+      },
+      {
+        text: "This membership is reserved for senior management of prominent industry enterprises who have devoted many years to their specialty, and her admission was personally reviewed and certified by the Association's Vice President and other senior experts [Exhibit C2, p.3].",
+        snippet_ids: ["snip_356aa20e", "snip_356f5344"],
+        subargument_id: "subarg-7308a09f",
+        argument_id: "arg-001",
+        exhibit_refs: ["C2-3"],
+        sentence_type: "body"
+      },
+      {
+        text: "The Association is a significant industry body that provides critical services to its members, including market information, technology consultation, and legal aid [Exhibit C4, p.2].",
+        snippet_ids: ["snip_5361adec"],
+        subargument_id: "subarg-058fb8ea",
+        argument_id: "arg-001",
+        exhibit_refs: ["C4-2"],
+        sentence_type: "body"
+      },
+      {
+        text: "It holds substantial authority, as it formulates industry quality specifications, service standards, and participates in setting product standards, demonstrating its role in governing the profession [Exhibit C4, p.3].",
+        snippet_ids: ["snip_b2e54f44"],
+        subargument_id: "subarg-058fb8ea",
+        argument_id: "arg-001",
+        exhibit_refs: ["C4-3"],
+        sentence_type: "body"
+      },
+      {
+        text: "Its formal governance structure, including a Council elected through a re-election meeting, further confirms its standing as a major professional organization [Exhibit C5, p.2].",
+        snippet_ids: ["snip_d7c723ab"],
+        subargument_id: "subarg-058fb8ea",
+        argument_id: "arg-001",
+        exhibit_refs: ["C5-2"],
+        sentence_type: "body"
+      },
+      {
+        text: "The Association's leadership includes individuals of the highest caliber, such as Ping Zhang, a bodybuilding athlete widely recognized for winning the first gold medal for China in the Asian Bodybuilding and Fitness Championships and for holding the record for the most gold medals [Exhibit C6, p.2].",
+        snippet_ids: ["snip_d3d1a25d"],
+        subargument_id: "subarg-14536b07",
+        argument_id: "arg-001",
+        exhibit_refs: ["C6-2"],
+        sentence_type: "body"
+      },
+      {
+        text: "Therefore, Ms. Qu's membership in this selective, authoritative association, which is comprised of and led by distinguished industry leaders, clearly meets the regulatory standard for membership based on outstanding achievements.",
+        snippet_ids: [],
+        subargument_id: null,
+        argument_id: "arg-001",
+        exhibit_refs: [],
+        sentence_type: "closing"
+      }
+    ],
+    provenanceIndex: {
+      bySubArgument: {
+        "subarg-7308a09f": [1, 2],
+        "subarg-058fb8ea": [3, 4, 5],
+        "subarg-14536b07": [6]
+      },
+      byArgument: {
+        "arg-001": [0, 1, 2, 3, 4, 5, 6, 7]
+      },
+      bySnippet: {
+        "snip_e983ce38": [1],
+        "snip_356aa20e": [2],
+        "snip_356f5344": [2],
+        "snip_5361adec": [3],
+        "snip_b2e54f44": [4],
+        "snip_d7c723ab": [5],
+        "snip_d3d1a25d": [6]
+      }
+    }
+  }
 ];
 
 // Initial node positions for writing canvas
@@ -1337,13 +1384,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
 
         try {
+          // Use V3 API for SubArgument-aware generation
           const response = await apiClient.post<{
             success: boolean;
             section: string;
             paragraph_text: string;
-            sentences: Array<{ text: string; snippet_ids: string[] }>;
-            snippet_count: number;
-          }>(`/write/v2/${projectId}/${section}`, {});
+            sentences: Array<{
+              text: string;
+              snippet_ids: string[];
+              subargument_id?: string | null;
+              argument_id?: string | null;
+              exhibit_refs?: string[];
+              sentence_type?: 'opening' | 'body' | 'closing';
+            }>;
+            provenance_index?: {
+              by_subargument: Record<string, number[]>;
+              by_argument: Record<string, number[]>;
+              by_snippet: Record<string, number[]>;
+            };
+            validation?: {
+              total_sentences: number;
+              traced_sentences: number;
+              warnings: string[];
+            };
+          }>(`/write/v3/${projectId}/${section}`, {});
 
           if (response.success && response.paragraph_text) {
             generatedSections.push({
@@ -1354,10 +1418,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
               isGenerated: true,
               order: i,
               sentences: response.sentences,
+              provenanceIndex: response.provenance_index,
             });
           }
         } catch (sectionErr) {
-          // Skip sections that fail (may not have snippets)
+          // Skip sections that fail (may not have snippets/arguments)
           console.log(`Skipped section ${section}:`, sectionErr);
         }
       }
