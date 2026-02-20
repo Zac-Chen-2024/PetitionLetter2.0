@@ -931,6 +931,36 @@ export function ArgumentGraph() {
     };
   }, [handleWheel]);
 
+  // Auto-center on SubArgument when focused from LetterPanel
+  useEffect(() => {
+    if (focusState.type !== 'subargument' || !focusState.id) return;
+
+    // Find the focused SubArgument node
+    const targetNode = subArgumentNodes.find(n => n.id === focusState.id);
+    if (!targetNode) return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Get container dimensions
+    const containerRect = container.getBoundingClientRect();
+    const containerHeight = containerRect.height;
+
+    // Set scale to 80%
+    const targetScale = 0.8;
+    setScale(targetScale);
+
+    // Calculate offset to center the node vertically only
+    // Node world position -> screen position: screenY = (nodeY * scale) + offsetY
+    // We want: screenY = containerHeight / 2
+    // So: offsetY = containerHeight / 2 - (nodeY * scale)
+    const targetY = targetNode.position.y;
+    const newOffsetY = (containerHeight / 2) - (targetY * targetScale);
+
+    // Keep horizontal offset at default (0) like auto-arrange button
+    setOffset({ x: 0, y: newOffsetY });
+  }, [focusState.type, focusState.id, subArgumentNodes]);
+
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
