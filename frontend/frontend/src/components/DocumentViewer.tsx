@@ -152,6 +152,9 @@ interface PDFViewerProps {
   snippets: Snippet[];
   isSelectMode: boolean;
   onSelectionComplete: (boundingBox: BoundingBox, documentId: string) => void;
+  compact?: boolean;
+  scale?: number;
+  onScaleChange?: (scale: number) => void;
 }
 
 function PDFViewer({
@@ -161,12 +164,19 @@ function PDFViewer({
   snippets,
   isSelectMode,
   onSelectionComplete,
+  compact = false,
+  scale: externalScale,
+  onScaleChange,
 }: PDFViewerProps) {
   // Use selectedSnippetId for PDF highlight (not focusState which is for filtering)
   const { selectedSnippetId, setSelectedSnippetId, setSelectedDocumentId } = useApp();
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState<number>(0);
-  const [scale, setScale] = useState(1);
+  const [internalScale, setInternalScale] = useState(1);
+
+  // Use external scale if provided (compact mode), otherwise internal
+  const scale = externalScale !== undefined ? externalScale : internalScale;
+  const setScale = onScaleChange || setInternalScale;
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [containerWidth, setContainerWidth] = useState<number>(0);
@@ -202,16 +212,38 @@ function PDFViewer({
     };
   }, []);
 
-  // Auto-scroll to snippet's page when selectedSnippetId changes
+  // Auto-scroll to center snippet's bounding box within the container
   useEffect(() => {
-    if (selectedSnippetId) {
+    if (selectedSnippetId && containerRef.current) {
       const snippet = snippets.find(s => s.id === selectedSnippetId);
-      if (snippet && snippet.boundingBox?.page && containerRef.current) {
+      if (snippet && snippet.boundingBox?.page) {
+        const container = containerRef.current;
         const targetPage = snippet.boundingBox.page;
-        // Find page elements by data attribute
-        const pageElement = containerRef.current.querySelector(`[data-page="${targetPage}"]`);
+        const pageElement = container.querySelector(`[data-page="${targetPage}"]`) as HTMLElement;
+
         if (pageElement) {
-          pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const containerRect = container.getBoundingClientRect();
+          const pageRect = pageElement.getBoundingClientRect();
+
+          // 页面顶部相对于容器可视区域的位置
+          const pageTopInContainer = pageRect.top - containerRect.top;
+
+          // 页面在滚动内容中的绝对位置
+          const pageAbsoluteTop = container.scrollTop + pageTopInContainer;
+
+          // snippet 中心在页面内的比例 (0-1)
+          const snippetCenterRatio = (snippet.boundingBox.y + snippet.boundingBox.height / 2) / 1000;
+
+          // snippet 中心的绝对 Y 位置
+          const snippetAbsoluteY = pageAbsoluteTop + (pageRect.height * snippetCenterRatio);
+
+          // 目标滚动位置（使 snippet 居中）
+          const targetScroll = snippetAbsoluteY - (containerRect.height / 2);
+
+          container.scrollTo({
+            top: Math.max(0, targetScroll),
+            behavior: 'smooth'
+          });
         }
       }
     }
@@ -256,34 +288,36 @@ function PDFViewer({
 
   return (
     <div className="flex flex-col h-full">
-      {/* PDF Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-100 border-b border-slate-200">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-slate-600">
-            {numPages > 0 ? `${numPages} pages` : 'Loading...'}
-          </span>
-          {numPages > PAGES_TO_RENDER && (
-            <span className="text-xs text-slate-400">
-              (showing first {PAGES_TO_RENDER})
+      {/* PDF Toolbar - hidden in compact mode (controls moved to header) */}
+      {!compact && (
+        <div className="flex items-center justify-between px-3 py-2 bg-slate-100 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-600">
+              {numPages > 0 ? `${numPages} pages` : 'Loading...'}
             </span>
-          )}
+            {numPages > PAGES_TO_RENDER && (
+              <span className="text-xs text-slate-400">
+                (showing first {PAGES_TO_RENDER})
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setScale((s: number) => Math.max(0.5, s - 0.25))}
+              className="px-2 py-1 text-sm bg-white border rounded hover:bg-slate-50"
+            >
+              -
+            </button>
+            <span className="text-sm text-slate-600">{Math.round(scale * 100)}%</span>
+            <button
+              onClick={() => setScale((s: number) => Math.min(2, s + 0.25))}
+              className="px-2 py-1 text-sm bg-white border rounded hover:bg-slate-50"
+            >
+              +
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setScale(s => Math.max(0.5, s - 0.25))}
-            className="px-2 py-1 text-sm bg-white border rounded hover:bg-slate-50"
-          >
-            -
-          </button>
-          <span className="text-sm text-slate-600">{Math.round(scale * 100)}%</span>
-          <button
-            onClick={() => setScale(s => Math.min(2, s + 0.25))}
-            className="px-2 py-1 text-sm bg-white border rounded hover:bg-slate-50"
-          >
-            +
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* PDF Content with Continuous Scrolling */}
       <div
@@ -378,6 +412,7 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
     boundingBox: BoundingBox;
     documentId: string;
   } | null>(null);
+  const [pdfScale, setPdfScale] = useState(1);
 
   // Extraction state management
   const [extractionStates, setExtractionStates] = useState<Record<string, ExtractionState>>({});
@@ -543,7 +578,24 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
               {compact ? (selectedExhibit?.name || 'Select an exhibit') : `${exhibits.length} exhibits`}
             </p>
           </div>
-          {!compact && (
+          {compact ? (
+            /* Compact mode: show zoom controls in header */
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPdfScale(s => Math.max(0.5, s - 0.25))}
+                className="w-6 h-6 flex items-center justify-center text-xs bg-slate-100 border border-slate-200 rounded hover:bg-slate-200"
+              >
+                -
+              </button>
+              <span className="text-xs text-slate-500 w-10 text-center">{Math.round(pdfScale * 100)}%</span>
+              <button
+                onClick={() => setPdfScale(s => Math.min(2, s + 0.25))}
+                className="w-6 h-6 flex items-center justify-center text-xs bg-slate-100 border border-slate-200 rounded hover:bg-slate-200"
+              >
+                +
+              </button>
+            </div>
+          ) : (
             <button
               onClick={() => setIsSelectMode(!isSelectMode)}
               className={`
@@ -725,6 +777,9 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
             snippets={selectedSnippets}
             isSelectMode={isSelectMode}
             onSelectionComplete={handleSelectionComplete}
+            compact={compact}
+            scale={compact ? pdfScale : undefined}
+            onScaleChange={compact ? setPdfScale : undefined}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-slate-500">
