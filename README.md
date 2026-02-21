@@ -1,6 +1,6 @@
 # PetitionLetter
 
-L-1 签证申请文书智能生成系统 | L-1 Visa Petition Letter AI Generator
+EB-1A / L-1 签证申请文书智能生成系统 | Immigration Petition Letter AI Generator
 
 [English](#english) | [中文](#中文)
 
@@ -10,105 +10,118 @@ L-1 签证申请文书智能生成系统 | L-1 Visa Petition Letter AI Generator
 
 ### Overview
 
-A 4-stage document processing pipeline for generating L-1 visa petition letters. The system processes supporting documents through OCR, analyzes content with LLM, extracts relationships, and generates professional petition paragraphs with proper exhibit citations.
+An intelligent legal document generation system for EB-1A (Extraordinary Ability) and L-1 visa petition letters. The system processes supporting documents through OCR, extracts evidence with LLM, organizes arguments according to legal standards, and generates professional petition paragraphs with proper exhibit citations and full provenance tracking.
+
+### Key Features
+
+- **Multi-stage Evidence Pipeline**: OCR → Extraction → Argument Organization → Letter Generation
+- **Legal Standards Compliance**: Arguments organized per 8 C.F.R. §204.5(h)(3) criteria
+- **Visual Argument Tree**: Interactive graph showing Arguments → SubArguments → Snippets hierarchy
+- **Bidirectional Focus**: Click any element to highlight related items across all panels
+- **Full Provenance**: Every sentence traces back to source exhibits with page/paragraph references
+- **PDF Magnifier**: 2x zoom lens for detailed document inspection
 
 ### Architecture
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Stage 1   │    │   Stage 2   │    │   Stage 3   │    │   Stage 4   │
-│     OCR     │ →  │  L1 Analyze │ →  │ L2 Relation │ →  │  L3 Write   │
-│   Extract   │    │   Content   │    │   Extract   │    │  Petition   │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-     ↓                   ↓                   ↓                   ↓
-  PDF/Image →      Entities &      →   Evidence      →   [Exhibit X]
-  to Text          Key Points          Chains            Citations
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              PetitionLetter System                            │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐       │
+│  │   Stage 1   │   │   Stage 2   │   │   Stage 3   │   │   Stage 4   │       │
+│  │     OCR     │ → │  Evidence   │ → │  Argument   │ → │   Letter    │       │
+│  │  Extraction │   │  Extraction │   │Organization │   │ Generation  │       │
+│  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘       │
+│        ↓                 ↓                 ↓                 ↓                │
+│    PDF/Image        Snippets +        Arguments +      Paragraphs +          │
+│    → Text           Entities          SubArguments     [Exhibit X] refs      │
+│                                                                               │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                           Frontend (3-Panel Layout)                           │
+│  ┌─────────────────┬─────────────────────────┬─────────────────────┐         │
+│  │  Evidence Cards │      Writing Tree       │    Letter Panel     │         │
+│  │  + PDF Preview  │   (Argument Graph)      │  (Generated Text)   │         │
+│  │      25%        │        flex-1           │       480px         │         │
+│  └─────────────────┴─────────────────────────┴─────────────────────┘         │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| **Backend** | FastAPI, SQLAlchemy, PyMuPDF, Pydantic |
-| **Frontend** | Next.js 16, React 19, Tailwind CSS 4, TypeScript |
-| **OCR** | DeepSeek-OCR (local model) |
-| **LLM** | Ollama + Qwen3:30b-a3b (local inference) |
-| **Database** | SQLite |
+| **Backend** | FastAPI, Pydantic, PyMuPDF |
+| **Frontend** | React 18, TypeScript, Tailwind CSS, Vite |
+| **PDF Rendering** | react-pdf |
+| **LLM Providers** | DeepSeek API, OpenAI API (configurable) |
+| **Storage** | File-based JSON (project data) |
 
-### Quick Start (RunPod A100)
+### EB-1A Standards Supported
 
+| Standard | Code Reference | Description |
+|----------|----------------|-------------|
+| Membership | §204.5(h)(3)(ii) | Membership in associations requiring outstanding achievements |
+| Published Material | §204.5(h)(3)(iii) | Published material about the applicant in major media |
+| Original Contribution | §204.5(h)(3)(v) | Original contributions of major significance |
+| Leading Role | §204.5(h)(3)(viii) | Leading or critical role in distinguished organizations |
+| Awards | §204.5(h)(3)(i) | Nationally or internationally recognized prizes |
+
+### Quick Start
+
+**Backend:**
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/PetitionLetter.git
-cd PetitionLetter
-
-# One-click deployment
-chmod +x deploy.sh
-./deploy.sh
+cd backend
+pip install -r requirements.txt
+cp .env.example .env  # Configure API keys
+uvicorn app.main:app --reload --port 8000
 ```
 
-### External Access (Cloudflare Tunnel)
+**Frontend:**
+```bash
+cd frontend/frontend
+npm install
+npm run dev
+```
 
-For remote access to your RunPod instance:
-
-1. Install cloudflared:
-   ```bash
-   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
-   chmod +x cloudflared
-   ```
-
-2. Run tunnel with your token:
-   ```bash
-   ./cloudflared tunnel run --token <YOUR_TOKEN>
-   ```
-
-3. Configure frontend to use tunnel URL:
-   ```bash
-   # frontend/.env.local
-   NEXT_PUBLIC_API_BASE_URL=https://your-tunnel.domain.com
-   ```
-
-### Configuration
-
-This project runs **100% locally** with no cloud API dependencies.
-
-| Component | Default | Description |
-|-----------|---------|-------------|
-| OCR | DeepSeek-OCR | Local vision model |
-| LLM | Ollama + Qwen3 | Local language model |
-| Storage | SQLite + Files | Local database and file storage |
-
-### API Reference
+### API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/upload` | POST | Upload documents and run OCR |
-| `/api/documents/{project_id}` | GET | List project documents |
-| `/api/analyze/{document_id}` | POST | L1: Analyze document content |
-| `/api/analysis/{document_id}` | GET | Get analysis results |
-| `/api/relationship/{project_id}` | POST | L2: Extract relationships |
-| `/api/write/{project_id}` | POST | L3: Generate petition paragraphs |
-| `/api/health` | GET | Health check |
+| `/api/documents/{project_id}/exhibits` | GET | List project exhibits |
+| `/api/analysis/extract/{project_id}/{exhibit_id}` | POST | Extract snippets from exhibit |
+| `/api/arguments/{project_id}/generate` | POST | Generate arguments with SubArguments |
+| `/api/write/v3/{project_id}/{standard}` | POST | Generate petition paragraph (V3) |
+| `/api/write/v3/{project_id}/edit` | POST | AI-assisted text editing |
 
 ### Project Structure
 
 ```
 PetitionLetter/
-├── backend/                 # FastAPI backend
+├── backend/
 │   ├── app/
-│   │   ├── core/           # Configuration
-│   │   ├── db/             # Database
-│   │   ├── models/         # Data models
-│   │   ├── routers/        # API routes
-│   │   ├── services/       # Business logic
-│   │   └── main.py         # Entry point
-│   ├── .env.example        # Config template
+│   │   ├── routers/           # API routes (documents, arguments, writing)
+│   │   ├── services/          # Business logic
+│   │   │   ├── unified_extractor.py      # Evidence extraction
+│   │   │   ├── legal_argument_organizer.py # LLM + legal standards
+│   │   │   ├── subargument_generator.py  # SubArgument generation
+│   │   │   ├── petition_writer_v3.py     # V3 letter generation
+│   │   │   └── llm_client.py             # Multi-provider LLM client
+│   │   └── main.py
 │   └── requirements.txt
-├── frontend/               # Next.js frontend
+├── frontend/frontend/
 │   ├── src/
-│   ├── .env.example
+│   │   ├── components/
+│   │   │   ├── ArgumentGraph.tsx    # Writing Tree visualization
+│   │   │   ├── EvidenceCardPool.tsx # Evidence cards
+│   │   │   ├── LetterPanel.tsx      # Generated letter display
+│   │   │   ├── DocumentViewer.tsx   # PDF viewer with magnifier
+│   │   │   └── Magnifier.tsx        # PDF zoom lens
+│   │   ├── context/AppContext.tsx   # Global state management
+│   │   └── types/index.ts           # TypeScript definitions
 │   └── package.json
-├── deploy.sh               # One-click deployment (RunPod)
+├── Doc/
+│   └── 开发日志.md              # Development log (Chinese)
 └── README.md
 ```
 
@@ -118,102 +131,103 @@ PetitionLetter/
 
 ### 项目概述
 
-L-1 签证申请文书智能生成 4 阶段流水线。系统通过 OCR 处理证明材料，使用 LLM 分析内容、提取关系，最终生成带有规范证据引用的申请文书段落。
+EB-1A（杰出人才）及 L-1 签证申请文书智能生成系统。系统通过 OCR 处理证明材料，使用 LLM 提取证据、按法律标准组织论点，最终生成带有规范证据引用和完整溯源链的申请文书段落。
+
+### 核心功能
+
+- **多阶段证据处理流水线**：OCR → 证据提取 → 论点组织 → 文书生成
+- **法律标准合规**：按 8 C.F.R. §204.5(h)(3) 各款要求组织论点
+- **可视化论点树**：交互式图形展示 子论点 → 次级子论点 → 证据片段 层级
+- **双向聚焦联动**：点击任意元素，所有面板高亮关联项
+- **完整溯源链**：每个句子可追溯到源 Exhibit 的具体页码段落
+- **PDF 放大镜**：2 倍放大镜便于查看文档细节
 
 ### 系统架构
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   第1阶段   │    │   第2阶段   │    │   第3阶段   │    │   第4阶段   │
-│     OCR     │ →  │  L1 分析    │ →  │  L2 关系    │ →  │  L3 撰写    │
-│   文字提取  │    │  内容分析   │    │  关系提取   │    │  文书生成   │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           PetitionLetter 系统架构                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐       │
+│  │   第1阶段   │   │   第2阶段   │   │   第3阶段   │   │   第4阶段   │       │
+│  │     OCR     │ → │  证据提取   │ → │  论点组织   │ → │  文书生成   │       │
+│  │   文字识别  │   │   Snippets  │   │  Arguments  │   │  Paragraphs │       │
+│  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘       │
+│                                                                               │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                            前端（三栏布局）                                     │
+│  ┌─────────────────┬─────────────────────────┬─────────────────────┐         │
+│  │   Evidence      │       Writing Tree      │    Letter Panel     │         │
+│  │   Cards         │       (论点图)          │    (生成文书)        │         │
+│  │ + PDF Preview   │                         │                     │         │
+│  │      25%        │        flex-1           │       480px         │         │
+│  └─────────────────┴─────────────────────────┴─────────────────────┘         │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| **后端** | FastAPI, SQLAlchemy, PyMuPDF, Pydantic |
-| **前端** | Next.js 16, React 19, Tailwind CSS 4, TypeScript |
-| **OCR** | DeepSeek-OCR（本地模型） |
-| **LLM** | Ollama + Qwen3:30b-a3b（本地推理） |
-| **数据库** | SQLite |
+| **后端** | FastAPI, Pydantic, PyMuPDF |
+| **前端** | React 18, TypeScript, Tailwind CSS, Vite |
+| **PDF 渲染** | react-pdf |
+| **LLM 服务** | DeepSeek API, OpenAI API（可配置切换） |
+| **存储** | 基于文件的 JSON（项目数据） |
 
-### 快速开始（RunPod A100 部署）
+### 支持的 EB-1A 标准
 
-```bash
-# 克隆仓库
-git clone https://github.com/yourusername/PetitionLetter.git
-cd PetitionLetter
-
-# 一键部署
-chmod +x deploy.sh
-./deploy.sh
-```
-
-### 部署脚本选项
-
-```bash
-./deploy.sh              # 完整部署（首次安装）
-./deploy.sh --start      # 仅启动服务
-./deploy.sh --check      # 检查环境状态
-./deploy.sh --update     # 更新代码和依赖
-```
-
-### 外网访问（Cloudflare Tunnel）
-
-通过 Cloudflare Tunnel 实现远程访问 RunPod 实例：
-
-1. 安装 cloudflared：
-   ```bash
-   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
-   chmod +x cloudflared
-   ```
-
-2. 使用你的 token 运行隧道：
-   ```bash
-   ./cloudflared tunnel run --token <YOUR_TOKEN>
-   ```
-
-3. 配置前端使用隧道地址：
-   ```bash
-   # frontend/.env.local
-   NEXT_PUBLIC_API_BASE_URL=https://your-tunnel.domain.com
-   ```
-
-Token 获取方式：
-1. 登录 https://one.dash.cloudflare.com/
-2. 进入 Networks > Tunnels
-3. 选择对应的 Tunnel，复制 token
-
-### 配置说明（纯本地，无云端 API）
-
-本项目 **100% 本地运行**，无需任何云端 API。
-
-| 组件 | 默认配置 | 说明 |
+| 标准 | 法规引用 | 说明 |
 |------|----------|------|
-| OCR | DeepSeek-OCR | 本地视觉模型 |
-| LLM | Ollama + Qwen3 | 本地语言模型 |
-| 存储 | SQLite + 文件 | 本地数据库和文件存储 |
+| Membership | §204.5(h)(3)(ii) | 要求杰出成就才能加入的协会会员资格 |
+| Published Material | §204.5(h)(3)(iii) | 主要媒体对申请人的报道 |
+| Original Contribution | §204.5(h)(3)(v) | 具有重大意义的原创贡献 |
+| Leading Role | §204.5(h)(3)(viii) | 在著名组织担任领导或关键角色 |
+| Awards | §204.5(h)(3)(i) | 国家或国际认可的奖项 |
 
-### API 文档
+### 快速开始
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/api/upload` | POST | 上传文档并执行 OCR |
-| `/api/documents/{project_id}` | GET | 获取项目文档列表 |
-| `/api/analyze/{document_id}` | POST | L1：分析文档内容 |
-| `/api/analysis/{document_id}` | GET | 获取分析结果 |
-| `/api/relationship/{project_id}` | POST | L2：提取关系 |
-| `/api/write/{project_id}` | POST | L3：生成申请文书段落 |
-| `/api/health` | GET | 健康检查 |
+**后端：**
+```bash
+cd backend
+pip install -r requirements.txt
+cp .env.example .env  # 配置 API 密钥
+uvicorn app.main:app --reload --port 8000
+```
+
+**前端：**
+```bash
+cd frontend/frontend
+npm install
+npm run dev
+```
 
 ### 访问地址
 
-- **前端界面**: http://localhost:3000
+- **前端界面**: http://localhost:5173
 - **后端 API**: http://localhost:8000
 - **API 文档**: http://localhost:8000/docs
+
+### 数据层级结构
+
+```
+Standard (法律标准)
+  └── Argument (子论点)
+        └── SubArgument (次级子论点)
+              └── Snippet (证据片段)
+                    └── Exhibit (原始文档)
+```
+
+### 主要 API 端点
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/api/documents/{project_id}/exhibits` | GET | 获取项目 Exhibit 列表 |
+| `/api/analysis/extract/{project_id}/{exhibit_id}` | POST | 从 Exhibit 提取 Snippets |
+| `/api/arguments/{project_id}/generate` | POST | 生成论点和次级子论点 |
+| `/api/write/v3/{project_id}/{standard}` | POST | V3 文书生成（带溯源） |
+| `/api/write/v3/{project_id}/edit` | POST | AI 辅助文本编辑 |
 
 ---
 
