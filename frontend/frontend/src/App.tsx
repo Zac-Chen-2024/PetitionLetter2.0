@@ -171,9 +171,9 @@ function AppContent() {
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Panel 1: Document Viewer (20%) - only in Verify mode */}
+        {/* Panel 1: Document Viewer (25%) - only in Verify mode */}
         {workMode === 'verify' && (
-          <div className="w-[20%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0 transition-all duration-300">
+          <div className="w-[25%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0 transition-all duration-300">
             <DocumentViewer />
           </div>
         )}

@@ -376,22 +376,40 @@ async def generate_structured_paragraph(
     argument = arguments[0]
     evidence_context = _build_writing_prompt(context)
 
-    system_prompt = """You are a Senior Immigration Attorney writing an EB-1A petition letter.
+    system_prompt = """You are a Senior Immigration Attorney at a top-tier law firm writing an EB-1A petition letter.
 You write persuasive, well-structured legal arguments with precise evidence citations.
-Your writing follows professional legal drafting conventions."""
+Your writing follows professional legal drafting conventions with rich detail and compelling narrative."""
 
-    user_prompt = f"""Write a paragraph for the "{standard.get('name', '')}" criterion ({standard.get('legal_ref', '')}).
+    user_prompt = f"""Write a comprehensive paragraph for the "{standard.get('name', '')}" criterion ({standard.get('legal_ref', '')}).
 
 EVIDENCE STRUCTURE:
 {evidence_context}
 
-REQUIREMENTS:
-1. Opening sentence: State the main legal conclusion
-2. For EACH SubArgument, write 1-3 sentences that:
-   - Draw ONLY from that SubArgument's snippets (use the snippet IDs)
-   - Reference exhibits naturally (e.g., "[Exhibit F-1]")
-   - Support the SubArgument's purpose
-3. Closing sentence: Reinforce why this meets the legal standard
+WRITING REQUIREMENTS:
+
+1. OPENING SENTENCE (CRITICAL):
+   - MUST explicitly cite the regulation: "{standard.get('legal_ref', '')}"
+   - State the main legal conclusion clearly
+   - Example: "The Beneficiary satisfies {standard.get('legal_ref', '')} by demonstrating..."
+
+2. FOR EACH SubArgument, write 3-5 RICH sentences that:
+   - Provide CONTEXT and BACKGROUND (organization history, significance, industry standing)
+   - Include SPECIFIC EVIDENCE with direct citations
+   - When evidence contains important testimony or official language, use BLOCK QUOTES:
+     > "[Exact quote from the document]" [Exhibit X, p.Y]
+   - Use COMPARATIVE ARGUMENTS when relevant ("The Association's membership includes [other distinguished person] who [achievement]...")
+   - Build LAYERED ARGUMENTS ("Not only... but also... Moreover...")
+   - Reference exhibits naturally with page numbers: [Exhibit C-2, p.3]
+
+3. CLOSING SENTENCE:
+   - Reinforce why this clearly meets the legal standard
+   - Use confident, conclusive language
+
+4. ADVANCED TECHNIQUES:
+   - Add organizational/media BACKGROUND: founding year, circulation, awards received
+   - Include NUMERICAL EVIDENCE: membership numbers, circulation figures, years of operation
+   - Use AUTHORITY ENDORSEMENTS: "reviewed and approved by [Title] [Name]"
+   - Employ COMPARATIVE EVIDENCE: other notable members, industry benchmarks
 
 {f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else ""}
 
@@ -400,7 +418,7 @@ Return a JSON object with this EXACT structure:
 {{
     "argument_id": "{argument.get('id', '')}",
     "opening_sentence": {{
-        "text": "opening sentence text",
+        "text": "opening sentence text with explicit legal citation",
         "snippet_ids": []
     }},
     "subargument_paragraphs": [
@@ -408,7 +426,7 @@ Return a JSON object with this EXACT structure:
             "subargument_id": "subarg-xxx",
             "sentences": [
                 {{
-                    "text": "sentence text with [Exhibit X-Y] citations",
+                    "text": "sentence text with [Exhibit X, p.Y] citations. May include block quotes: > \\"exact quote\\" [Exhibit X, p.Y]",
                     "snippet_ids": ["snip_xxx", "snip_yyy"],
                     "exhibit_refs": ["X-Y"]
                 }}
@@ -424,8 +442,11 @@ CRITICAL RULES:
 1. ONLY use snippet_ids from the evidence provided above
 2. Keep SubArgument boundaries clear - each subargument_paragraphs entry corresponds to ONE SubArgument
 3. Every factual claim must reference at least one snippet_id
-4. Use professional legal tone
-5. Return ONLY valid JSON, no markdown or extra text"""
+4. Use professional legal tone with rich, persuasive language
+5. Generate 3-5 sentences per SubArgument (NOT just 1-2)
+6. Include at least one block quote per SubArgument when source material contains direct testimony
+7. Return ONLY valid JSON, no markdown or extra text
+8. OUTPUT MUST BE 100% ENGLISH. If source evidence contains non-English text (Chinese, etc.), TRANSLATE it to English. Do NOT copy non-English characters. Use English translations only (e.g., "The Paper" not "澎湃新闻", "China Sports Daily" not "中国体育报")."""
 
     result = await call_deepseek(
         prompt=user_prompt,
@@ -436,6 +457,134 @@ CRITICAL RULES:
     )
 
     return result
+
+
+def _contains_non_ascii(text: str) -> bool:
+    """Check if text contains non-ASCII characters (Chinese, etc.)"""
+    if not text:
+        return False
+    return any(ord(char) > 127 for char in text)
+
+
+# Known Chinese-to-English translations for media names
+CHINESE_TO_ENGLISH = {
+    "澎湃新闻": "The Paper",
+    "中国体育报": "China Sports Daily",
+    "上海健身健美协会": "Shanghai Fitness Bodybuilding Association",
+    "中国健美协会": "China Bodybuilding Association",
+    "中国举重协会": "China Weightlifting Association",
+    "人民日报": "People's Daily",
+    "新华社": "Xinhua News Agency",
+    "中央电视台": "CCTV",
+    "新浪体育": "Sina Sports",
+    "腾讯体育": "Tencent Sports",
+}
+
+
+def _replace_known_chinese(text: str) -> str:
+    """Replace known Chinese media names with their English translations."""
+    if not text:
+        return text
+
+    result = text
+    for chinese, english in CHINESE_TO_ENGLISH.items():
+        # Replace Chinese name including any surrounding parentheses
+        result = result.replace(f"({chinese})", f"({english})")
+        result = result.replace(chinese, english)
+
+    return result
+
+
+def _remove_remaining_chinese(text: str) -> str:
+    """Remove any remaining Chinese characters after known replacements."""
+    if not text:
+        return text
+
+    # Remove characters that are clearly Chinese (CJK unified ideographs range)
+    # Range: \u4e00-\u9fff covers most common Chinese characters
+    cleaned = re.sub(r'[\u4e00-\u9fff]+', '', text)
+
+    # Clean up any leftover empty parentheses
+    cleaned = re.sub(r'\(\s*\)', '', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned)  # Normalize spaces
+
+    return cleaned.strip()
+
+
+async def _translate_to_english(text: str) -> str:
+    """
+    Translate non-English text to English.
+    Uses known translations first, then LLM as fallback.
+    """
+    if not _contains_non_ascii(text):
+        return text
+
+    # Step 1: Replace known Chinese names
+    result = _replace_known_chinese(text)
+
+    # Step 2: If still contains non-ASCII, try LLM translation
+    if _contains_non_ascii(result):
+        try:
+            prompt = f"""Translate the following text to English.
+IMPORTANT:
+1. Keep all exhibit citations (e.g., [Exhibit C-2, p.3]) exactly as they are
+2. Keep all formatting including block quotes (> "...")
+3. Translate ONLY the non-English text to English
+4. Do NOT add any explanations, just return the translated text
+
+Text to translate:
+{result}"""
+
+            llm_result = await call_deepseek_text(
+                prompt=prompt,
+                system_prompt="You are a professional translator. Translate to English while preserving legal document formatting.",
+                temperature=0.3,
+                max_tokens=2000
+            )
+
+            if llm_result and not _contains_non_ascii(llm_result):
+                return llm_result.strip()
+        except Exception as e:
+            print(f"[ensure_english] LLM translation failed: {e}")
+
+    # Step 3: If still contains Chinese, remove remaining Chinese characters
+    if _contains_non_ascii(result):
+        result = _remove_remaining_chinese(result)
+
+    return result
+
+
+async def ensure_english_output(llm_output: Dict) -> Dict:
+    """
+    Post-process LLM output to ensure 100% English.
+    Translates any remaining non-English text while preserving structure.
+    """
+    if not llm_output:
+        return llm_output
+
+    # Check and translate opening sentence
+    if "opening_sentence" in llm_output:
+        opening = llm_output["opening_sentence"]
+        if isinstance(opening, dict) and "text" in opening:
+            if _contains_non_ascii(opening["text"]):
+                opening["text"] = await _translate_to_english(opening["text"])
+
+    # Check and translate subargument paragraphs
+    if "subargument_paragraphs" in llm_output:
+        for para in llm_output["subargument_paragraphs"]:
+            if "sentences" in para:
+                for sentence in para["sentences"]:
+                    if "text" in sentence and _contains_non_ascii(sentence["text"]):
+                        sentence["text"] = await _translate_to_english(sentence["text"])
+
+    # Check and translate closing sentence
+    if "closing_sentence" in llm_output:
+        closing = llm_output["closing_sentence"]
+        if isinstance(closing, dict) and "text" in closing:
+            if _contains_non_ascii(closing["text"]):
+                closing["text"] = await _translate_to_english(closing["text"])
+
+    return llm_output
 
 
 # ============================================
@@ -713,12 +862,22 @@ async def write_petition_section_v3(
             "sentences": []
         }
 
+    # 2.5 确保输出为100%英文（后处理翻译）
+    llm_output = await ensure_english_output(llm_output)
+
     # 3. 验证和修正溯源
     validation_result = validate_provenance(llm_output, context)
     validated_output = validation_result.get("fixed_output", llm_output)
 
     # 4. 扁平化句子列表
     sentences = flatten_sentences(validated_output, context)
+
+    # 4.5 确保扁平化后的句子也是100%英文
+    for sentence in sentences:
+        if "text" in sentence and _contains_non_ascii(sentence["text"]):
+            sentence["text"] = _replace_known_chinese(sentence["text"])
+            if _contains_non_ascii(sentence["text"]):
+                sentence["text"] = _remove_remaining_chinese(sentence["text"])
 
     # 5. 构建溯源索引
     provenance_index = build_provenance_index(validated_output, context)
