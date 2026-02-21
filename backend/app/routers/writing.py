@@ -416,3 +416,71 @@ async def get_subargument_context(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Edit Endpoint ====================
+
+class ChatMessageIn(BaseModel):
+    """对话消息"""
+    role: str  # 'user' or 'assistant'
+    content: str
+
+
+class EditRequest(BaseModel):
+    """编辑请求"""
+    section_id: str
+    original_text: str
+    instruction: str
+    conversation_history: List[ChatMessageIn] = []
+
+
+class EditResponse(BaseModel):
+    """编辑响应"""
+    success: bool
+    revised_text: str
+    explanation: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router_v3.post("/{project_id}/edit", response_model=EditResponse)
+async def edit_text_with_ai(
+    project_id: str,
+    request: EditRequest
+):
+    """
+    AI 辅助文本编辑
+
+    支持多轮对话，根据用户指令修改选中的文本。
+
+    Args:
+        project_id: 项目 ID
+        request: 编辑请求，包含原文、指令和对话历史
+
+    Returns:
+        EditResponse: 修改后的文本和说明
+    """
+    try:
+        from app.services.petition_writer_v3 import edit_text_with_instruction
+
+        result = await edit_text_with_instruction(
+            project_id=project_id,
+            original_text=request.original_text,
+            instruction=request.instruction,
+            conversation_history=[
+                {"role": m.role, "content": m.content}
+                for m in request.conversation_history
+            ]
+        )
+
+        return EditResponse(
+            success=True,
+            revised_text=result.get("revised_text", ""),
+            explanation=result.get("explanation")
+        )
+
+    except Exception as e:
+        return EditResponse(
+            success=False,
+            revised_text="",
+            error=str(e)
+        )

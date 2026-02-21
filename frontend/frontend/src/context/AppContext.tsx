@@ -645,9 +645,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return getInitialWritingNodePositions();
   });
 
-  const [focusState, setFocusState] = useState<FocusState>({ type: 'none', id: null });
+  const [focusState, setFocusStateInternal] = useState<FocusState>({ type: 'none', id: null });
   // Selected snippet ID for PDF highlight (independent of focusState)
   const [selectedSnippetId, setSelectedSnippetId] = useState<string | null>(null);
+
+  // Wrapper for setFocusState: clear selectedSnippetId when focusing non-snippet
+  const setFocusState = useCallback((state: FocusState) => {
+    setFocusStateInternal(state);
+    // Clear snippet selection when focusing on something other than snippet
+    if (state.type !== 'snippet') {
+      setSelectedSnippetId(null);
+    }
+  }, []);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>('');
   const [draggedSnippetId, setDraggedSnippetId] = useState<string | null>(null);
   const [snippetPositions, setSnippetPositions] = useState<Map<string, ElementPosition>>(new Map());

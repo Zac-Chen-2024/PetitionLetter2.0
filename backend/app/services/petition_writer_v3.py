@@ -789,3 +789,79 @@ def load_latest_writing_v3(
 
     with open(files[0], 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+# ============================================
+# AI 辅助编辑函数
+# ============================================
+
+async def edit_text_with_instruction(
+    project_id: str,
+    original_text: str,
+    instruction: str,
+    conversation_history: List[Dict] = None
+) -> Dict:
+    """
+    使用 AI 根据指令编辑文本
+
+    支持多轮对话，根据用户指令修改选中的文本。
+
+    Args:
+        project_id: 项目 ID
+        original_text: 原始文本
+        instruction: 用户编辑指令
+        conversation_history: 对话历史 [{"role": str, "content": str}]
+
+    Returns:
+        {
+            "revised_text": str,
+            "explanation": str
+        }
+    """
+    # 构建对话上下文
+    history_text = ""
+    if conversation_history:
+        for msg in conversation_history:
+            role = "用户" if msg["role"] == "user" else "助手"
+            history_text += f"\n{role}: {msg['content']}"
+
+    system_prompt = """You are an expert legal writing editor specializing in EB-1A immigration petitions.
+Your task is to revise the provided text according to the user's instructions while:
+1. Maintaining professional legal tone
+2. Preserving factual accuracy and evidence citations
+3. Keeping the revised text similar in length unless instructed otherwise
+4. Ensuring proper grammar and clarity"""
+
+    user_prompt = f"""ORIGINAL TEXT:
+"{original_text}"
+
+{f"CONVERSATION HISTORY:{history_text}" if history_text else ""}
+
+CURRENT INSTRUCTION: {instruction}
+
+Please revise the text according to the instruction. Return a JSON object:
+{{
+    "revised_text": "the revised text",
+    "explanation": "brief explanation of changes made"
+}}
+
+Return ONLY valid JSON, no markdown or extra text."""
+
+    result = await call_deepseek(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        json_schema={},
+        temperature=0.3,
+        max_tokens=2000
+    )
+
+    if "error" in result:
+        return {
+            "revised_text": original_text,
+            "explanation": f"Error: {result.get('error')}"
+        }
+
+    return {
+        "revised_text": result.get("revised_text", original_text),
+        "explanation": result.get("explanation", "")
+    }

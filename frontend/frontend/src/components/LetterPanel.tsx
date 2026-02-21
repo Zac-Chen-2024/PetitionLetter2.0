@@ -4,6 +4,52 @@ import { useApp } from '../context/AppContext';
 import type { LetterSection, SentenceWithProvenance, FocusState } from '../types';
 
 // ============================================
+// Section Navigation Component
+// ============================================
+
+interface SectionNavProps {
+  sections: LetterSection[];
+  activeSection: string | null;
+  onSectionClick: (sectionId: string) => void;
+}
+
+function SectionNav({ sections, activeSection, onSectionClick }: SectionNavProps) {
+  return (
+    <div className="flex-shrink-0 bg-white shadow-md relative z-10">
+      <div className="flex overflow-x-auto scrollbar-hide">
+        {sections.map((section, idx) => {
+          const isActive = activeSection === section.id;
+          return (
+            <button
+              key={section.id}
+              onClick={() => onSectionClick(section.id)}
+              className={`relative px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-all
+                ${isActive
+                  ? 'text-blue-600'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold
+                  ${isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-200 text-slate-500'}`}>
+                  {idx + 1}
+                </span>
+                {section.title}
+              </span>
+              {/* Active indicator line */}
+              {isActive && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // Provenance Tooltip Component
 // ============================================
 
@@ -404,6 +450,55 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
   } = useApp();
 
   const [hoveredStandardId, setHoveredStandardId] = useState<string | undefined>(undefined);
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Scroll to section when clicking navigation
+  const scrollToSection = useCallback((sectionId: string) => {
+    const element = sectionRefs.current.get(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setActiveSection(sectionId);
+    }
+  }, []);
+
+  // Track active section with IntersectionObserver
+  useEffect(() => {
+    const observers: IntersectionObserver[] = [];
+    const container = contentRef.current;
+    if (!container) return;
+
+    sectionRefs.current.forEach((element, sectionId) => {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting && entry.intersectionRatio > 0.3) {
+              setActiveSection(sectionId);
+            }
+          });
+        },
+        {
+          root: container,
+          threshold: [0.3, 0.5, 0.7],
+          rootMargin: '-10% 0px -60% 0px'
+        }
+      );
+      observer.observe(element);
+      observers.push(observer);
+    });
+
+    return () => {
+      observers.forEach(obs => obs.disconnect());
+    };
+  }, [letterSections]);
+
+  // Initialize active section
+  useEffect(() => {
+    if (letterSections.length > 0 && !activeSection) {
+      setActiveSection(letterSections[0].id);
+    }
+  }, [letterSections, activeSection]);
 
   // Extract focused IDs from global focus state
   const focusedSubArgumentId = useMemo(() => {
@@ -513,12 +608,6 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
             <p className="text-xs text-slate-500">{t('writing.eb1aApplication')}</p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Focus indicator */}
-            {(focusedSubArgumentId || focusedArgumentId) && (
-              <span className="text-[10px] px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full">
-                Focused: {focusedSubArgumentId || focusedArgumentId}
-              </span>
-            )}
             <button className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors">
               {t('writing.exportWord')}
             </button>
@@ -529,22 +618,38 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
         </div>
       </div>
 
+      {/* Section Navigation */}
+      <SectionNav
+        sections={letterSections}
+        activeSection={activeSection}
+        onSectionClick={scrollToSection}
+      />
+
       {/* Letter Content */}
-      <div className="flex-1 overflow-y-auto">
-        {letterSections.map(section => (
-          <LetterSectionComponent
-            key={section.id}
-            section={section}
-            isHighlighted={section.standardId === hoveredStandardId ||
-              (focusState.type === 'standard' && section.standardId === focusState.id)}
-            onHover={setHoveredStandardId}
-            onEdit={updateLetterSection}
-            onSentenceClick={handleSentenceClick}
-            onExhibitClick={handleExhibitClick}
-            focusedSubArgumentId={focusedSubArgumentId}
-            focusedArgumentId={focusedArgumentId}
-          />
-        ))}
+      <div ref={contentRef} className="flex-1 overflow-y-auto">
+        {letterSections.map(section => {
+          // Create a callback ref to store in the Map
+          const setRef = (el: HTMLDivElement | null) => {
+            if (el) {
+              sectionRefs.current.set(section.id, el);
+            }
+          };
+          return (
+            <div key={section.id} ref={setRef} data-section-id={section.id}>
+              <LetterSectionComponent
+                section={section}
+                isHighlighted={section.standardId === hoveredStandardId ||
+                  (focusState.type === 'standard' && section.standardId === focusState.id)}
+                onHover={setHoveredStandardId}
+                onEdit={updateLetterSection}
+                onSentenceClick={handleSentenceClick}
+                onExhibitClick={handleExhibitClick}
+                focusedSubArgumentId={focusedSubArgumentId}
+                focusedArgumentId={focusedArgumentId}
+              />
+            </div>
+          );
+        })}
       </div>
 
       {/* Letter Footer with V3 Stats */}
