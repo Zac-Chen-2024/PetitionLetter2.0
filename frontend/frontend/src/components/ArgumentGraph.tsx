@@ -504,7 +504,7 @@ function InternalConnectionLines({ argumentNodes, standardNodes, subArgumentNode
               x={labelX}
               y={labelY + 3}
               textAnchor="middle"
-              fontSize={9}
+              fontSize={11}
               fill="#059669"
               fontWeight={500}
             >
@@ -775,7 +775,7 @@ export function ArgumentGraph() {
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.8);  // Start at 80% zoom
+  const [scale, setScale] = useState(0.7);  // Start at 70% zoom
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -910,7 +910,7 @@ export function ArgumentGraph() {
   // Handle auto-arrange nodes
   const handleArrangeNodes = useCallback(() => {
     clearArgumentGraphPositions();
-    setScale(0.8);
+    setScale(0.7);
     setOffset({ x: 0, y: 0 });
   }, [clearArgumentGraphPositions]);
 
@@ -946,8 +946,8 @@ export function ArgumentGraph() {
     const containerRect = container.getBoundingClientRect();
     const containerHeight = containerRect.height;
 
-    // Set scale to 80%
-    const targetScale = 0.8;
+    // Set scale to 70%
+    const targetScale = 0.7;
     setScale(targetScale);
 
     // Calculate offset to center the node vertically only

@@ -67,7 +67,7 @@ function AppContent() {
           return (
             <>
               {/* Panel: Evidence Cards + PDF Preview (split vertically) */}
-              <div className="w-[20%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col">
+              <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col">
                 {/* Top: Evidence Cards (50%) */}
                 <div className="h-1/2 border-b border-slate-200 overflow-hidden">
                   <EvidenceCardPool />
@@ -97,13 +97,13 @@ function AppContent() {
         // Verify mode (default): Document Viewer | Evidence Cards | Writing Tree
         return (
           <>
-            {/* Panel 2: Evidence Cards (20%) */}
-            <div className="w-[20%] flex-shrink-0 border-r border-slate-200 overflow-hidden">
+            {/* Panel 2: Evidence Cards (25%) */}
+            <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden">
               <EvidenceCardPool />
             </div>
 
-            {/* Panel 3: Writing Tree (60%) */}
-            <div className="w-[60%] flex-shrink-0 bg-white overflow-hidden">
+            {/* Panel 3: Writing Tree (50%) */}
+            <div className="w-[50%] flex-shrink-0 bg-white overflow-hidden">
               <ArgumentGraph />
             </div>
 
