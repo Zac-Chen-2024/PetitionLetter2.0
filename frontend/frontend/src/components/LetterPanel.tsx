@@ -168,6 +168,7 @@ interface LetterSectionComponentProps {
   onExhibitClick?: (exhibitId: string, page?: number, subargumentId?: string | null, snippetIds?: string[]) => void;
   focusedSubArgumentId?: string | null;
   focusedArgumentId?: string | null;
+  paragraphRefs?: React.MutableRefObject<Map<string, HTMLParagraphElement>>;
 }
 
 function LetterSectionComponent({
@@ -178,7 +179,8 @@ function LetterSectionComponent({
   onSentenceClick,
   onExhibitClick,
   focusedSubArgumentId,
-  focusedArgumentId
+  focusedArgumentId,
+  paragraphRefs
 }: LetterSectionComponentProps) {
   const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
@@ -337,11 +339,25 @@ function LetterSectionComponent({
 
     return (
       <div className="text-sm text-slate-600 leading-relaxed space-y-3">
-        {paragraphs.map((para, pIdx) => (
-          <p key={pIdx} className="text-justify">
-            {para.sentences.map(({ sentence, idx }) => renderSentence(sentence, idx))}
-          </p>
-        ))}
+        {paragraphs.map((para, pIdx) => {
+          // Store ref for SubArgument paragraphs (skip __opening__, __closing__, __body__)
+          const isSubArgParagraph = para.key && !para.key.startsWith('__');
+          const setParaRef = (el: HTMLParagraphElement | null) => {
+            if (el && isSubArgParagraph && paragraphRefs) {
+              paragraphRefs.current.set(para.key, el);
+            }
+          };
+          return (
+            <p
+              key={pIdx}
+              ref={setParaRef}
+              data-subargument-id={isSubArgParagraph ? para.key : undefined}
+              className="text-justify"
+            >
+              {para.sentences.map(({ sentence, idx }) => renderSentence(sentence, idx))}
+            </p>
+          );
+        })}
 
         {/* Provenance Tooltip */}
         {tooltipSentence && (
@@ -453,6 +469,7 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const paragraphRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
 
   // Scroll to section when clicking navigation
   const scrollToSection = useCallback((sectionId: string) => {
@@ -508,6 +525,20 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
   const focusedArgumentId = useMemo(() => {
     return focusState.type === 'argument' ? focusState.id : null;
   }, [focusState]);
+
+  // Auto-scroll to paragraph when SubArgument is focused
+  useEffect(() => {
+    if (focusedSubArgumentId) {
+      const paragraphEl = paragraphRefs.current.get(focusedSubArgumentId);
+      if (paragraphEl && contentRef.current) {
+        // Scroll the paragraph into view within the content container
+        paragraphEl.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        });
+      }
+    }
+  }, [focusedSubArgumentId]);
 
   // Handle sentence click - set focus to SubArgument or Argument
   const handleSentenceClick = useCallback((sentence: SentenceWithProvenance, _idx: number) => {
@@ -646,6 +677,7 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
                 onExhibitClick={handleExhibitClick}
                 focusedSubArgumentId={focusedSubArgumentId}
                 focusedArgumentId={focusedArgumentId}
+                paragraphRefs={paragraphRefs}
               />
             </div>
           );

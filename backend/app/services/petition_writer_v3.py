@@ -192,7 +192,8 @@ def load_legal_arguments(project_id: str) -> Optional[Dict]:
 def load_subargument_context(
     project_id: str,
     standard_key: str,
-    argument_ids: List[str] = None
+    argument_ids: List[str] = None,
+    subargument_ids: List[str] = None
 ) -> Dict:
     """
     加载用于写作的 SubArgument 上下文
@@ -201,6 +202,7 @@ def load_subargument_context(
         project_id: 项目 ID
         standard_key: 标准 key (如 "membership", "leading_role")
         argument_ids: 可选，指定要生成的 Argument IDs
+        subargument_ids: 可选，指定要生成的 SubArgument IDs（更细粒度）
 
     Returns:
         {
@@ -255,6 +257,10 @@ def load_subargument_context(
     for arg in filtered_args:
         arg_subargs = []
         for subarg_id in arg.get("sub_argument_ids", []):
+            # 如果指定了 subargument_ids，只处理指定的
+            if subargument_ids and subarg_id not in subargument_ids:
+                continue
+
             subarg = subarg_map.get(subarg_id)
             if not subarg:
                 continue
@@ -790,10 +796,18 @@ async def write_petition_section_v3(
     project_id: str,
     standard_key: str,
     argument_ids: List[str] = None,
+    subargument_ids: List[str] = None,
     additional_instructions: str = None
 ) -> Dict:
     """
     V3 版本的写作入口
+
+    Args:
+        project_id: 项目 ID
+        standard_key: 标准 key (如 "membership", "leading_role")
+        argument_ids: 可选，指定要生成的 Argument IDs
+        subargument_ids: 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
+        additional_instructions: 可选，额外指令
 
     Returns:
         {
@@ -810,7 +824,7 @@ async def write_petition_section_v3(
         }
     """
     # 1. 加载 SubArgument 上下文
-    context = load_subargument_context(project_id, standard_key, argument_ids)
+    context = load_subargument_context(project_id, standard_key, argument_ids, subargument_ids)
 
     if not context.get("arguments"):
         return {

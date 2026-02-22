@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
 import { legalStandards } from '../data/legalStandards';
 import { STANDARD_KEY_TO_ID } from '../constants/colors';
+import { apiClient } from '../services/api';
 import type { Position, Argument, SubArgument } from '../types';
 
 // ============================================
@@ -46,6 +47,8 @@ interface SubArgumentNode {
     argumentId: string;
     snippetCount: number;
     isAIGenerated: boolean;
+    needsSnippetConfirmation?: boolean;  // 红点提示：有推荐snippets待确认
+    pendingSnippetCount?: number;  // 推荐的snippets数量
   };
 }
 
@@ -100,11 +103,13 @@ function ArgumentNodeComponent({
   onPositionReport,
   t,
   transformVersion,
+  onAddSubArgument,
 }: DraggableNodeProps & {
   node: ArgumentNode;
   onPositionReport?: (id: string, rect: DOMRect) => void;
   t: (key: string, options?: Record<string, unknown>) => string;
   transformVersion?: number;  // Triggers position update when canvas transforms
+  onAddSubArgument?: (argumentId: string) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const dragStartPos = useRef<Position | null>(null);
@@ -202,9 +207,26 @@ function ArgumentNodeComponent({
         {/* Header */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <span className="text-base font-bold text-purple-800 line-clamp-2">{node.data.title}</span>
-          {node.data.isAIGenerated && (
-            <span className="text-[10px] px-2 py-0.5 bg-purple-200 text-purple-700 rounded flex-shrink-0">AI</span>
-          )}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Add SubArgument button */}
+            {onAddSubArgument && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddSubArgument(node.id);
+                }}
+                className="p-1 rounded hover:bg-purple-200 transition-colors"
+                title="Add Sub-Argument"
+              >
+                <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            )}
+            {node.data.isAIGenerated && (
+              <span className="text-[10px] px-2 py-0.5 bg-purple-200 text-purple-700 rounded">AI</span>
+            )}
+          </div>
         </div>
 
         {/* Stats row */}
@@ -325,24 +347,107 @@ function SubArgumentNodeComponent({
   t,
   onPositionReport,
   transformVersion,
+  onRegenerate,
+  onTitleChange,
+  onDelete,
+  autoEdit,
+  onAutoEditComplete,
 }: DraggableNodeProps & {
   node: SubArgumentNode;
   t: (key: string, options?: Record<string, unknown>) => string;
   onPositionReport?: (id: string, rect: DOMRect) => void;
   transformVersion?: number;  // Triggers position update when canvas transforms
+  onRegenerate?: (subArgumentId: string) => void;
+  onTitleChange?: (subArgumentId: string, newTitle: string) => void;
+  onDelete?: (subArgumentId: string) => void;  // Delete callback
+  autoEdit?: boolean;  // Auto-enter edit mode for newly created nodes
+  onAutoEditComplete?: () => void;  // Callback when auto-edit is acknowledged
 }) {
   const [isDragging, setIsDragging] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(node.data.title);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const dragStartPos = useRef<Position | null>(null);
   const nodeStartPos = useRef<Position | null>(null);
   const nodeRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (isEditing) return; // Don't start drag when editing
     e.stopPropagation();
     setIsDragging(true);
     dragStartPos.current = { x: e.clientX, y: e.clientY };
     nodeStartPos.current = { ...node.position };
     onSelect();
   };
+
+  // Handle double-click to edit title
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setEditTitle(node.data.title);
+  };
+
+  // Handle title edit completion
+  const handleTitleSave = () => {
+    if (editTitle.trim() && editTitle !== node.data.title) {
+      onTitleChange?.(node.id, editTitle.trim());
+    }
+    setIsEditing(false);
+  };
+
+  // Handle title edit cancel
+  const handleTitleCancel = () => {
+    setEditTitle(node.data.title);
+    setIsEditing(false);
+  };
+
+  // Handle key events in edit mode
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleTitleSave();
+    } else if (e.key === 'Escape') {
+      handleTitleCancel();
+    }
+  };
+
+  // Handle regenerate click
+  const handleRegenerateClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRegenerating) return;
+    setIsRegenerating(true);
+    try {
+      await onRegenerate?.(node.id);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  // Handle delete click
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Simple confirmation
+    if (window.confirm(`Delete sub-argument "${node.data.title}"? This will also remove its content from the Letter.`)) {
+      onDelete?.(node.id);
+    }
+  };
+
+  // Auto-enter edit mode for newly created nodes
+  useEffect(() => {
+    if (autoEdit && !isEditing) {
+      setIsEditing(true);
+      setEditTitle('');  // Start with empty title for new nodes
+      onAutoEditComplete?.();
+    }
+  }, [autoEdit, isEditing, onAutoEditComplete]);
+
+  // Focus input when entering edit mode
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
 
   // Report position to parent for connection lines
   // Re-report when canvas transforms (scale/offset changes)
@@ -413,12 +518,71 @@ function SubArgumentNodeComponent({
           ${isSelected ? 'ring-2 ring-offset-2 ring-emerald-500 shadow-md border-emerald-500' : 'hover:shadow-md hover:border-emerald-500'}
         `}
       >
-        {/* Header */}
+        {/* Header with title and actions */}
         <div className="flex items-start justify-between gap-2 mb-1">
-          <span className="text-sm font-semibold text-emerald-800 line-clamp-1">{node.data.title}</span>
-          {node.data.isAIGenerated && (
-            <span className="text-[9px] px-1.5 py-0.5 bg-emerald-200 text-emerald-700 rounded flex-shrink-0">AI</span>
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              type="text"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onBlur={handleTitleSave}
+              className="flex-1 text-sm font-semibold text-emerald-800 bg-white border border-emerald-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span
+              className="text-sm font-semibold text-emerald-800 line-clamp-1 cursor-text hover:bg-emerald-100 rounded px-1 -mx-1"
+              onDoubleClick={handleDoubleClick}
+              title="Double-click to edit"
+            >
+              {node.data.title}
+            </span>
           )}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Red dot indicator for pending snippet confirmation */}
+            {node.data.needsSnippetConfirmation && (
+              <span
+                className="relative flex items-center justify-center w-5 h-5"
+                title={`${node.data.pendingSnippetCount || 0} snippets to confirm`}
+              >
+                <span className="absolute inline-flex h-3 w-3 rounded-full bg-red-500 opacity-75 animate-ping" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+              </span>
+            )}
+            {/* Regenerate button */}
+            <button
+              onClick={handleRegenerateClick}
+              disabled={isRegenerating}
+              className="p-1 rounded hover:bg-emerald-200 transition-colors disabled:opacity-50"
+              title="Regenerate this section"
+            >
+              {isRegenerating ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-emerald-600" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              )}
+            </button>
+            {/* Delete button */}
+            <button
+              onClick={handleDeleteClick}
+              className="p-1 rounded hover:bg-red-100 transition-colors"
+              title="Delete this sub-argument"
+            >
+              <svg className="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+            {node.data.isAIGenerated && (
+              <span className="text-[9px] px-1.5 py-0.5 bg-emerald-200 text-emerald-700 rounded">AI</span>
+            )}
+          </div>
         </div>
 
         {/* Purpose */}
@@ -747,6 +911,8 @@ function calculateTreeLayout(
           argumentId: sa.argumentId,
           snippetCount: sa.snippetIds?.length || 0,
           isAIGenerated: sa.isAIGenerated,
+          needsSnippetConfirmation: sa.needsSnippetConfirmation,
+          pendingSnippetCount: sa.pendingSnippetIds?.length || 0,
         },
       });
     });
@@ -772,6 +938,11 @@ export function ArgumentGraph() {
     updateArgumentPosition2,
     updateSubArgumentPosition,
     setSelectedSnippetId,
+    updateSubArgument,
+    regenerateSubArgument,
+    removeSubArgument,
+    addSubArgument,
+    projectId,
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -779,6 +950,7 @@ export function ArgumentGraph() {
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [newlyCreatedSubArgId, setNewlyCreatedSubArgId] = useState<string | null>(null);
   const panStartPos = useRef<Position | null>(null);
   const offsetStartPos = useRef<Position | null>(null);
 
@@ -839,6 +1011,124 @@ export function ArgumentGraph() {
     setFocusState({ type: 'subargument', id: subArgumentId });
     setSelectedSnippetId(null);  // Clear snippet selection when focusing sub-argument
   }, [setFocusState, setSelectedSnippetId]);
+
+  // Handle sub-argument title change - infer relationship and recommend snippets
+  const handleSubArgumentTitleChange = useCallback(async (subArgumentId: string, newTitle: string) => {
+    // Find the sub-argument to get its argumentId
+    const subArg = contextSubArguments.find(sa => sa.id === subArgumentId);
+    if (!subArg) return;
+
+    // Update title first (frontend state)
+    updateSubArgument(subArgumentId, { title: newTitle });
+
+    // Run both API calls in parallel: infer relationship + recommend snippets
+    try {
+      const [relationshipResponse, snippetsResponse] = await Promise.all([
+        // 1. Infer relationship
+        apiClient.post<{ success: boolean; relationship: string }>(
+          `/arguments/${projectId}/infer-relationship`,
+          {
+            argument_id: subArg.argumentId,
+            subargument_title: newTitle,
+          }
+        ),
+        // 2. Recommend snippets
+        apiClient.post<{
+          success: boolean;
+          recommended_snippets: Array<{
+            snippet_id: string;
+            text: string;
+            exhibit_id: string;
+            page: number;
+            relevance_score: number;
+            reason: string;
+          }>;
+        }>(`/arguments/${projectId}/recommend-snippets`, {
+          argument_id: subArg.argumentId,
+          title: newTitle,
+          description: subArg.purpose || undefined,
+          exclude_snippet_ids: subArg.snippetIds || [],
+        }),
+      ]);
+
+      // Collect all updates
+      let relationship = subArg.relationship;
+      let pendingSnippetIds: string[] = [];
+      let needsSnippetConfirmation = false;
+
+      // Update relationship
+      if (relationshipResponse.success && relationshipResponse.relationship) {
+        relationship = relationshipResponse.relationship;
+        updateSubArgument(subArgumentId, { relationship });
+      }
+
+      // Update pending snippets (recommendations)
+      if (snippetsResponse.success && snippetsResponse.recommended_snippets) {
+        pendingSnippetIds = snippetsResponse.recommended_snippets.map(s => s.snippet_id);
+        needsSnippetConfirmation = true;
+        updateSubArgument(subArgumentId, {
+          pendingSnippetIds,
+          needsSnippetConfirmation,
+        });
+      }
+
+      // Persist to backend - save title, relationship, and pending snippets
+      await apiClient.put(`/arguments/${projectId}/subarguments/${subArgumentId}`, {
+        title: newTitle,
+        relationship,
+        pending_snippet_ids: pendingSnippetIds,
+        needs_snippet_confirmation: needsSnippetConfirmation,
+      });
+      console.log('[ArgumentGraph] SubArgument title/relationship/pendingSnippets saved to backend');
+
+    } catch (error) {
+      console.error('Failed to infer relationship or recommend snippets:', error);
+    }
+  }, [updateSubArgument, contextSubArguments, projectId]);
+
+  // Handle sub-argument regenerate
+  const handleSubArgumentRegenerate = useCallback(async (subArgumentId: string) => {
+    if (regenerateSubArgument) {
+      await regenerateSubArgument(subArgumentId);
+    }
+  }, [regenerateSubArgument]);
+
+  // Handle add SubArgument - directly create on the tree
+  const handleAddSubArgument = useCallback(async (argumentId: string) => {
+    if (!addSubArgument) return;
+
+    try {
+      const newSubArg = await addSubArgument({
+        argumentId,
+        title: '',  // Start with empty title - user will type directly
+        purpose: '',
+        relationship: '',
+        snippetIds: [],
+        isAIGenerated: false,
+        status: 'draft' as const,
+      });
+
+      // Set the newly created ID to trigger auto-edit mode
+      if (newSubArg) {
+        setNewlyCreatedSubArgId(newSubArg.id);
+        setSelectedNodeId(newSubArg.id);
+        setFocusState({ type: 'subargument', id: newSubArg.id });
+      }
+    } catch (error) {
+      console.error('Failed to create SubArgument:', error);
+    }
+  }, [addSubArgument, setFocusState]);
+
+  // Handle delete SubArgument
+  const handleSubArgumentDelete = useCallback((subArgumentId: string) => {
+    if (!removeSubArgument) return;
+    removeSubArgument(subArgumentId);
+    // Clear focus if deleted node was focused
+    if (focusState.type === 'subargument' && focusState.id === subArgumentId) {
+      setFocusState({ type: 'none', id: null });
+    }
+    setSelectedNodeId(null);
+  }, [removeSubArgument, focusState, setFocusState]);
 
   // Handle standard selection
   const handleStandardSelect = useCallback((standardId: string) => {
@@ -1140,6 +1430,11 @@ export function ArgumentGraph() {
                 t={t}
                 onPositionReport={handleSubArgumentPositionReport}
                 transformVersion={transformVersion}
+                onRegenerate={handleSubArgumentRegenerate}
+                onTitleChange={handleSubArgumentTitleChange}
+                onDelete={handleSubArgumentDelete}
+                autoEdit={node.id === newlyCreatedSubArgId}
+                onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
               />
             ))}
 
@@ -1155,6 +1450,7 @@ export function ArgumentGraph() {
                 onPositionReport={handleArgumentPositionReport}
                 t={t}
                 transformVersion={transformVersion}
+                onAddSubArgument={handleAddSubArgument}
               />
             ))}
 
@@ -1173,6 +1469,7 @@ export function ArgumentGraph() {
           </div>
         </div>
       </div>
+
     </div>
   );
 }

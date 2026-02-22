@@ -288,11 +288,13 @@ export interface SubArgument {
   relationship: string;             // LLM 生成的关系描述，如 "证明管理能力"
 
   // === 关联 ===
-  snippetIds: string[];             // 1-5 个 snippets
+  snippetIds: string[];             // 已确认的 snippets
+  pendingSnippetIds?: string[];     // AI推荐但未确认的 snippets
 
   // === 状态 ===
   isAIGenerated: boolean;
   status: 'draft' | 'verified';
+  needsSnippetConfirmation?: boolean;  // 是否需要用户确认snippets
 
   // === 位置 (用于图形视图) ===
   position?: Position;

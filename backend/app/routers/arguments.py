@@ -275,7 +275,43 @@ async def update_argument(
 async def delete_argument(project_id: str, argument_id: str):
     """
     删除论据
+
+    Note: Due to FastAPI routing order, this route catches /subarguments/{id} requests.
+    We detect and forward those to the correct handler.
     """
+    # Handle misrouted subargument delete requests
+    if argument_id.startswith("subarg-"):
+        # Forward to subargument delete logic
+        from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
+
+        print(f"[DELETE SubArgument via fallback] project_id={project_id}, subargument_id={argument_id}")
+
+        legal_args = load_legal_arguments(project_id)
+        sub_arguments = legal_args.get("sub_arguments", [])
+        arguments = legal_args.get("arguments", [])
+
+        original_count = len(sub_arguments)
+        sub_arguments = [sa for sa in sub_arguments if sa.get("id") != argument_id]
+
+        if len(sub_arguments) == original_count:
+            raise HTTPException(status_code=404, detail=f"SubArgument not found: {argument_id}")
+
+        legal_args["sub_arguments"] = sub_arguments
+
+        # Remove reference from parent Argument's sub_argument_ids
+        for arg in arguments:
+            if "sub_argument_ids" in arg and argument_id in arg["sub_argument_ids"]:
+                arg["sub_argument_ids"].remove(argument_id)
+
+        save_legal_arguments(project_id, legal_args)
+        print(f"[DELETE SubArgument via fallback] Deleted successfully")
+
+        return {
+            "success": True,
+            "subargument_id": argument_id,
+            "message": "SubArgument deleted"
+        }
+
     generator = ArgumentGenerator(project_id)
     result = generator.load_generated_arguments()
 
@@ -466,6 +502,307 @@ async def get_composed_arguments(
                 "exhibit_mappings": metadata.get("exhibit_mappings", {}),
                 "key_achievements": metadata.get("key_achievements", {})
             }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# SubArgument Management Endpoints
+# ============================================
+
+from ..services.snippet_recommender import (
+    recommend_snippets_for_subargument,
+    create_subargument,
+    get_assigned_snippet_ids,
+    infer_relationship
+)
+
+
+class SnippetRecommendRequest(BaseModel):
+    """Snippet 推荐请求"""
+    argument_id: str
+    title: str
+    description: Optional[str] = None
+    exclude_snippet_ids: List[str] = []
+
+
+class RecommendedSnippet(BaseModel):
+    """推荐的 Snippet"""
+    snippet_id: str
+    text: str
+    exhibit_id: str
+    page: int
+    relevance_score: float
+    reason: str
+
+
+class SnippetRecommendResponse(BaseModel):
+    """Snippet 推荐响应"""
+    success: bool
+    recommended_snippets: List[RecommendedSnippet]
+    total_available: int
+
+
+class CreateSubArgumentRequest(BaseModel):
+    """创建 SubArgument 请求"""
+    argument_id: str
+    title: str
+    purpose: str = ""
+    relationship: str = ""
+    snippet_ids: List[str] = []
+
+
+class SubArgumentResponse(BaseModel):
+    """SubArgument 响应"""
+    id: str
+    argument_id: str
+    title: str
+    purpose: str
+    relationship: str
+    snippet_ids: List[str]
+    is_ai_generated: bool
+    status: str
+    created_at: str
+
+
+@router.post("/{project_id}/recommend-snippets", response_model=SnippetRecommendResponse)
+async def recommend_snippets(
+    project_id: str,
+    request: SnippetRecommendRequest
+):
+    """
+    为新 SubArgument 推荐相关 Snippets
+
+    使用 LLM 进行语义相关性排序，推荐最相关的 snippets。
+
+    Args:
+        project_id: 项目 ID
+        request: 包含 argument_id, title, description 等信息
+
+    Returns:
+        推荐的 snippets 列表，包含 relevance_score 和 reason
+    """
+    try:
+        # 获取已分配的 snippet IDs
+        assigned_ids = get_assigned_snippet_ids(project_id)
+
+        # 合并排除列表
+        exclude_ids = list(set(request.exclude_snippet_ids) | assigned_ids)
+
+        # 调用推荐服务
+        recommended = await recommend_snippets_for_subargument(
+            project_id=project_id,
+            argument_id=request.argument_id,
+            title=request.title,
+            description=request.description,
+            exclude_snippet_ids=exclude_ids
+        )
+
+        return SnippetRecommendResponse(
+            success=True,
+            recommended_snippets=[
+                RecommendedSnippet(
+                    snippet_id=s.get("snippet_id", ""),
+                    text=s.get("text", ""),
+                    exhibit_id=s.get("exhibit_id", ""),
+                    page=s.get("page", 0),
+                    relevance_score=s.get("relevance_score", 0.5),
+                    reason=s.get("reason", "")
+                )
+                for s in recommended
+            ],
+            total_available=len(recommended)
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{project_id}/subarguments")
+async def create_new_subargument(
+    project_id: str,
+    request: CreateSubArgumentRequest
+):
+    """
+    创建新的 SubArgument
+
+    将新的 SubArgument 添加到 legal_arguments.json，
+    并更新父 Argument 的 sub_argument_ids。
+
+    Args:
+        project_id: 项目 ID
+        request: 包含 argument_id, title, purpose, relationship, snippet_ids
+
+    Returns:
+        新创建的 SubArgument 对象
+    """
+    try:
+        new_subarg = create_subargument(
+            project_id=project_id,
+            argument_id=request.argument_id,
+            title=request.title,
+            purpose=request.purpose,
+            relationship=request.relationship,
+            snippet_ids=request.snippet_ids
+        )
+
+        return {
+            "success": True,
+            "subargument": new_subarg
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class InferRelationshipRequest(BaseModel):
+    """推断 Relationship 请求"""
+    argument_id: str
+    subargument_title: str
+
+
+class UpdateSubArgumentRequest(BaseModel):
+    """更新 SubArgument 请求"""
+    title: Optional[str] = None
+    purpose: Optional[str] = None
+    relationship: Optional[str] = None
+    snippet_ids: Optional[List[str]] = None
+    pending_snippet_ids: Optional[List[str]] = None
+    needs_snippet_confirmation: Optional[bool] = None
+    status: Optional[str] = None
+
+
+@router.put("/{project_id}/subarguments/{subargument_id}")
+async def update_subargument(
+    project_id: str,
+    subargument_id: str,
+    request: UpdateSubArgumentRequest
+):
+    """
+    更新 SubArgument
+
+    可更新字段:
+    - title: 标题
+    - purpose: 目的描述
+    - relationship: 与父论点的关系
+    - snippet_ids: 已确认的 snippet IDs
+    - pending_snippet_ids: 待确认的 snippet IDs
+    - needs_snippet_confirmation: 是否需要确认 snippets
+    - status: 状态 (draft/verified)
+    """
+    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
+
+    legal_args = load_legal_arguments(project_id)
+    sub_arguments = legal_args.get("sub_arguments", [])
+
+    found = False
+    for sub_arg in sub_arguments:
+        if sub_arg.get("id") == subargument_id:
+            if request.title is not None:
+                sub_arg["title"] = request.title
+            if request.purpose is not None:
+                sub_arg["purpose"] = request.purpose
+            if request.relationship is not None:
+                sub_arg["relationship"] = request.relationship
+            if request.snippet_ids is not None:
+                sub_arg["snippet_ids"] = request.snippet_ids
+            if request.pending_snippet_ids is not None:
+                sub_arg["pending_snippet_ids"] = request.pending_snippet_ids
+            if request.needs_snippet_confirmation is not None:
+                sub_arg["needs_snippet_confirmation"] = request.needs_snippet_confirmation
+            if request.status is not None:
+                sub_arg["status"] = request.status
+            sub_arg["updated_at"] = datetime.now().isoformat()
+            found = True
+            break
+
+    if not found:
+        raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
+
+    save_legal_arguments(project_id, legal_args)
+
+    return {
+        "success": True,
+        "subargument_id": subargument_id,
+        "message": "SubArgument updated"
+    }
+
+
+@router.delete("/{project_id}/subarguments/{subargument_id}")
+async def delete_subargument(
+    project_id: str,
+    subargument_id: str
+):
+    """
+    删除 SubArgument
+
+    同时从父 Argument 的 sub_argument_ids 中移除引用
+    """
+    print(f"[DELETE SubArgument] Received request: project_id={project_id}, subargument_id={subargument_id}")
+
+    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
+
+    legal_args = load_legal_arguments(project_id)
+    sub_arguments = legal_args.get("sub_arguments", [])
+    arguments = legal_args.get("arguments", [])
+
+    print(f"[DELETE SubArgument] Before: {len(sub_arguments)} sub_arguments")
+
+    # Find and remove the SubArgument
+    original_count = len(sub_arguments)
+    sub_arguments = [sa for sa in sub_arguments if sa.get("id") != subargument_id]
+
+    if len(sub_arguments) == original_count:
+        print(f"[DELETE SubArgument] SubArgument not found: {subargument_id}")
+        raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
+
+    legal_args["sub_arguments"] = sub_arguments
+
+    # Remove reference from parent Argument's sub_argument_ids
+    for arg in arguments:
+        if "sub_argument_ids" in arg and subargument_id in arg["sub_argument_ids"]:
+            arg["sub_argument_ids"].remove(subargument_id)
+
+    save_legal_arguments(project_id, legal_args)
+    print(f"[DELETE SubArgument] After: {len(sub_arguments)} sub_arguments, saved to file")
+
+    return {
+        "success": True,
+        "subargument_id": subargument_id,
+        "message": "SubArgument deleted"
+    }
+
+
+@router.post("/{project_id}/infer-relationship")
+async def infer_subargument_relationship(
+    project_id: str,
+    request: InferRelationshipRequest
+):
+    """
+    根据子论点标题推断与父论点的关系
+
+    使用 LLM 分析子论点标题与父论点的语义关系，
+    返回最合适的 relationship 标签。
+
+    Args:
+        project_id: 项目 ID
+        request: 包含 argument_id 和 subargument_title
+
+    Returns:
+        推断出的 relationship 字符串
+    """
+    try:
+        relationship = await infer_relationship(
+            project_id=project_id,
+            argument_id=request.argument_id,
+            subargument_title=request.subargument_title
+        )
+
+        return {
+            "success": True,
+            "relationship": relationship
         }
 
     except Exception as e:

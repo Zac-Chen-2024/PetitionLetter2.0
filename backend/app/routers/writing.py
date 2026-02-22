@@ -270,6 +270,7 @@ router_v3 = APIRouter(prefix="/api/write/v3", tags=["Writing V3"])
 class WriteV3Request(BaseModel):
     """V3 写作请求"""
     argument_ids: Optional[List[str]] = None  # 可选，指定要生成的 Argument IDs
+    subargument_ids: Optional[List[str]] = None  # 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
     style: str = "legal"
     additional_instructions: Optional[str] = None
 
@@ -337,6 +338,7 @@ async def write_petition_v3(
             project_id=project_id,
             standard_key=standard_key,
             argument_ids=req.argument_ids,
+            subargument_ids=req.subargument_ids,
             additional_instructions=req.additional_instructions
         )
 
@@ -394,7 +396,8 @@ async def get_writing_v3(project_id: str, standard_key: str):
 async def get_subargument_context(
     project_id: str,
     standard_key: str,
-    argument_ids: str = None
+    argument_ids: str = None,
+    subargument_ids: str = None
 ):
     """
     获取用于写作的 SubArgument 上下文
@@ -403,7 +406,8 @@ async def get_subargument_context(
     """
     try:
         arg_ids = argument_ids.split(",") if argument_ids else None
-        context = load_subargument_context(project_id, standard_key, arg_ids)
+        subarg_ids = subargument_ids.split(",") if subargument_ids else None
+        context = load_subargument_context(project_id, standard_key, arg_ids, subarg_ids)
 
         return {
             "success": True,

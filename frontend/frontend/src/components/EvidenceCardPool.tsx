@@ -5,6 +5,7 @@ import { materialTypeLabels, getStandardById, legalStandards } from '../data/leg
 import { RelationshipGraphModal } from './RelationshipGraphModal';
 import type { Snippet } from '../types';
 import { getStandardKeyColor, STANDARD_KEY_TO_ID } from '../constants/colors';
+import apiClient from '../services/api';
 
 // Default color for unassigned snippets
 const DEFAULT_SNIPPET_COLOR = '#94a3b8';  // slate-400
@@ -71,9 +72,12 @@ const ExpandIcon = () => (
 
 interface EvidenceCardProps {
   snippet: Snippet;
+  isEditMode?: boolean;
+  isSelectedForEdit?: boolean;
+  onToggleSelect?: (snippetId: string) => void;
 }
 
-function EvidenceCard({ snippet }: EvidenceCardProps) {
+function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }: EvidenceCardProps) {
   const {
     focusState,
     selectedSnippetId,
@@ -172,9 +176,19 @@ function EvidenceCard({ snippet }: EvidenceCardProps) {
     : false;
 
   // Check if a sub-argument is focused and this snippet is NOT part of that sub-argument
-  const isFilteredOutBySubArgument = focusState.type === 'subargument' && focusState.id
-    ? !subArguments.some(sa => sa.id === focusState.id && sa.snippetIds?.includes(snippet.id))
-    : false;
+  // Must check both snippetIds AND pendingSnippetIds for new SubArguments
+  const isFilteredOutBySubArgument = useMemo(() => {
+    if (focusState.type !== 'subargument' || !focusState.id) return false;
+
+    const focusedSubArg = subArguments.find(sa => sa.id === focusState.id);
+    if (!focusedSubArg) return true;
+
+    // Check if snippet is in snippetIds or pendingSnippetIds
+    const inSnippetIds = focusedSubArg.snippetIds?.includes(snippet.id) || false;
+    const inPendingIds = focusedSubArg.pendingSnippetIds?.includes(snippet.id) || false;
+
+    return !inSnippetIds && !inPendingIds;
+  }, [focusState, subArguments, snippet.id]);
 
   const isFilteredOut = isFilteredOutByStandard || isFilteredOutByArgument || isFilteredOutBySubArgument;
 
@@ -205,6 +219,12 @@ function EvidenceCard({ snippet }: EvidenceCardProps) {
   }, [snippet.id, updateSnippetPosition, isExpanded, focusState]);
 
   const handleClick = () => {
+    // In edit mode, toggle selection
+    if (isEditMode && onToggleSelect) {
+      onToggleSelect(snippet.id);
+      return;
+    }
+
     // Clicking Evidence Card only sets selectedSnippetId for PDF highlight
     // It does NOT change focusState (which controls filtering)
     if (selectedSnippetId === snippet.id) {
@@ -244,25 +264,39 @@ function EvidenceCard({ snippet }: EvidenceCardProps) {
       onDragEnd={handleDragEnd}
       onClick={handleClick}
       className={`
-        relative bg-white rounded-lg border transition-all duration-200 cursor-grab
+        relative bg-white rounded-lg border transition-all duration-200
+        ${isEditMode ? 'cursor-pointer' : 'cursor-grab'}
         ${isDragging ? 'opacity-50 scale-95 cursor-grabbing' : ''}
-        ${isAssembled ? 'opacity-60 border-green-400 bg-green-50/50' : ''}
-        ${isFocused
+        ${isEditMode && isSelectedForEdit ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-300' : ''}
+        ${!isEditMode && isAssembled ? 'opacity-60 border-green-400 bg-green-50/50' : ''}
+        ${!isEditMode && (isFocused
           ? 'border-slate-900 ring-2 ring-slate-900 shadow-md z-10'
           : isHighlighted
             ? isAssembled ? 'border-green-400' : 'border-slate-200 hover:border-slate-300 hover:shadow-sm'
             : 'border-slate-100 opacity-30'
-        }
+        )}
       `}
     >
       {/* Card content */}
       <div className="p-2">
         {/* Header row */}
         <div className="flex items-start gap-1.5">
-          {/* Drag handle */}
-          <div className="flex-shrink-0 mt-0.5 cursor-grab active:cursor-grabbing">
-            <DragHandleIcon />
-          </div>
+          {/* Checkbox in edit mode, drag handle otherwise */}
+          {isEditMode ? (
+            <div className={`flex-shrink-0 mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center ${
+              isSelectedForEdit ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-white'
+            }`}>
+              {isSelectedForEdit && (
+                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+          ) : (
+            <div className="flex-shrink-0 mt-0.5 cursor-grab active:cursor-grabbing">
+              <DragHandleIcon />
+            </div>
+          )}
 
           {/* Main content */}
           <div className="flex-1 min-w-0">
@@ -379,9 +413,12 @@ interface DocumentGroupProps {
   document: { id: string; name: string };
   snippets: Snippet[];
   filteredSnippets?: Snippet[]; // Snippets to actually display (may be filtered by focus)
+  isEditMode?: boolean;
+  selectedSnippetIds?: Set<string>;
+  onToggleSelect?: (snippetId: string) => void;
 }
 
-function DocumentGroup({ document, snippets, filteredSnippets }: DocumentGroupProps) {
+function DocumentGroup({ document, snippets, filteredSnippets, isEditMode, selectedSnippetIds, onToggleSelect }: DocumentGroupProps) {
   const { focusState, setFocusState } = useApp();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -438,6 +475,9 @@ function DocumentGroup({ document, snippets, filteredSnippets }: DocumentGroupPr
             <EvidenceCard
               key={snippet.id}
               snippet={snippet}
+              isEditMode={isEditMode}
+              isSelectedForEdit={selectedSnippetIds?.has(snippet.id)}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </div>
@@ -461,13 +501,96 @@ const GraphIcon = () => (
 
 export function EvidenceCardPool() {
   const { t } = useTranslation();
-  const { focusState, snippetPositions, connections, viewMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments } = useApp();
+  const { focusState, snippetPositions, connections, viewMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId } = useApp();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
   const [showGraphModal, setShowGraphModal] = useState(false);
 
+  // Edit snippets mode state
+  const [isEditingSnippets, setIsEditingSnippets] = useState(false);
+  const [selectedSnippetsForEdit, setSelectedSnippetsForEdit] = useState<Set<string>>(new Set());
+
   // Use snippets from context
   const snippets = allSnippets;
+
+  // Get focused SubArgument info
+  const focusedSubArgument = useMemo(() => {
+    if (focusState.type !== 'subargument' || !focusState.id) return null;
+    return subArguments.find(sa => sa.id === focusState.id) || null;
+  }, [focusState, subArguments]);
+
+  // Check if focused SubArgument needs snippet confirmation
+  const needsSnippetConfirmation = focusedSubArgument?.needsSnippetConfirmation || false;
+
+  // Auto-enter edit mode when focusing a SubArgument that needs confirmation
+  useEffect(() => {
+    if (focusedSubArgument?.needsSnippetConfirmation) {
+      setIsEditingSnippets(true);
+      // Pre-select the pending snippets
+      const pendingIds = focusedSubArgument.pendingSnippetIds || [];
+      const existingIds = focusedSubArgument.snippetIds || [];
+      setSelectedSnippetsForEdit(new Set([...existingIds, ...pendingIds]));
+    } else if (focusState.type !== 'subargument') {
+      // Exit edit mode when unfocusing
+      setIsEditingSnippets(false);
+      setSelectedSnippetsForEdit(new Set());
+    }
+  }, [focusedSubArgument, focusState.type]);
+
+  // Toggle snippet selection in edit mode
+  const toggleSnippetSelection = useCallback((snippetId: string) => {
+    setSelectedSnippetsForEdit(prev => {
+      const next = new Set(prev);
+      if (next.has(snippetId)) {
+        next.delete(snippetId);
+      } else {
+        next.add(snippetId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Save snippet selections (persist to backend)
+  const handleSaveSnippets = useCallback(async () => {
+    if (!focusedSubArgument || !projectId) return;
+
+    const snippetIds = Array.from(selectedSnippetsForEdit);
+
+    // Update local state first for immediate UI feedback
+    updateSubArgument(focusedSubArgument.id, {
+      snippetIds,
+      pendingSnippetIds: [],
+      needsSnippetConfirmation: false,
+    });
+
+    setIsEditingSnippets(false);
+
+    // Persist to backend
+    try {
+      await apiClient.put(
+        `/arguments/${projectId}/subarguments/${focusedSubArgument.id}`,
+        {
+          snippet_ids: snippetIds,
+          pending_snippet_ids: [],
+          needs_snippet_confirmation: false,
+        }
+      );
+      console.log('[EvidenceCardPool] SubArgument snippets saved to backend');
+    } catch (error) {
+      console.error('[EvidenceCardPool] Failed to save snippets to backend:', error);
+      // Could add toast notification here
+    }
+  }, [focusedSubArgument, selectedSnippetsForEdit, updateSubArgument, projectId]);
+
+  // Cancel edit mode
+  const handleCancelEdit = useCallback(() => {
+    setIsEditingSnippets(false);
+    // Restore original selection
+    if (focusedSubArgument) {
+      const existingIds = focusedSubArgument.snippetIds || [];
+      setSelectedSnippetsForEdit(new Set(existingIds));
+    }
+  }, [focusedSubArgument]);
 
   // Helper: Check if a snippet is related to the current focus
   const isSnippetRelatedToFocus = useCallback((snippetId: string): boolean => {
@@ -482,7 +605,18 @@ export function EvidenceCardPool() {
     if (focusState.type === 'subargument') {
       // Check if snippet belongs to the focused sub-argument
       const focusedSubArg = subArguments.find(sa => sa.id === focusState.id);
-      return focusedSubArg?.snippetIds?.includes(snippetId) || false;
+      if (!focusedSubArg) return false;
+
+      // In edit mode, show ALL snippets from the parent Argument (for selection)
+      if (isEditingSnippets) {
+        const parentArg = arguments_.find(arg => arg.id === focusedSubArg.argumentId);
+        return parentArg?.snippetIds?.includes(snippetId) || false;
+      }
+
+      // Normal mode: check both snippetIds and pendingSnippetIds
+      const inSnippetIds = focusedSubArg.snippetIds?.includes(snippetId) || false;
+      const inPendingIds = focusedSubArg.pendingSnippetIds?.includes(snippetId) || false;
+      return inSnippetIds || inPendingIds;
     }
 
     if (focusState.type === 'standard') {
@@ -499,7 +633,7 @@ export function EvidenceCardPool() {
     }
 
     return true;
-  }, [focusState, arguments_, argumentMappings, subArguments]);
+  }, [focusState, arguments_, argumentMappings, subArguments, isEditingSnippets]);
 
   // Update container rect on scroll, resize, and focusState change
   useEffect(() => {
@@ -634,19 +768,59 @@ export function EvidenceCardPool() {
       <div className="flex-shrink-0 px-4 py-2 bg-white border-b border-slate-200">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-slate-800">{t('evidence.title')}</h2>
+            <h2 className="text-sm font-semibold text-slate-800">
+              {isEditingSnippets ? 'Select Snippets' : t('evidence.title')}
+            </h2>
             <p className="text-xs text-slate-500">
-              {t('evidence.snippets', { count: snippets.length })}
+              {isEditingSnippets
+                ? `${selectedSnippetsForEdit.size} selected`
+                : t('evidence.snippets', { count: snippets.length })}
             </p>
           </div>
-          <button
-            onClick={() => setShowGraphModal(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-            title="View Relationship Graph"
-          >
-            <GraphIcon />
-            <span>Graph</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Edit/Save button when SubArgument is focused */}
+            {focusedSubArgument && (
+              isEditingSnippets ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handleCancelEdit}
+                    className="px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveSnippets}
+                    disabled={selectedSnippetsForEdit.size === 0}
+                    className="px-2.5 py-1.5 text-xs text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Save ({selectedSnippetsForEdit.size})
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setIsEditingSnippets(true);
+                    const existingIds = focusedSubArgument.snippetIds || [];
+                    setSelectedSnippetsForEdit(new Set(existingIds));
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <span>Edit</span>
+                </button>
+              )
+            )}
+            <button
+              onClick={() => setShowGraphModal(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+              title="View Relationship Graph"
+            >
+              <GraphIcon />
+              <span>Graph</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -696,6 +870,9 @@ export function EvidenceCardPool() {
                   document={document}
                   snippets={snippets}
                   filteredSnippets={relatedSnippets}
+                  isEditMode={isEditingSnippets}
+                  selectedSnippetIds={selectedSnippetsForEdit}
+                  onToggleSelect={toggleSnippetSelection}
                 />
               ))}
             </div>

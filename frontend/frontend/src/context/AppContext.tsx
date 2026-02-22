@@ -237,9 +237,10 @@ interface AppContextType {
   // SubArgument State (次级子论点)
   // ============================================
   subArguments: SubArgument[];
-  addSubArgument: (subArgument: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  addSubArgument: (subArgument: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>) => Promise<SubArgument>;
   updateSubArgument: (id: string, updates: Partial<Omit<SubArgument, 'id' | 'createdAt'>>) => void;
   removeSubArgument: (id: string) => void;
+  regenerateSubArgument: (subArgumentId: string) => Promise<void>;
 
   // ============================================
   // Writing Canvas State (kept for step 2)
@@ -426,6 +427,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   purpose: string;
                   relationship: string;
                   snippet_ids: string[];
+                  pending_snippet_ids?: string[];
+                  needs_snippet_confirmation?: boolean;
                   is_ai_generated: boolean;
                   status: string;
                   created_at: string;
@@ -452,23 +455,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 console.log(`Loaded ${convertedArgs.length} generated arguments from backend`);
               }
 
-              // Load sub-arguments
-              if (argsResponse.sub_arguments && argsResponse.sub_arguments.length > 0) {
-                const convertedSubArgs: SubArgument[] = argsResponse.sub_arguments.map((sa) => ({
-                  id: sa.id,
-                  argumentId: sa.argument_id,
-                  title: sa.title,
-                  purpose: sa.purpose,
-                  relationship: sa.relationship,
-                  snippetIds: sa.snippet_ids,
-                  isAIGenerated: sa.is_ai_generated,
-                  status: sa.status as 'draft' | 'verified',
-                  createdAt: new Date(sa.created_at),
-                  updatedAt: new Date(),
-                }));
-                setSubArguments(convertedSubArgs);
-                console.log(`Loaded ${convertedSubArgs.length} sub-arguments from backend`);
-              }
+              // Load sub-arguments (always update, even if empty - to clear localStorage stale data)
+              const subArgsData = argsResponse.sub_arguments || [];
+              const convertedSubArgs: SubArgument[] = subArgsData.map((sa) => ({
+                id: sa.id,
+                argumentId: sa.argument_id,
+                title: sa.title,
+                purpose: sa.purpose,
+                relationship: sa.relationship,
+                snippetIds: sa.snippet_ids,
+                pendingSnippetIds: sa.pending_snippet_ids || [],
+                needsSnippetConfirmation: sa.needs_snippet_confirmation || false,
+                isAIGenerated: sa.is_ai_generated,
+                status: sa.status as 'draft' | 'verified',
+                createdAt: new Date(sa.created_at),
+                updatedAt: new Date(),
+              }));
+              setSubArguments(convertedSubArgs);
+              console.log(`Loaded ${convertedSubArgs.length} sub-arguments from backend`);
             } catch {
               // Arguments not available yet, that's fine
               console.log('No generated arguments found');
@@ -516,6 +520,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               purpose: string;
               relationship: string;
               snippet_ids: string[];
+              pending_snippet_ids?: string[];
+              needs_snippet_confirmation?: boolean;
               is_ai_generated: boolean;
               status: string;
               created_at: string;
@@ -542,23 +548,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
             console.log(`Loaded ${convertedArgs.length} generated arguments from backend (legacy path)`);
           }
 
-          // Load sub-arguments
-          if (argsResponse.sub_arguments && argsResponse.sub_arguments.length > 0) {
-            const convertedSubArgs: SubArgument[] = argsResponse.sub_arguments.map((sa) => ({
-              id: sa.id,
-              argumentId: sa.argument_id,
-              title: sa.title,
-              purpose: sa.purpose,
-              relationship: sa.relationship,
-              snippetIds: sa.snippet_ids,
-              isAIGenerated: sa.is_ai_generated,
-              status: sa.status as 'draft' | 'verified',
-              createdAt: new Date(sa.created_at),
-              updatedAt: new Date(),
-            }));
-            setSubArguments(convertedSubArgs);
-            console.log(`Loaded ${convertedSubArgs.length} sub-arguments from backend (legacy path)`);
-          }
+          // Load sub-arguments (always update, even if empty)
+          const subArgsData = argsResponse.sub_arguments || [];
+          const convertedSubArgs: SubArgument[] = subArgsData.map((sa) => ({
+            id: sa.id,
+            argumentId: sa.argument_id,
+            title: sa.title,
+            purpose: sa.purpose,
+            relationship: sa.relationship,
+            snippetIds: sa.snippet_ids,
+            pendingSnippetIds: sa.pending_snippet_ids || [],
+            needsSnippetConfirmation: sa.needs_snippet_confirmation || false,
+            isAIGenerated: sa.is_ai_generated,
+            status: sa.status as 'draft' | 'verified',
+            createdAt: new Date(sa.created_at),
+            updatedAt: new Date(),
+          }));
+          setSubArguments(convertedSubArgs);
+          console.log(`Loaded ${convertedSubArgs.length} sub-arguments from backend (legacy path)`);
         } catch {
           // Arguments not available yet, that's fine
           console.log('No generated arguments found (legacy path)');
@@ -993,16 +1000,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // SubArgument Management (次级子论点)
   // ============================================
 
-  const addSubArgument = useCallback((subArgumentData: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>) => {
+  const addSubArgument = useCallback(async (
+    subArgumentData: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>
+  ): Promise<SubArgument> => {
+    // 1. Call backend API to create SubArgument
+    const response = await apiClient.post<{
+      success: boolean;
+      subargument: {
+        id: string;
+        argument_id: string;
+        title: string;
+        purpose: string;
+        relationship: string;
+        snippet_ids: string[];
+        is_ai_generated: boolean;
+        status: string;
+        created_at: string;
+      };
+    }>(`/arguments/${projectId}/subarguments`, {
+      argument_id: subArgumentData.argumentId,
+      title: subArgumentData.title,
+      purpose: subArgumentData.purpose,
+      relationship: subArgumentData.relationship,
+      snippet_ids: subArgumentData.snippetIds,
+    });
+
+    if (!response.success) {
+      throw new Error('Failed to create SubArgument');
+    }
+
+    // 2. Create frontend SubArgument object
     const newSubArgument: SubArgument = {
-      ...subArgumentData,
-      id: `subarg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      createdAt: new Date(),
+      id: response.subargument.id,
+      argumentId: response.subargument.argument_id,
+      title: response.subargument.title,
+      purpose: response.subargument.purpose,
+      relationship: response.subargument.relationship,
+      snippetIds: response.subargument.snippet_ids,
+      isAIGenerated: response.subargument.is_ai_generated,
+      status: response.subargument.status as 'draft' | 'verified',
+      createdAt: new Date(response.subargument.created_at),
       updatedAt: new Date(),
     };
+
+    // 3. Update frontend state
     setSubArguments(prev => [...prev, newSubArgument]);
 
-    // Also update the parent argument's subArgumentIds
+    // 4. Update parent argument's subArgumentIds
     setArguments(prev => prev.map(arg => {
       if (arg.id === subArgumentData.argumentId) {
         const existingSubArgIds = arg.subArgumentIds || [];
@@ -1014,7 +1058,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       return arg;
     }));
-  }, []);
+
+    return newSubArgument;
+  }, [projectId]);
 
   const updateSubArgument = useCallback((id: string, updates: Partial<Omit<SubArgument, 'id' | 'createdAt'>>) => {
     setSubArguments(prev => prev.map(sa =>
@@ -1022,24 +1068,261 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ));
   }, []);
 
-  const removeSubArgument = useCallback((id: string) => {
+  const removeSubArgument = useCallback(async (id: string) => {
     const subArg = subArguments.find(sa => sa.id === id);
+    if (!subArg) return;
+
+    // 1. Remove SubArgument from state
     setSubArguments(prev => prev.filter(sa => sa.id !== id));
 
-    // Also update the parent argument's subArgumentIds
-    if (subArg) {
-      setArguments(prev => prev.map(arg => {
-        if (arg.id === subArg.argumentId) {
-          return {
-            ...arg,
-            subArgumentIds: (arg.subArgumentIds || []).filter(saId => saId !== id),
-            updatedAt: new Date(),
-          };
-        }
-        return arg;
+    // 2. Update the parent argument's subArgumentIds
+    setArguments(prev => prev.map(arg => {
+      if (arg.id === subArg.argumentId) {
+        return {
+          ...arg,
+          subArgumentIds: (arg.subArgumentIds || []).filter(saId => saId !== id),
+          updatedAt: new Date(),
+        };
+      }
+      return arg;
+    }));
+
+    // 3. Remove corresponding sentences from letterSections
+    const arg = arguments_.find(a => a.id === subArg.argumentId);
+    if (arg?.standardKey) {
+      setLetterSections(prev => prev.map(section => {
+        if (section.standardId !== arg.standardKey) return section;
+
+        // Find sentence indices to remove
+        const indicesToRemove = section.provenanceIndex?.bySubArgument?.[id] || [];
+        if (indicesToRemove.length === 0) return section;
+
+        // Sort indices in descending order to remove from end first
+        const sortedIndices = [...indicesToRemove].sort((a, b) => b - a);
+
+        // Create new sentences array without the removed sentences
+        const newSentences = section.sentences?.filter((_, idx) => !indicesToRemove.includes(idx)) || [];
+
+        // Rebuild content from remaining sentences
+        const newContent = newSentences.map(sent => sent.text).join(' ');
+
+        // Rebuild provenanceIndex
+        const newProvenanceIndex = {
+          bySubArgument: {} as Record<string, number[]>,
+          byArgument: {} as Record<string, number[]>,
+          bySnippet: {} as Record<string, number[]>,
+        };
+
+        newSentences.forEach((sent, idx) => {
+          if (sent.subargument_id) {
+            if (!newProvenanceIndex.bySubArgument[sent.subargument_id]) {
+              newProvenanceIndex.bySubArgument[sent.subargument_id] = [];
+            }
+            newProvenanceIndex.bySubArgument[sent.subargument_id].push(idx);
+          }
+          if (sent.argument_id) {
+            if (!newProvenanceIndex.byArgument[sent.argument_id]) {
+              newProvenanceIndex.byArgument[sent.argument_id] = [];
+            }
+            newProvenanceIndex.byArgument[sent.argument_id].push(idx);
+          }
+          (sent.snippet_ids || []).forEach(snippetId => {
+            if (!newProvenanceIndex.bySnippet[snippetId]) {
+              newProvenanceIndex.bySnippet[snippetId] = [];
+            }
+            newProvenanceIndex.bySnippet[snippetId].push(idx);
+          });
+        });
+
+        return {
+          ...section,
+          sentences: newSentences,
+          content: newContent,
+          provenanceIndex: newProvenanceIndex,
+          lastEditedAt: new Date(),
+        };
       }));
     }
-  }, [subArguments]);
+
+    // 4. Call backend to persist deletion
+    console.log(`[AppContext] removeSubArgument called with id=${id}, projectId=${projectId}`);
+    if (projectId) {
+      try {
+        const deleteUrl = `/arguments/${projectId}/subarguments/${id}`;
+        console.log(`[AppContext] Calling DELETE ${deleteUrl}`);
+        await apiClient.delete(deleteUrl);
+        console.log(`[AppContext] SubArgument ${id} deleted from backend successfully`);
+      } catch (error) {
+        console.error('[AppContext] Failed to delete SubArgument from backend:', error);
+      }
+    } else {
+      console.error('[AppContext] projectId is empty, cannot delete from backend!');
+    }
+  }, [subArguments, arguments_, projectId]);
+
+  // Regenerate a specific SubArgument's sentences in the Letter
+  const regenerateSubArgument = useCallback(async (subArgumentId: string) => {
+    // 1. Find the SubArgument
+    const subArg = subArguments.find(sa => sa.id === subArgumentId);
+    if (!subArg) {
+      console.error(`SubArgument ${subArgumentId} not found`);
+      return;
+    }
+
+    // 2. Find the parent Argument to get standardKey
+    const arg = arguments_.find(a => a.id === subArg.argumentId);
+    if (!arg || !arg.standardKey) {
+      console.error(`Argument ${subArg.argumentId} not found or has no standardKey`);
+      return;
+    }
+
+    // 3. Find the LetterSection for this standard
+    const section = letterSections.find(s => s.standardId === arg.standardKey);
+    if (!section) {
+      console.error(`LetterSection for standard ${arg.standardKey} not found`);
+      return;
+    }
+
+    // 4. Call backend API to regenerate only this SubArgument
+    try {
+      const response = await apiClient.post<{
+        success: boolean;
+        sentences: Array<{
+          text: string;
+          snippet_ids: string[];
+          subargument_id: string | null;
+          argument_id: string | null;
+          exhibit_refs: string[];
+          sentence_type: string;
+        }>;
+        provenance_index: {
+          by_subargument: Record<string, number[]>;
+          by_argument: Record<string, number[]>;
+          by_snippet: Record<string, number[]>;
+        };
+      }>(`/write/v3/${projectId}/${arg.standardKey}`, {
+        subargument_ids: [subArgumentId],
+      });
+
+      if (!response.success || !response.sentences) {
+        console.error('Regeneration failed:', response);
+        return;
+      }
+
+      // 5. Filter only body sentences from API response (skip opening/closing)
+      const bodySentencesFromAPI = response.sentences.filter(
+        s => s.sentence_type === 'body' && s.subargument_id === subArgumentId
+      );
+
+      if (bodySentencesFromAPI.length === 0) {
+        console.warn('No body sentences returned from API');
+        return;
+      }
+
+      // 6. Find sentence indices to replace (or determine insertion point)
+      const indicesToReplace = section.provenanceIndex?.bySubArgument?.[subArgumentId] || [];
+      const isNewSubArgument = indicesToReplace.length === 0;
+
+      // 7. Replace or insert sentences in the section
+      setLetterSections(prev => prev.map(s => {
+        if (s.id !== section.id) return s;
+
+        const oldSentences = [...s.sentences];
+        let newSentences: typeof oldSentences;
+
+        if (isNewSubArgument) {
+          // For NEW SubArguments: find insertion point after same Argument's sentences
+          // Look for the last sentence of the same Argument, insert after it
+          const argumentIndices = s.provenanceIndex?.byArgument?.[arg.id] || [];
+
+          if (argumentIndices.length > 0) {
+            // Insert after the last sentence of this Argument
+            const insertAfterIdx = Math.max(...argumentIndices);
+            newSentences = [
+              ...oldSentences.slice(0, insertAfterIdx + 1),
+              ...bodySentencesFromAPI,
+              ...oldSentences.slice(insertAfterIdx + 1),
+            ];
+          } else {
+            // No Argument sentences yet, find position based on section structure
+            // Insert before the closing sentence (last sentence is usually "closing" type)
+            const closingIdx = oldSentences.findIndex(sent => sent.sentence_type === 'closing');
+            if (closingIdx > 0) {
+              newSentences = [
+                ...oldSentences.slice(0, closingIdx),
+                ...bodySentencesFromAPI,
+                ...oldSentences.slice(closingIdx),
+              ];
+            } else {
+              // Just append to the end
+              newSentences = [...oldSentences, ...bodySentencesFromAPI];
+            }
+          }
+        } else {
+          // For EXISTING SubArguments: replace old sentences
+          const sortedIndices = [...indicesToReplace].sort((a, b) => a - b);
+          const firstIdx = sortedIndices[0];
+          const lastIdx = sortedIndices[sortedIndices.length - 1];
+
+          // Build new sentences array:
+          // 1. Keep sentences before the first replacement index
+          // 2. Insert new sentences
+          // 3. Keep sentences after the last replacement index
+          newSentences = [
+            ...oldSentences.slice(0, firstIdx),
+            ...bodySentencesFromAPI,
+            ...oldSentences.slice(lastIdx + 1),
+          ];
+        }
+
+        // Rebuild content from sentences
+        const newContent = newSentences.map(sent => sent.text).join(' ');
+
+        // Rebuild provenanceIndex
+        const newProvenanceIndex = {
+          bySubArgument: {} as Record<string, number[]>,
+          byArgument: {} as Record<string, number[]>,
+          bySnippet: {} as Record<string, number[]>,
+        };
+
+        newSentences.forEach((sent, idx) => {
+          // bySubArgument
+          if (sent.subargument_id) {
+            if (!newProvenanceIndex.bySubArgument[sent.subargument_id]) {
+              newProvenanceIndex.bySubArgument[sent.subargument_id] = [];
+            }
+            newProvenanceIndex.bySubArgument[sent.subargument_id].push(idx);
+          }
+          // byArgument
+          if (sent.argument_id) {
+            if (!newProvenanceIndex.byArgument[sent.argument_id]) {
+              newProvenanceIndex.byArgument[sent.argument_id] = [];
+            }
+            newProvenanceIndex.byArgument[sent.argument_id].push(idx);
+          }
+          // bySnippet
+          (sent.snippet_ids || []).forEach(snippetId => {
+            if (!newProvenanceIndex.bySnippet[snippetId]) {
+              newProvenanceIndex.bySnippet[snippetId] = [];
+            }
+            newProvenanceIndex.bySnippet[snippetId].push(idx);
+          });
+        });
+
+        return {
+          ...s,
+          sentences: newSentences,
+          content: newContent,
+          provenanceIndex: newProvenanceIndex,
+          lastEditedAt: new Date(),
+        };
+      }));
+
+      console.log(`Successfully regenerated SubArgument ${subArgumentId}`);
+    } catch (error) {
+      console.error('Failed to regenerate SubArgument:', error);
+    }
+  }, [subArguments, arguments_, letterSections, projectId]);
 
   // Argument → Standard mapping (NEW - replaces snippet → standard)
   const addArgumentMapping = useCallback((argumentId: string, standardKey: string) => {
@@ -1417,6 +1700,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           purpose: string;
           relationship: string;
           snippet_ids: string[];
+          pending_snippet_ids?: string[];
+          needs_snippet_confirmation?: boolean;
           is_ai_generated: boolean;
           status: string;
           created_at: string;
@@ -1451,23 +1736,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setArguments(convertedArguments);
       console.log(`Generated ${convertedArguments.length} arguments for ${response.main_subject}`);
 
-      // Convert and set sub-arguments
-      if (response.sub_arguments && response.sub_arguments.length > 0) {
-        const convertedSubArgs: SubArgument[] = response.sub_arguments.map((sa) => ({
-          id: sa.id,
-          argumentId: sa.argument_id,
-          title: sa.title,
-          purpose: sa.purpose,
-          relationship: sa.relationship,
-          snippetIds: sa.snippet_ids,
-          isAIGenerated: sa.is_ai_generated,
-          status: sa.status as 'draft' | 'verified',
-          createdAt: new Date(sa.created_at),
-          updatedAt: new Date(),
-        }));
-        setSubArguments(convertedSubArgs);
-        console.log(`Generated ${convertedSubArgs.length} sub-arguments`);
-      }
+      // Convert and set sub-arguments (always update, even if empty)
+      const subArgsData = response.sub_arguments || [];
+      const convertedSubArgs: SubArgument[] = subArgsData.map((sa) => ({
+        id: sa.id,
+        argumentId: sa.argument_id,
+        title: sa.title,
+        purpose: sa.purpose,
+        relationship: sa.relationship,
+        snippetIds: sa.snippet_ids,
+        pendingSnippetIds: sa.pending_snippet_ids || [],
+        needsSnippetConfirmation: sa.needs_snippet_confirmation || false,
+        isAIGenerated: sa.is_ai_generated,
+        status: sa.status as 'draft' | 'verified',
+        createdAt: new Date(sa.created_at),
+        updatedAt: new Date(),
+      }));
+      setSubArguments(convertedSubArgs);
+      console.log(`Generated ${convertedSubArgs.length} sub-arguments`);
     } catch (err) {
       console.error('Failed to generate arguments:', err);
       throw err;
@@ -1727,6 +2013,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addSubArgument,
     updateSubArgument,
     removeSubArgument,
+    regenerateSubArgument,
     // Writing canvas state (kept for step 2)
     writingEdges,
     addWritingEdge,
