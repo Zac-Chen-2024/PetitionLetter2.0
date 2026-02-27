@@ -170,7 +170,7 @@ function DataLoader({ children }: { children: ReactNode }) {
             project_id: string;
             total: number;
             snippets: UnifiedSnippet[];
-          }>(`/extraction/${projectId}/snippets?limit=500`);
+          }>(`/extraction/${projectId}/snippets?limit=2000`);
 
           if (extractionResponse.snippets && extractionResponse.snippets.length > 0) {
             if (cancelled) return;
@@ -243,7 +243,7 @@ function DataLoader({ children }: { children: ReactNode }) {
           project_id: string;
           total: number;
           snippets: BackendSnippet[];
-        }>(`/analysis/${projectId}/snippets?limit=500`);
+        }>(`/analysis/${projectId}/snippets?limit=2000`);
 
         if (cancelled) return;
 
@@ -310,7 +310,7 @@ function DataLoader({ children }: { children: ReactNode }) {
             project_id: string;
             total: number;
             snippets: BackendSnippet[];
-          }>(`/data/projects/${projectId}/snippets?limit=500`);
+          }>(`/data/projects/${projectId}/snippets?limit=2000`);
 
           if (cancelled) return;
 

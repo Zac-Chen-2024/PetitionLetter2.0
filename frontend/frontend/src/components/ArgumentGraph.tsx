@@ -1210,10 +1210,11 @@ export function ArgumentGraph() {
   // Transform version - increments on scale/offset changes to trigger position updates
   const [transformVersion, setTransformVersion] = useState(0);
 
-  // Update transformVersion when scale or offset changes
+  // Update transformVersion when scale, offset, or workMode changes
+  // workMode change causes layout shift — nodes need to re-report positions
   useEffect(() => {
     setTransformVersion(v => v + 1);
-  }, [scale, offset.x, offset.y]);
+  }, [scale, offset.x, offset.y, workMode]);
 
   // Calculate layout
   const { argumentNodes, standardNodes, subArgumentNodes } = calculateTreeLayout(

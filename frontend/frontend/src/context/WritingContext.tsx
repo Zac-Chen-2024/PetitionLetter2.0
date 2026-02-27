@@ -227,7 +227,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
         const snippetsResponse = await apiClient.get<{
           snippets: BackendSnippet[];
-        }>(`/analysis/${projectId}/snippets?limit=500`);
+        }>(`/analysis/${projectId}/snippets?limit=2000`);
 
         if (snippetsResponse.snippets) {
           const converted = snippetsResponse.snippets.map(convertBackendSnippet);
@@ -408,7 +408,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     try {
       const response = await apiClient.get<{
         snippets: BackendSnippet[];
-      }>(`/analysis/${projectId}/snippets?limit=500`);
+      }>(`/analysis/${projectId}/snippets?limit=2000`);
 
       if (response.snippets && response.snippets.length > 0) {
         const converted = response.snippets.map(convertBackendSnippet);
@@ -457,7 +457,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           project_id: string;
           total: number;
           snippets: UnifiedSnippet[];
-        }>(`/extraction/${projectId}/snippets?limit=500`);
+        }>(`/extraction/${projectId}/snippets?limit=2000`);
 
         if (snippetsResponse.snippets) {
           const converted = snippetsResponse.snippets.map(convertUnifiedSnippet);
@@ -575,7 +575,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           project_id: string;
           total: number;
           snippets: UnifiedSnippet[];
-        }>(`/extraction/${projectId}/snippets?limit=500`);
+        }>(`/extraction/${projectId}/snippets?limit=2000`);
 
         if (snippetsResponse.snippets) {
           const converted = snippetsResponse.snippets.map(convertUnifiedSnippet);

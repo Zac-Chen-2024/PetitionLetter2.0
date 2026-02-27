@@ -92,6 +92,7 @@ function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }
     arguments: arguments_,
     argumentMappings,
     subArguments,
+    workMode,
   } = useApp();
 
   // Check if this snippet is already assembled into an argument
@@ -219,7 +220,7 @@ function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }
         window.removeEventListener('scroll', updatePosition, true);
       };
     }
-  }, [snippet.id, updateSnippetPosition, isExpanded, focusState]);
+  }, [snippet.id, updateSnippetPosition, isExpanded, focusState, workMode]);
 
   const handleClick = () => {
     // Clicking card body always navigates to PDF preview (even in edit mode)
