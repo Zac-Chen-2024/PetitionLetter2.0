@@ -667,3 +667,67 @@ What is the relationship? (2-5 words)"""
     except Exception as e:
         print(f"Infer relationship failed: {e}")
         return "Supports main argument"  # 降级默认值
+
+
+async def infer_argument_title(
+    project_id: str,
+    argument_id: str,
+    provider: str = "deepseek"
+) -> str:
+    """
+    根据 Argument 下的 SubArguments 信息，用 LLM 生成简洁的 Argument 标题
+
+    Returns:
+        5-15 词的英文标题
+    """
+    legal_args = load_legal_arguments(project_id)
+    arguments = legal_args.get("arguments", [])
+    sub_arguments = legal_args.get("sub_arguments", [])
+
+    # 找到目标 argument
+    arg = next((a for a in arguments if a.get("id") == argument_id), None)
+    if not arg:
+        return "Untitled Argument"
+
+    standard_key = arg.get("standard_key", "")
+    current_title = arg.get("title", "")
+
+    # 收集子论点标题
+    child_ids = set(arg.get("sub_argument_ids", []))
+    child_titles = [
+        sa.get("title", "")
+        for sa in sub_arguments
+        if sa.get("id") in child_ids and sa.get("title")
+    ]
+
+    system_prompt = """You are an expert EB-1A immigration attorney.
+Your task is to generate a concise, descriptive title for a legal argument group.
+The title should summarize what the sub-arguments collectively prove.
+
+Output ONLY the title (5-15 words), nothing else. Do not use quotes."""
+
+    child_info = "\n".join(f"- {t}" for t in child_titles) if child_titles else "(no sub-arguments yet)"
+
+    user_prompt = f"""EB-1A Standard: {standard_key}
+Current title: {current_title or '(none)'}
+
+Sub-arguments under this argument:
+{child_info}
+
+Generate a concise title for this argument group:"""
+
+    try:
+        result = await call_llm_text(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            max_tokens=50,
+            provider=provider
+        )
+        title = result.strip().strip('"\'').strip()
+        if not title or len(title) > 100:
+            return current_title or "Untitled Argument"
+        return title
+    except Exception as e:
+        print(f"Infer argument title failed: {e}")
+        return current_title or "Untitled Argument"

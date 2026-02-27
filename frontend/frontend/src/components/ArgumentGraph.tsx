@@ -107,6 +107,9 @@ function ArgumentNodeComponent({
   transformVersion,
   onAddSubArgument,
   onDelete,
+  onAITitle,
+  onRewrite,
+  isRewriting,
   isMoveTarget,
   isMoveMode,
   onMoveTarget,
@@ -117,6 +120,9 @@ function ArgumentNodeComponent({
   transformVersion?: number;  // Triggers position update when canvas transforms
   onAddSubArgument?: (argumentId: string) => void;
   onDelete?: (argumentId: string) => void;
+  onAITitle?: (argumentId: string) => void;
+  onRewrite?: (argumentId: string) => void;
+  isRewriting?: boolean;
   isMoveTarget?: boolean;
   isMoveMode?: boolean;
   onMoveTarget?: (argumentId: string) => void;
@@ -223,7 +229,7 @@ function ArgumentNodeComponent({
     >
       <div
         className={`
-          w-[320px] p-4 rounded-xl border-2 shadow-md transition-all
+          w-[400px] p-4 rounded-xl border-2 shadow-md transition-all
           ${isMoveMode && isMoveTarget
             ? 'border-purple-500 bg-purple-100 ring-2 ring-purple-400 ring-offset-2 shadow-lg'
             : isMoveMode && !isMoveTarget
@@ -236,7 +242,7 @@ function ArgumentNodeComponent({
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-2 mb-2">
-          <span className="text-base font-bold text-purple-800 line-clamp-2">{node.data.title}</span>
+          <span className="text-base font-bold text-purple-800 line-clamp-3">{node.data.title}</span>
           <div className="flex items-center gap-0.5 flex-shrink-0 -mt-1 -mr-1">
             {/* Add SubArgument button */}
             {onAddSubArgument && (
@@ -253,8 +259,37 @@ function ArgumentNodeComponent({
                 </svg>
               </button>
             )}
-            {node.data.isAIGenerated && (
-              <span className="text-[10px] px-2 py-0.5 bg-purple-200 text-purple-700 rounded">AI</span>
+            {/* AI title button */}
+            {onAITitle && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onAITitle(node.id); }}
+                className="p-1 rounded hover:bg-purple-100 transition-colors"
+                title="AI generate title"
+              >
+                <svg className="w-3.5 h-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </button>
+            )}
+            {/* Rewrite button */}
+            {onRewrite && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRewrite(node.id); }}
+                disabled={isRewriting}
+                className="p-1 rounded hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                title="Rewrite letter content"
+              >
+                {isRewriting ? (
+                  <svg className="w-3.5 h-3.5 text-emerald-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+              </button>
             )}
             {/* Delete button */}
             {onDelete && (
@@ -271,25 +306,23 @@ function ArgumentNodeComponent({
           </div>
         </div>
 
-        {/* Stats row */}
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-purple-500">{t('graph.node.snippets', { count: node.data.snippetCount })}</span>
-          {node.data.completenessScore !== undefined && (
-            <div className="flex items-center gap-1">
-              <div className={`w-2.5 h-2.5 rounded-full ${getCompletenessColor(node.data.completenessScore)}`} />
-              <span className="text-purple-500">{node.data.completenessScore}%</span>
-            </div>
-          )}
-        </div>
-
-        {/* Standard tag if mapped */}
-        {node.data.standardKey && (
-          <div className="mt-3 pt-2 border-t border-purple-200">
+        {/* Bottom row: standard tag (left) + stats (right) */}
+        <div className="mt-auto pt-2 flex items-end justify-between">
+          {node.data.standardKey ? (
             <span className="text-xs px-2 py-1 bg-purple-200 text-purple-700 rounded-full">
               {node.data.standardKey}
             </span>
+          ) : <span />}
+          <div className="flex items-center gap-2 text-xs">
+            {node.data.completenessScore !== undefined && (
+              <div className="flex items-center gap-1">
+                <div className={`w-2.5 h-2.5 rounded-full ${getCompletenessColor(node.data.completenessScore)}`} />
+                <span className="text-purple-500">{node.data.completenessScore}%</span>
+              </div>
+            )}
+            <span className="text-purple-500">{t('graph.node.snippets', { count: node.data.snippetCount })}</span>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -702,7 +735,7 @@ function SubArgumentNodeComponent({
             />
           ) : (
             <span
-              className="text-sm font-semibold text-emerald-800 line-clamp-1 cursor-text hover:bg-emerald-100 rounded px-1 -mx-1"
+              className="text-sm font-semibold text-emerald-800 line-clamp-2 cursor-text hover:bg-emerald-100 rounded px-1 -mx-1"
               onDoubleClick={handleDoubleClick}
               title="Double-click to edit"
             >
@@ -757,9 +790,6 @@ function SubArgumentNodeComponent({
                 </svg>
               )}
             </button>
-            {node.data.isAIGenerated && (
-              <span className="text-[9px] px-1.5 py-0.5 bg-emerald-200 text-emerald-700 rounded">AI</span>
-            )}
             {/* Delete button — rightmost */}
             <button
               onClick={handleDeleteClick}
@@ -819,9 +849,9 @@ function InternalConnectionLines({ argumentNodes, standardNodes, subArgumentNode
         const argPos = argumentPositions.get(subArgNode.data.argumentId);
         if (!argPos) return null;
 
-        const x1 = subArgNode.position.x + 120; // Right edge of subargument node (240px / 2)
+        const x1 = subArgNode.position.x + 160; // Right edge of subargument node (320px / 2)
         const y1 = subArgNode.position.y;
-        const x2 = argPos.x - 160; // Left edge of argument node (320px / 2)
+        const x2 = argPos.x - 200; // Left edge of argument node (400px / 2)
         const y2 = argPos.y;
 
         const midX = (x1 + x2) / 2;
@@ -875,7 +905,7 @@ function InternalConnectionLines({ argumentNodes, standardNodes, subArgumentNode
         const standardPos = standardPositions.get(standardId);
         if (!standardPos) return null;
 
-        const x1 = argNode.position.x + 160; // Right edge of argument node (320px / 2)
+        const x1 = argNode.position.x + 200; // Right edge of argument node (400px / 2)
         const y1 = argNode.position.y;
         const x2 = standardPos.x - 120; // Left edge of standard node (240px / 2)
         const y2 = standardPos.y;
@@ -1020,7 +1050,7 @@ function calculateTreeLayout(
           title: arg.title,
           subject: arg.subject,
           standardKey: arg.standardKey,
-          snippetCount: arg.snippetIds?.length || 0,
+          snippetCount: subArguments.filter(sa => sa.argumentId === arg.id).reduce((sum, sa) => sum + (sa.snippetIds?.length || 0), 0) || arg.snippetIds?.length || 0,
           isAIGenerated: arg.isAIGenerated,
           completenessScore: arg.completeness?.score,
         },
@@ -1143,8 +1173,10 @@ export function ArgumentGraph() {
     rewriteStandard,
     removeStandard,
     removeArgument,
+    updateArgument,
     letterSections,
     projectId,
+    llmProvider,
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1404,6 +1436,44 @@ export function ArgumentGraph() {
     setDeleteArgModalId(null);
     toast.success(`Argument "${(arg?.title || '').slice(0, 30)}" removed`);
   }, [deleteArgModalId, removeArgument, focusState, setFocusState, contextArguments]);
+
+  // Handle AI title for Argument
+  const [aiTitleArgId, setAiTitleArgId] = useState<string | null>(null);
+  const handleArgumentAITitle = useCallback(async (argumentId: string) => {
+    if (aiTitleArgId || !projectId) return;
+    setAiTitleArgId(argumentId);
+    try {
+      const response = await apiClient.post<{ success: boolean; title: string }>(
+        `/arguments/${projectId}/infer-argument-title`,
+        { argument_id: argumentId, provider: llmProvider }
+      );
+      if (response.success && response.title) {
+        updateArgument(argumentId, { title: response.title });
+        toast.success('Title generated');
+      }
+    } catch (error) {
+      toast.error('Failed to generate title');
+    } finally {
+      setAiTitleArgId(null);
+    }
+  }, [aiTitleArgId, projectId, llmProvider, updateArgument]);
+
+  // Handle rewrite Argument (regenerate all sub-arguments' letter content)
+  const [rewritingArgId, setRewritingArgId] = useState<string | null>(null);
+  const handleArgumentRewrite = useCallback(async (argumentId: string) => {
+    if (rewritingArgId || !rewriteStandard) return;
+    const arg = contextArguments.find(a => a.id === argumentId);
+    if (!arg?.standardKey) return;
+    setRewritingArgId(argumentId);
+    try {
+      await rewriteStandard(arg.standardKey);
+      toast.success('Letter content rewritten');
+    } catch (error) {
+      toast.error('Rewrite failed');
+    } finally {
+      setRewritingArgId(null);
+    }
+  }, [rewritingArgId, contextArguments, rewriteStandard]);
 
   // ==================== Standard Action Handlers ====================
 
@@ -1949,6 +2019,9 @@ export function ArgumentGraph() {
                 transformVersion={transformVersion}
                 onAddSubArgument={handleAddSubArgument}
                 onDelete={handleArgumentDelete}
+                onAITitle={handleArgumentAITitle}
+                onRewrite={handleArgumentRewrite}
+                isRewriting={rewritingArgId === node.id}
                 isMoveMode={isMoveMode}
                 isMoveTarget={moveTargetArgumentIds.has(node.id)}
                 onMoveTarget={handleMoveConfirm}

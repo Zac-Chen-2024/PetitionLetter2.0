@@ -640,3 +640,27 @@ async def infer_subargument_relationship(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class InferArgumentTitleRequest(BaseModel):
+    """生成 Argument 标题请求"""
+    argument_id: str
+    provider: str = "deepseek"
+
+
+@router.post("/{project_id}/infer-argument-title")
+async def infer_argument_title_endpoint(
+    project_id: str,
+    request: InferArgumentTitleRequest
+):
+    """用 LLM 为 Argument 生成简洁标题"""
+    try:
+        from ..services.snippet_recommender import infer_argument_title
+        title = await infer_argument_title(
+            project_id=project_id,
+            argument_id=request.argument_id,
+            provider=request.provider
+        )
+        return {"success": True, "title": title}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
