@@ -268,6 +268,8 @@ export function useApp() {
     updateSubArgumentPosition: ui.updateSubArgumentPosition,
     snippetPanelBounds: ui.snippetPanelBounds,
     setSnippetPanelBounds: ui.setSnippetPanelBounds,
+    writingTreePanelBounds: ui.writingTreePanelBounds,
+    setWritingTreePanelBounds: ui.setWritingTreePanelBounds,
     isElementHighlighted,
 
     // WritingContext (with bound projectId/llmProvider)

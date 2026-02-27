@@ -1177,6 +1177,8 @@ export function ArgumentGraph() {
     letterSections,
     projectId,
     llmProvider,
+    setWritingTreePanelBounds,
+    workMode,
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1729,6 +1731,19 @@ export function ArgumentGraph() {
     };
   }, [handleWheel]);
 
+  // Report container bounds for connection line clipping
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateBounds = () => {
+      const rect = container.getBoundingClientRect();
+      setWritingTreePanelBounds({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+    };
+    requestAnimationFrame(updateBounds);
+    window.addEventListener('resize', updateBounds);
+    return () => window.removeEventListener('resize', updateBounds);
+  }, [setWritingTreePanelBounds, workMode]);
+
   // Auto-center on SubArgument when focused from LetterPanel
   // Track last centered ID to avoid re-centering on every render
   const lastCenteredSubArgId = useRef<string | null>(null);
@@ -1785,7 +1800,7 @@ export function ArgumentGraph() {
   }, [isMergeMode, isMoveMode, exitMergeMode]);
 
   // Get generateArguments from context
-  const { generateArguments, isGeneratingArguments, workMode, setWorkMode } = useApp();
+  const { generateArguments, isGeneratingArguments, setWorkMode } = useApp();
 
   return (
     <div className="flex flex-col h-full bg-slate-50">

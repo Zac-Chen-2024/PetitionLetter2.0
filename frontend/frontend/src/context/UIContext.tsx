@@ -50,6 +50,8 @@ export interface UIContextType {
   updateSubArgumentPosition: (id: string, position: ElementPosition) => void;
   snippetPanelBounds: PanelBounds | null;
   setSnippetPanelBounds: (bounds: PanelBounds | null) => void;
+  writingTreePanelBounds: PanelBounds | null;
+  setWritingTreePanelBounds: (bounds: PanelBounds | null) => void;
   // isElementHighlighted needs cross-context data; takes them as parameters
   isElementHighlighted: (
     elementType: 'snippet' | 'standard',
@@ -77,6 +79,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [argumentPositions, setArgumentPositions] = useState<Map<string, ElementPosition>>(new Map());
   const [subArgumentPositions, setSubArgumentPositions] = useState<Map<string, ElementPosition>>(new Map());
   const [snippetPanelBounds, setSnippetPanelBounds] = useState<PanelBounds | null>(null);
+  const [writingTreePanelBounds, setWritingTreePanelBounds] = useState<PanelBounds | null>(null);
   const [workMode, setWorkMode] = useState<WorkMode>('verify');
 
   // View mode
@@ -261,10 +264,12 @@ export function UIProvider({ children }: { children: ReactNode }) {
     updateSubArgumentPosition,
     snippetPanelBounds,
     setSnippetPanelBounds,
+    writingTreePanelBounds,
+    setWritingTreePanelBounds,
     isElementHighlighted,
     workMode,
     setWorkMode,
-  }), [focusState, selectedSnippetId, selectedDocumentId, viewMode, argumentViewMode, argumentGraphPositions, draggedSnippetId, draggedArgumentId, hoveredSnippetId, snippetPositions, pdfBboxPositions, argumentPositions, subArgumentPositions, snippetPanelBounds, workMode, setFocusState, clearFocus, setViewMode, setArgumentViewMode, updateArgumentGraphPosition, clearArgumentGraphPositions, updateSnippetPosition, updatePdfBboxPosition, updateArgumentPosition2, updateSubArgumentPosition, isElementHighlighted]);
+  }), [focusState, selectedSnippetId, selectedDocumentId, viewMode, argumentViewMode, argumentGraphPositions, draggedSnippetId, draggedArgumentId, hoveredSnippetId, snippetPositions, pdfBboxPositions, argumentPositions, subArgumentPositions, snippetPanelBounds, writingTreePanelBounds, workMode, setFocusState, clearFocus, setViewMode, setArgumentViewMode, updateArgumentGraphPosition, clearArgumentGraphPositions, updateSnippetPosition, updatePdfBboxPosition, updateArgumentPosition2, updateSubArgumentPosition, isElementHighlighted]);
 
   return <UIContext.Provider value={value}>{children}</UIContext.Provider>;
 }

@@ -509,7 +509,7 @@ const GraphIcon = () => (
 export function EvidenceCardPool() {
   const { t } = useTranslation();
   const legalStandards = useLegalStandards();
-  const { focusState, snippetPositions, connections, viewMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId } = useApp();
+  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId } = useApp();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
   const [showGraphModal, setShowGraphModal] = useState(false);
@@ -673,7 +673,7 @@ export function EvidenceCardPool() {
       container.removeEventListener('scroll', updateRect);
       window.removeEventListener('resize', updateRect);
     };
-  }, [setSnippetPanelBounds, focusState]);
+  }, [setSnippetPanelBounds, focusState, workMode]);
 
   // Calculate hidden snippets with connections
   const { hiddenAbove, hiddenBelow } = useMemo(() => {

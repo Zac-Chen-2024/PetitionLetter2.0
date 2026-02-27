@@ -1,51 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { getStandardKeyColor } from '../constants/colors';
-
-// Panel boundary calculation based on new layout percentages
-// Layout: DocumentViewer (25%) | EvidenceCards (40%) | ArgumentAssembly (35%)
-function usePanelBounds() {
-  const [bounds, setBounds] = useState({
-    evidenceCards: { left: 0, top: 0, right: 0, bottom: 0 },
-    argumentAssembly: { left: 0, top: 0, right: 0, bottom: 0 },
-  });
-
-  const updateBounds = useCallback(() => {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-
-    // Find the header height (assuming ~100px for header + view mode switcher)
-    const headerHeight = 100;
-
-    // Panel widths as percentages
-    const docViewerWidth = width * 0.25;
-    const evidenceCardsWidth = width * 0.40;
-    const argumentWidth = width * 0.35;
-
-    setBounds({
-      evidenceCards: {
-        left: docViewerWidth,
-        top: headerHeight,
-        right: docViewerWidth + evidenceCardsWidth,
-        bottom: height,
-      },
-      argumentAssembly: {
-        left: docViewerWidth + evidenceCardsWidth,
-        top: headerHeight,
-        right: docViewerWidth + evidenceCardsWidth + argumentWidth,
-        bottom: height,
-      },
-    });
-  }, []);
-
-  useEffect(() => {
-    updateBounds();
-    window.addEventListener('resize', updateBounds);
-    return () => window.removeEventListener('resize', updateBounds);
-  }, [updateBounds]);
-
-  return bounds;
-}
 
 // Simple curved line helper
 function CurvedLine({
@@ -71,11 +25,16 @@ function CurvedLine({
   );
 }
 
+// Bounds type for panel visibility checks
+interface PanelBounds {
+  top: number; bottom: number; left: number; right: number;
+}
+
 // Connection lines for a focused snippet (PDF → Card → SubArgument)
-function SnippetConnectionLines({ snippetId }: { snippetId: string }) {
+function SnippetConnectionLines({ snippetId, snippetBounds }: { snippetId: string; snippetBounds: PanelBounds | null }) {
   const {
     snippetPositions, pdfBboxPositions, allSnippets,
-    subArguments, subArgumentPositions
+    subArguments, subArgumentPositions, workMode
   } = useApp();
 
   const snippet = allSnippets.find(s => s.id === snippetId);
@@ -83,6 +42,9 @@ function SnippetConnectionLines({ snippetId }: { snippetId: string }) {
   const bboxPos = pdfBboxPositions.get(snippetId);
 
   if (!snippet) return null;
+
+  // Skip if card is scrolled outside the visible Evidence Cards area
+  if (snippetBounds && cardPos && (cardPos.y < snippetBounds.top || cardPos.y > snippetBounds.bottom)) return null;
 
   const color = snippet.color || '#3b82f6';
 
@@ -96,8 +58,8 @@ function SnippetConnectionLines({ snippetId }: { snippetId: string }) {
 
   return (
     <g>
-      {/* 1. PDF bounding box → Evidence Card LEFT side */}
-      {cardPos && bboxPos && (
+      {/* 1. PDF bounding box → Evidence Card LEFT side (verify mode only — in write mode PDF is stacked below cards) */}
+      {workMode === 'verify' && cardPos && bboxPos && (
         <CurvedLine
           startX={bboxPos.x}
           startY={bboxPos.y}
@@ -129,7 +91,7 @@ function SnippetConnectionLines({ snippetId }: { snippetId: string }) {
 }
 
 // Connection lines for a focused SubArgument (show Snippet → SubArgument connections)
-function SubArgumentConnectionLines({ subArgumentId }: { subArgumentId: string }) {
+function SubArgumentConnectionLines({ subArgumentId, snippetBounds }: { subArgumentId: string; snippetBounds: PanelBounds | null }) {
   const {
     allSnippets, snippetPositions,
     arguments: arguments_, subArguments, subArgumentPositions
@@ -157,6 +119,9 @@ function SubArgumentConnectionLines({ subArgumentId }: { subArgumentId: string }
         const cardPos = snippetPositions.get(snippetId);
         if (!snippet || !cardPos) return null;
 
+        // Skip cards scrolled outside the visible Evidence Cards area
+        if (snippetBounds && (cardPos.y < snippetBounds.top || cardPos.y > snippetBounds.bottom)) return null;
+
         return (
           <CurvedLine
             key={`subarg-snip-${snippetId}`}
@@ -174,84 +139,61 @@ function SubArgumentConnectionLines({ subArgumentId }: { subArgumentId: string }
   );
 }
 
-// Connection lines for a focused Standard - disabled to reduce visual clutter
-// Only highlight argument cards, no connection lines to sub-arguments
-function StandardConnectionLines({ standardId }: { standardId: string }) {
-  // Return empty - no connection lines when standard is focused
-  // Arguments are highlighted via ArgumentGraph component
-  return null;
-}
-
 export function ConnectionLines() {
-  const { focusState, selectedSnippetId } = useApp();
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const panelBounds = usePanelBounds();
+  const { focusState, selectedSnippetId, snippetPanelBounds, writingTreePanelBounds } = useApp();
 
-  useEffect(() => {
-    const updateDimensions = () => {
-      setDimensions({ width: window.innerWidth, height: window.innerHeight });
-    };
-    updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
-  }, []);
-
-  // Calculate clip regions - include PDF area (from 0) so PDF-to-EvidenceCard lines can show
-  const clipLeft = 0;
-  const clipTop = panelBounds.evidenceCards.top;
-  const clipRight = panelBounds.argumentAssembly.right;
-  const clipBottom = panelBounds.argumentAssembly.bottom;
-  const clipWidth = clipRight - clipLeft;
-  const clipHeight = clipBottom - clipTop;
+  // No bounds data yet — nothing to render
+  if (!snippetPanelBounds && !writingTreePanelBounds) return null;
 
   return (
     <svg
-      className="fixed inset-0 pointer-events-none z-20"
-      width={dimensions.width}
-      height={dimensions.height}
+      className="fixed inset-0 pointer-events-none z-[9999]"
+      width={window.innerWidth}
+      height={window.innerHeight}
     >
-      {/* Define clip paths for panel boundaries */}
       <defs>
         <clipPath id="panels-clip">
-          <rect
-            x={clipLeft}
-            y={clipTop}
-            width={clipWidth}
-            height={clipHeight}
-          />
+          {snippetPanelBounds && (
+            <rect
+              x={snippetPanelBounds.left}
+              y={snippetPanelBounds.top}
+              width={snippetPanelBounds.right - snippetPanelBounds.left}
+              height={snippetPanelBounds.bottom - snippetPanelBounds.top}
+            />
+          )}
+          {writingTreePanelBounds && (
+            <rect
+              x={writingTreePanelBounds.left}
+              y={writingTreePanelBounds.top}
+              width={writingTreePanelBounds.right - writingTreePanelBounds.left}
+              height={writingTreePanelBounds.bottom - writingTreePanelBounds.top}
+            />
+          )}
         </clipPath>
       </defs>
 
-      {/* Apply clip path to all connection lines */}
       <g clipPath="url(#panels-clip)">
-        {/* 聚焦子论点时：只高亮，不显示连线 */}
         {focusState.type === 'argument' && focusState.id ? (
           <>
-            {/* No connection lines when argument is focused - only highlight */}
-            {/* Overlay selected snippet's PDF connection line if any */}
             {selectedSnippetId && (
-              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} />
+              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} snippetBounds={snippetPanelBounds} />
             )}
           </>
         ) : focusState.type === 'subargument' && focusState.id ? (
           <>
-            {/* 聚焦次级子论点时：显示 snippet → 次级子论点 连线 */}
-            <SubArgumentConnectionLines key={focusState.id} subArgumentId={focusState.id} />
-            {/* Overlay selected snippet's PDF connection line */}
+            <SubArgumentConnectionLines key={focusState.id} subArgumentId={focusState.id} snippetBounds={snippetPanelBounds} />
             {selectedSnippetId && (
-              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} />
+              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} snippetBounds={snippetPanelBounds} />
             )}
           </>
         ) : focusState.type === 'standard' && focusState.id ? (
           <>
-            <StandardConnectionLines key={focusState.id} standardId={focusState.id} />
-            {/* Overlay selected snippet's PDF connection line */}
             {selectedSnippetId && (
-              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} />
+              <SnippetConnectionLines key={`selected-${selectedSnippetId}`} snippetId={selectedSnippetId} snippetBounds={snippetPanelBounds} />
             )}
           </>
         ) : selectedSnippetId ? (
-          <SnippetConnectionLines key={selectedSnippetId} snippetId={selectedSnippetId} />
+          <SnippetConnectionLines key={selectedSnippetId} snippetId={selectedSnippetId} snippetBounds={snippetPanelBounds} />
         ) : null}
       </g>
     </svg>

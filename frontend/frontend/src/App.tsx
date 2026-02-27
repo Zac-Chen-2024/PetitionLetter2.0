@@ -68,7 +68,7 @@ function MappingPage() {
           return (
             <>
               {/* Panel: Evidence Cards + PDF Preview (split vertically) */}
-              <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col">
+              <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col relative z-0">
                 {/* Top: Evidence Cards (50%) */}
                 <div className="h-1/2 border-b border-slate-200 overflow-hidden">
                   <EvidenceCardPool />
@@ -79,18 +79,15 @@ function MappingPage() {
                 </div>
               </div>
 
-              {/* Panel: Writing Tree (flex) */}
-              <div className="flex-1 bg-white overflow-hidden">
+              {/* Panel: Writing Tree (flex) — z-0 caps internal stacking below ConnectionLines z-40 */}
+              <div className="flex-1 bg-white overflow-hidden relative z-0">
                 <ArgumentGraph />
               </div>
 
               {/* Panel: Letter Panel (480px) */}
-              <div className="w-[480px] flex-shrink-0 border-l border-slate-200 overflow-hidden">
+              <div className="w-[480px] flex-shrink-0 border-l border-slate-200 overflow-hidden relative z-0">
                 <LetterPanel className="h-full" />
               </div>
-
-              {/* SVG Connection Lines (rendered on top) */}
-              <ConnectionLines />
             </>
           );
         }
@@ -99,17 +96,14 @@ function MappingPage() {
         return (
           <>
             {/* Panel 2: Evidence Cards (25%) */}
-            <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden">
+            <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden relative z-0">
               <EvidenceCardPool />
             </div>
 
             {/* Panel 3: Writing Tree (50%) */}
-            <div className="w-[50%] flex-shrink-0 bg-white overflow-hidden">
+            <div className="w-[50%] flex-shrink-0 bg-white overflow-hidden relative z-0">
               <ArgumentGraph />
             </div>
-
-            {/* SVG Connection Lines (rendered on top) */}
-            <ConnectionLines />
           </>
         );
     }
@@ -132,6 +126,9 @@ function MappingPage() {
         {/* Right side: changes based on view mode and work mode */}
         {renderMappingView()}
       </div>
+
+      {/* SVG Connection Lines — outside flex container to avoid stacking context issues */}
+      <ConnectionLines />
     </div>
   );
 }
