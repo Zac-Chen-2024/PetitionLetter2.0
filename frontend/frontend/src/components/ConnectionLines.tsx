@@ -34,7 +34,7 @@ interface PanelBounds {
 function SnippetConnectionLines({ snippetId, snippetBounds }: { snippetId: string; snippetBounds: PanelBounds | null }) {
   const {
     snippetPositions, pdfBboxPositions, allSnippets,
-    subArguments, subArgumentPositions, workMode
+    subArguments, subArgumentPositions
   } = useApp();
 
   const snippet = allSnippets.find(s => s.id === snippetId);
@@ -58,8 +58,8 @@ function SnippetConnectionLines({ snippetId, snippetBounds }: { snippetId: strin
 
   return (
     <g>
-      {/* 1. PDF bounding box → Evidence Card LEFT side (verify mode only — in write mode PDF is stacked below cards) */}
-      {workMode === 'verify' && cardPos && bboxPos && (
+      {/* 1. PDF bounding box → Evidence Card */}
+      {cardPos && bboxPos && (
         <CurvedLine
           startX={bboxPos.x}
           startY={bboxPos.y}
@@ -145,6 +145,13 @@ export function ConnectionLines() {
   // No bounds data yet — nothing to render
   if (!snippetPanelBounds && !writingTreePanelBounds) return null;
 
+  // Compute a merged clip rect covering all panels where lines should be visible:
+  // From x=0 (includes Document Viewer / PDF Preview) to Writing Tree right edge (excludes Letter Panel).
+  // From header bottom to viewport bottom.
+  const clipTop = Math.min(snippetPanelBounds?.top ?? Infinity, writingTreePanelBounds?.top ?? Infinity);
+  const clipRight = Math.max(snippetPanelBounds?.right ?? 0, writingTreePanelBounds?.right ?? 0);
+  const clipBottom = Math.max(snippetPanelBounds?.bottom ?? 0, writingTreePanelBounds?.bottom ?? 0);
+
   return (
     <svg
       className="fixed inset-0 pointer-events-none z-[9999]"
@@ -153,22 +160,7 @@ export function ConnectionLines() {
     >
       <defs>
         <clipPath id="panels-clip">
-          {snippetPanelBounds && (
-            <rect
-              x={snippetPanelBounds.left}
-              y={snippetPanelBounds.top}
-              width={snippetPanelBounds.right - snippetPanelBounds.left}
-              height={snippetPanelBounds.bottom - snippetPanelBounds.top}
-            />
-          )}
-          {writingTreePanelBounds && (
-            <rect
-              x={writingTreePanelBounds.left}
-              y={writingTreePanelBounds.top}
-              width={writingTreePanelBounds.right - writingTreePanelBounds.left}
-              height={writingTreePanelBounds.bottom - writingTreePanelBounds.top}
-            />
-          )}
+          <rect x={0} y={clipTop} width={clipRight} height={clipBottom - clipTop} />
         </clipPath>
       </defs>
 
