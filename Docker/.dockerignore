@@ -1,0 +1,36 @@
+.git
+.claude
+
+# Frontend build artifacts & deps (rebuilt in Docker)
+frontend/frontend/node_modules
+frontend/frontend/dist
+
+# Backend caches
+backend/__pycache__
+backend/**/__pycache__
+backend/app/__pycache__
+backend/app/**/__pycache__
+
+# Archive (not needed at runtime)
+Archive
+
+# Docs & screenshots
+Doc
+Screen
+
+# IDE & OS
+.vscode
+.idea
+*.pyc
+*.pyo
+__pycache__
+Thumbs.db
+.DS_Store
+
+# Source data: skip zip and macOS junk
+data/Test.zip
+data/**/__MACOSX
+
+# Misc
+nul
+*.db

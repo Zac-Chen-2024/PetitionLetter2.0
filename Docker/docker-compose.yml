@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    ports:
+      - "8008:8008"
+    env_file:
+      - ../backend/.env
+    volumes:
+      - ../backend/data:/app/backend/data
+      - ../data:/app/data
