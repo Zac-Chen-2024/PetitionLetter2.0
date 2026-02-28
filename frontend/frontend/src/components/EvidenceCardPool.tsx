@@ -510,7 +510,7 @@ const GraphIcon = () => (
 export function EvidenceCardPool() {
   const { t } = useTranslation();
   const legalStandards = useLegalStandards();
-  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId } = useApp();
+  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId, markSectionStale } = useApp();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
   const [showGraphModal, setShowGraphModal] = useState(false);
@@ -587,9 +587,14 @@ export function EvidenceCardPool() {
       console.log('[EvidenceCardPool] SubArgument snippets saved to backend');
     } catch (error) {
       console.error('[EvidenceCardPool] Failed to save snippets to backend:', error);
-      // Could add toast notification here
     }
-  }, [focusedSubArgument, selectedSnippetsForEdit, updateSubArgument, projectId]);
+
+    // Mark the parent argument's standard section as stale
+    const parentArg = arguments_.find(a => a.id === focusedSubArgument.argumentId);
+    if (parentArg?.standardKey) {
+      markSectionStale(parentArg.standardKey);
+    }
+  }, [focusedSubArgument, selectedSnippetsForEdit, updateSubArgument, projectId, arguments_, markSectionStale]);
 
   // Cancel edit mode
   const handleCancelEdit = useCallback(() => {

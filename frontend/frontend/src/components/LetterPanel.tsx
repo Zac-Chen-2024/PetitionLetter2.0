@@ -11,9 +11,14 @@ interface SectionNavProps {
   sections: LetterSection[];
   activeSection: string | null;
   onSectionClick: (sectionId: string) => void;
+  generatingStandard?: string;
+  rewritingStandard?: string | null;
 }
 
-function SectionNav({ sections, activeSection, onSectionClick }: SectionNavProps) {
+function SectionNav({ sections, activeSection, onSectionClick, generatingStandard, rewritingStandard }: SectionNavProps) {
+  if (rewritingStandard) {
+    console.log('[SectionNav] rewritingStandard =', rewritingStandard, 'sections:', sections.map(s => s.standardId));
+  }
   return (
     <div className="flex-shrink-0 bg-white shadow-md relative z-10">
       <div className="flex overflow-x-auto scrollbar-hide">
@@ -29,13 +34,23 @@ function SectionNav({ sections, activeSection, onSectionClick }: SectionNavProps
                   : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
             >
               <span className="flex items-center gap-1.5">
-                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold
-                  ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-200 text-slate-500'}`}>
-                  {idx + 1}
-                </span>
+                {(generatingStandard === section.standardId || rewritingStandard === section.standardId) ? (
+                  <svg className="animate-spin w-4 h-4 text-blue-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                ) : (
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold
+                    ${isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-200 text-slate-500'}`}>
+                    {idx + 1}
+                  </span>
+                )}
                 {section.title}
+                {section.isStale && !generatingStandard && !rewritingStandard && (
+                  <span className="w-2 h-2 bg-amber-500 rounded-full flex-shrink-0" title="Content out of date" />
+                )}
               </span>
               {/* Active indicator line */}
               {isActive && (
@@ -164,6 +179,8 @@ interface LetterSectionComponentProps {
   isHighlighted: boolean;
   onHover: (standardId?: string) => void;
   onEdit: (id: string, content: string) => void;
+  onRewrite?: (standardId: string) => void;
+  isRewriting?: boolean;
   onSentenceClick?: (sentence: SentenceWithProvenance, idx: number) => void;
   onExhibitClick?: (exhibitId: string, page?: number, subargumentId?: string | null, snippetIds?: string[]) => void;
   focusedSubArgumentId?: string | null;
@@ -176,6 +193,8 @@ function LetterSectionComponent({
   isHighlighted,
   onHover,
   onEdit,
+  onRewrite,
+  isRewriting,
   onSentenceClick,
   onExhibitClick,
   focusedSubArgumentId,
@@ -402,6 +421,33 @@ function LetterSectionComponent({
               edited
             </span>
           )}
+          {/* Rewrite button — always visible, highlighted when stale */}
+          {section.standardId && onRewrite && (
+            <button
+              onClick={() => onRewrite(section.standardId!)}
+              disabled={isRewriting}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
+                isRewriting
+                  ? 'text-slate-400 cursor-not-allowed'
+                  : section.isStale
+                    ? 'text-amber-700 bg-amber-100 hover:bg-amber-200 font-medium'
+                    : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+              }`}
+              title={section.isStale ? 'Content out of date — click to rewrite' : 'Rewrite this section'}
+            >
+              {isRewriting ? (
+                <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              )}
+              {section.isStale && <span>Outdated</span>}
+            </button>
+          )}
           {!isEditing && (
             <button
               onClick={() => setIsEditing(true)}
@@ -465,6 +511,8 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
     setSelectedSnippetId,
     generatePetition,
     pipelineState,
+    rewriteStandard,
+    rewritingStandardKey,
   } = useApp();
 
   const [hoveredStandardId, setHoveredStandardId] = useState<string | undefined>(undefined);
@@ -541,6 +589,16 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
       }
     }
   }, [focusedSubArgumentId]);
+
+  // Handle rewrite for a single section
+  // rewritingStandardKey is managed by WritingContext automatically
+  const handleRewrite = useCallback(async (standardId: string) => {
+    try {
+      await rewriteStandard(standardId);
+    } catch (err) {
+      console.error('Rewrite failed:', err);
+    }
+  }, [rewriteStandard]);
 
   // Handle sentence click - set focus to SubArgument or Argument
   const handleSentenceClick = useCallback((sentence: SentenceWithProvenance, _idx: number) => {
@@ -656,7 +714,16 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  <span>Generating... {pipelineState.progress}%</span>
+                  <span>
+                    {pipelineState.generatedCount != null && pipelineState.totalToGenerate
+                      ? `${pipelineState.generatedCount + 1}/${pipelineState.totalToGenerate}`
+                      : `${pipelineState.progress}%`}
+                    {pipelineState.generatingStandard && (
+                      <span className="ml-1 text-blue-500">
+                        {pipelineState.generatingStandard.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                      </span>
+                    )}
+                  </span>
                 </>
               ) : (
                 <>
@@ -676,34 +743,74 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
         sections={letterSections}
         activeSection={activeSection}
         onSectionClick={scrollToSection}
+        generatingStandard={pipelineState.stage === 'generating' ? pipelineState.generatingStandard : undefined}
+        rewritingStandard={rewritingStandardKey}
       />
 
       {/* Letter Content */}
       <div ref={contentRef} className="flex-1 overflow-y-auto">
-        {letterSections.map(section => {
-          // Create a callback ref to store in the Map
-          const setRef = (el: HTMLDivElement | null) => {
-            if (el) {
-              sectionRefs.current.set(section.id, el);
-            }
-          };
-          return (
-            <div key={section.id} ref={setRef} data-section-id={section.id}>
-              <LetterSectionComponent
-                section={section}
-                isHighlighted={section.standardId === hoveredStandardId ||
-                  (focusState.type === 'standard' && section.standardId === focusState.id)}
-                onHover={setHoveredStandardId}
-                onEdit={updateLetterSection}
-                onSentenceClick={handleSentenceClick}
-                onExhibitClick={handleExhibitClick}
-                focusedSubArgumentId={focusedSubArgumentId}
-                focusedArgumentId={focusedArgumentId}
-                paragraphRefs={paragraphRefs}
-              />
+        {letterSections.length === 0 && pipelineState.stage === 'generating' ? (
+          /* Empty state during generation — show progress */
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <svg className="animate-spin h-8 w-8 text-blue-500 mx-auto mb-3" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              <p className="text-sm font-medium text-slate-600">
+                Generating section {(pipelineState.generatedCount ?? 0) + 1} of {pipelineState.totalToGenerate ?? '?'}
+              </p>
+              {pipelineState.generatingStandard && (
+                <p className="text-xs text-slate-400 mt-1">
+                  {pipelineState.generatingStandard.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                </p>
+              )}
             </div>
-          );
-        })}
+          </div>
+        ) : (
+          <>
+            {letterSections.map(section => {
+              // Create a callback ref to store in the Map
+              const setRef = (el: HTMLDivElement | null) => {
+                if (el) {
+                  sectionRefs.current.set(section.id, el);
+                }
+              };
+              return (
+                <div key={section.id} ref={setRef} data-section-id={section.id}>
+                  <LetterSectionComponent
+                    section={section}
+                    isHighlighted={section.standardId === hoveredStandardId ||
+                      (focusState.type === 'standard' && section.standardId === focusState.id)}
+                    onHover={setHoveredStandardId}
+                    onEdit={updateLetterSection}
+                    onRewrite={handleRewrite}
+                    isRewriting={rewritingStandardKey === section.standardId}
+                    onSentenceClick={handleSentenceClick}
+                    onExhibitClick={handleExhibitClick}
+                    focusedSubArgumentId={focusedSubArgumentId}
+                    focusedArgumentId={focusedArgumentId}
+                    paragraphRefs={paragraphRefs}
+                  />
+                </div>
+              );
+            })}
+            {/* Show generating indicator at the bottom when sections are being added incrementally */}
+            {pipelineState.stage === 'generating' && pipelineState.generatingStandard && (
+              <div className="p-4 border-b border-slate-200">
+                <div className="flex items-center gap-2 text-slate-400">
+                  <svg className="animate-spin h-4 w-4 text-blue-400" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <span className="text-xs">
+                    Generating: {pipelineState.generatingStandard.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}...
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Letter Footer with V3 Stats */}

@@ -442,6 +442,10 @@ export interface PipelineState {
   snippetCount?: number;
   confirmedMappings?: number;
   error?: string;
+  // Generation progress details
+  generatingStandard?: string;   // Current standard being generated (e.g. 'awards')
+  generatedCount?: number;       // How many sections generated so far
+  totalToGenerate?: number;      // Total sections to generate
 }
 
 export interface MergeSuggestion {

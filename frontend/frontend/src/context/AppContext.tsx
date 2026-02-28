@@ -59,24 +59,44 @@ export function useApp() {
 
   // addSubArgument: original signature takes data, returns Promise<SubArgument>
   // ArgumentsContext signature takes (data, projectId) => Promise<SubArgument>
+  // After adding, mark the parent standard's letter section as stale
   const addSubArgument = useCallback(async (
     subArgumentData: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>
   ): Promise<SubArgument> => {
-    return args.addSubArgument(subArgumentData, project.projectId);
-  }, [args.addSubArgument, project.projectId]);
+    const result = await args.addSubArgument(subArgumentData, project.projectId);
+    // Mark parent argument's standard section as stale
+    const parentArg = args.arguments.find(a => a.id === subArgumentData.argumentId);
+    if (parentArg?.standardKey) {
+      writing.markSectionStale(parentArg.standardKey);
+    }
+    return result;
+  }, [args.addSubArgument, args.arguments, writing.markSectionStale, project.projectId]);
 
-  // removeSubArgument: original signature takes (id) => void
-  // ArgumentsContext signature takes (id, projectId) => void
-  // Also needs to clean up letter sections via WritingContext (with cascade)
-  const removeSubArgument = useCallback((id: string) => {
-    // Find the sub-argument title for LLM impact analysis
+  // removeSubArgument: delete sub-argument then auto-rewrite the affected section
+  const removeSubArgument = useCallback(async (id: string) => {
     const subArg = args.subArguments.find(sa => sa.id === id);
-    const subArgTitle = subArg?.title || '';
-    // First, mark sentences in letter + trigger LLM impact analysis
-    writing.removeSubArgumentFromLetter(id, args.arguments, project.projectId, subArgTitle);
-    // Then remove the sub-argument itself
+    const parentArg = args.arguments.find(a => a.id === subArg?.argumentId);
+    const standardKey = parentArg?.standardKey;
+
+    console.log('[removeSubArgument] id:', id, 'subArg:', !!subArg, 'parentArg:', !!parentArg, 'standardKey:', standardKey);
+
+    // Delete the sub-argument (backend + frontend state)
     args.removeSubArgument(id, project.projectId);
-  }, [args.removeSubArgument, args.arguments, args.subArguments, writing.removeSubArgumentFromLetter, project.projectId]);
+
+    // Auto-rewrite the affected standard's letter section
+    if (standardKey) {
+      try {
+        console.log('[removeSubArgument] calling rewriteStandard for:', standardKey);
+        await writing.rewriteStandard(standardKey, project.projectId, project.llmProvider);
+        console.log('[removeSubArgument] rewriteStandard completed for:', standardKey);
+      } catch (err) {
+        console.warn('[removeSubArgument] Auto-rewrite failed:', err);
+        writing.markSectionStale(standardKey);
+      }
+    } else {
+      console.warn('[removeSubArgument] No standardKey found, skipping rewrite');
+    }
+  }, [args.removeSubArgument, args.arguments, args.subArguments, writing.rewriteStandard, writing.markSectionStale, project.projectId, project.llmProvider]);
 
   // Change cascade: bind projectId for commitChanges
   const commitChanges = useCallback(async (sectionId: string) => {
@@ -90,22 +110,63 @@ export function useApp() {
 
   // mergeSubArguments: facade binds projectId
   // Moves sub-args under a new Argument (regroup, no deletion)
+  // After merge, mark the new argument's standard section as stale
   const mergeSubArguments = useCallback(async (
     subArgumentIds: string[],
     title: string,
     purpose: string,
     relationship: string
   ) => {
-    return args.mergeSubArguments(subArgumentIds, title, purpose, relationship, project.projectId);
-  }, [args.mergeSubArguments, project.projectId]);
+    // Collect source standardKeys before merge (sub-args may come from different arguments)
+    const sourceStandardKeys = new Set<string>();
+    for (const saId of subArgumentIds) {
+      const sa = args.subArguments.find(s => s.id === saId);
+      const parentArg = args.arguments.find(a => a.id === sa?.argumentId);
+      if (parentArg?.standardKey) sourceStandardKeys.add(parentArg.standardKey);
+    }
+
+    const result = await args.mergeSubArguments(subArgumentIds, title, purpose, relationship, project.projectId);
+
+    // Mark the new argument's standard as stale
+    if (result.newArgument.standardKey) {
+      writing.markSectionStale(result.newArgument.standardKey);
+    }
+    // Also mark any source standards that differ from the target
+    for (const key of sourceStandardKeys) {
+      if (key !== result.newArgument.standardKey) {
+        writing.markSectionStale(key);
+      }
+    }
+
+    return result;
+  }, [args.mergeSubArguments, args.subArguments, args.arguments, writing.markSectionStale, project.projectId]);
 
   // moveSubArguments: facade binds projectId
+  // After move, mark both source and target standard sections as stale
   const moveSubArguments = useCallback(async (
     subArgumentIds: string[],
     targetArgumentId: string
   ) => {
-    return args.moveSubArguments(subArgumentIds, targetArgumentId, project.projectId);
-  }, [args.moveSubArguments, project.projectId]);
+    // Collect source standardKeys before move
+    const sourceStandardKeys = new Set<string>();
+    for (const saId of subArgumentIds) {
+      const sa = args.subArguments.find(s => s.id === saId);
+      const parentArg = args.arguments.find(a => a.id === sa?.argumentId);
+      if (parentArg?.standardKey) sourceStandardKeys.add(parentArg.standardKey);
+    }
+
+    await args.moveSubArguments(subArgumentIds, targetArgumentId, project.projectId);
+
+    // Mark target standard as stale
+    const targetArg = args.arguments.find(a => a.id === targetArgumentId);
+    if (targetArg?.standardKey) {
+      writing.markSectionStale(targetArg.standardKey);
+    }
+    // Mark source standards as stale
+    for (const key of sourceStandardKeys) {
+      writing.markSectionStale(key);
+    }
+  }, [args.moveSubArguments, args.subArguments, args.arguments, writing.markSectionStale, project.projectId]);
 
   // createArgument: facade binds projectId
   const createArgument = useCallback(async (standardKey: string) => {
@@ -142,8 +203,8 @@ export function useApp() {
   }, [writing.confirmAllMappings, project.projectId, project.setPipelineState]);
 
   const generatePetition = useCallback(async () => {
-    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState);
-  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState]);
+    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments);
+  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments]);
 
   const reloadSnippets = useCallback(async () => {
     return writing.reloadSnippets(project.projectId, snippets.setSnippets);
@@ -235,6 +296,7 @@ export function useApp() {
     generateArguments,
     generatedMainSubject: args.generatedMainSubject,
     rewriteStandard,
+    rewritingStandardKey: writing.rewritingStandardKey,
     removeStandard,
 
     // UIContext
@@ -281,6 +343,9 @@ export function useApp() {
     updateLetterSection: writing.updateLetterSection,
     writingNodePositions: writing.writingNodePositions,
     updateWritingNodePosition: writing.updateWritingNodePosition,
+
+    // Stale marking
+    markSectionStale: writing.markSectionStale,
 
     // Change cascade (bound)
     acceptSuggestion: writing.acceptSuggestion,

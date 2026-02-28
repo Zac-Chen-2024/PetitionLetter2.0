@@ -273,7 +273,7 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const removeSubArgument = useCallback((id: string, projectId: string) => {
-    // We need to read from current state at removal time
+    // Update local state (pure — no side effects inside updaters)
     setSubArguments(prev => {
       const subArg = prev.find(sa => sa.id === id);
       if (!subArg) return prev;
@@ -290,18 +290,17 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
         return arg;
       }));
 
-      // Call backend to persist deletion
-      console.log(`[ArgumentsContext] removeSubArgument called with id=${id}, projectId=${projectId}`);
-      if (projectId) {
-        const deleteUrl = `/arguments/${projectId}/subarguments/${id}`;
-        console.log(`[ArgumentsContext] Calling DELETE ${deleteUrl}`);
-        apiClient.delete(deleteUrl)
-          .then(() => console.log(`[ArgumentsContext] SubArgument ${id} deleted from backend successfully`))
-          .catch((error) => console.error('[ArgumentsContext] Failed to delete SubArgument from backend:', error));
-      }
-
       return prev.filter(sa => sa.id !== id);
     });
+
+    // Persist to backend (side effect outside of state updater)
+    if (projectId) {
+      const deleteUrl = `/arguments/${projectId}/subarguments/${id}`;
+      console.log(`[ArgumentsContext] Calling DELETE ${deleteUrl}`);
+      apiClient.delete(deleteUrl)
+        .then(() => console.log(`[ArgumentsContext] SubArgument ${id} deleted from backend successfully`))
+        .catch((error) => console.error('[ArgumentsContext] Failed to delete SubArgument from backend:', error));
+    }
   }, []);
 
   const regenerateSubArgument = useCallback(async (subArgumentId: string, projectId: string) => {
