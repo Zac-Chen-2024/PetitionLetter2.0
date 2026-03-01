@@ -33,7 +33,7 @@ const LogoIcon = () => (
 );
 
 export function Header() {
-  const { focusState, clearFocus, llmProvider, setLlmProvider, workMode, setWorkMode } = useApp();
+  const { llmProvider, setLlmProvider, workMode, setWorkMode } = useApp();
   const { projectId, setProjectId, projectType, projectNumber } = useProject();
   const { t } = useTranslation();
 
@@ -111,7 +111,7 @@ export function Header() {
     : 'bg-blue-100 text-blue-700';
 
   return (
-    <header className="flex-shrink-0 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between">
+    <header className="flex-shrink-0 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between relative">
       {/* Left: Project switcher + language switcher */}
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-8 h-8 bg-slate-900 text-white rounded-lg">
@@ -267,33 +267,31 @@ export function Header() {
         </div>
       </div>
 
-      {/* Center: Work mode toggle */}
-      <div className="flex-1 flex justify-center">
-        <button
-          onClick={() => setWorkMode(workMode === 'verify' ? 'write' : 'verify')}
-          className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-            workMode === 'verify'
-              ? 'text-white bg-blue-600 hover:bg-blue-700'
-              : 'text-white bg-emerald-600 hover:bg-emerald-700'
-          }`}
-        >
-          {workMode === 'verify' ? (
-            <>
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span>Verify Mode</span>
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-              <span>Write Mode</span>
-            </>
-          )}
-        </button>
-      </div>
+      {/* Center: Work mode toggle (absolute center) */}
+      <button
+        onClick={() => setWorkMode(workMode === 'verify' ? 'write' : 'verify')}
+        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+          workMode === 'verify'
+            ? 'text-white bg-blue-600 hover:bg-blue-700'
+            : 'text-white bg-emerald-600 hover:bg-emerald-700'
+        }`}
+      >
+        {workMode === 'verify' ? (
+          <>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Verify Mode</span>
+          </>
+        ) : (
+          <>
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            <span>Write Mode</span>
+          </>
+        )}
+      </button>
 
       {/* Right: LLM Provider, Focus mode indicator and actions */}
       <div className="flex items-center gap-3">
@@ -313,21 +311,6 @@ export function Header() {
           </select>
         </div>
 
-        {focusState.type !== 'none' && (
-          <button
-            onClick={clearFocus}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-            <span>{t('header.focusModeActive')}</span>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        )}
 
       </div>
     </header>
