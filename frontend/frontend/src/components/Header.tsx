@@ -33,7 +33,7 @@ const LogoIcon = () => (
 );
 
 export function Header() {
-  const { focusState, clearFocus, llmProvider, setLlmProvider } = useApp();
+  const { focusState, clearFocus, llmProvider, setLlmProvider, workMode, setWorkMode } = useApp();
   const { projectId, setProjectId, projectType, projectNumber } = useProject();
   const { t } = useTranslation();
 
@@ -267,8 +267,33 @@ export function Header() {
         </div>
       </div>
 
-      {/* Center: spacer */}
-      <div className="flex-1" />
+      {/* Center: Work mode toggle */}
+      <div className="flex-1 flex justify-center">
+        <button
+          onClick={() => setWorkMode(workMode === 'verify' ? 'write' : 'verify')}
+          className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            workMode === 'verify'
+              ? 'text-white bg-blue-600 hover:bg-blue-700'
+              : 'text-white bg-emerald-600 hover:bg-emerald-700'
+          }`}
+        >
+          {workMode === 'verify' ? (
+            <>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>Verify Mode</span>
+            </>
+          ) : (
+            <>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              <span>Write Mode</span>
+            </>
+          )}
+        </button>
+      </div>
 
       {/* Right: LLM Provider, Focus mode indicator and actions */}
       <div className="flex items-center gap-3">

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
 import { materialTypeLabels, getStandardById } from '../data/legalStandards';
 import { useLegalStandards } from '../hooks/useLegalStandards';
-import { RelationshipGraphModal } from './RelationshipGraphModal';
+
 import type { Snippet } from '../types';
 import { getStandardKeyColor, STANDARD_KEY_TO_ID } from '../constants/colors';
 import apiClient from '../services/api';
@@ -494,26 +494,15 @@ function DocumentGroup({ document, snippets, filteredSnippets, isEditMode, selec
   );
 }
 
-// Graph icon for relationship button
-const GraphIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <circle cx="5" cy="6" r="2" strokeWidth={1.5} />
-    <circle cx="12" cy="4" r="2" strokeWidth={1.5} />
-    <circle cx="19" cy="6" r="2" strokeWidth={1.5} />
-    <circle cx="5" cy="18" r="2" strokeWidth={1.5} />
-    <circle cx="12" cy="20" r="2" strokeWidth={1.5} />
-    <circle cx="19" cy="18" r="2" strokeWidth={1.5} />
-    <path strokeLinecap="round" strokeWidth={1.5} d="M7 7l3 -2M14 3l3 2M7 17l3 2M14 21l3 -2M5 8v8M19 8v8M7 6h10M7 18h10" />
-  </svg>
-);
 
 export function EvidenceCardPool() {
   const { t } = useTranslation();
   const legalStandards = useLegalStandards();
-  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId, markSectionStale } = useApp();
+  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId, markSectionStale, reloadSnippets } = useApp();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
-  const [showGraphModal, setShowGraphModal] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+
 
   // Edit snippets mode state
   const [isEditingSnippets, setIsEditingSnippets] = useState(false);
@@ -778,6 +767,24 @@ export function EvidenceCardPool() {
     return groups;
   }, [snippets, focusState, isSnippetRelatedToFocus]);
 
+  const handleExtractAll = useCallback(async () => {
+    if (!projectId) return;
+    setIsExtracting(true);
+    try {
+      const result = await apiClient.post<{
+        success: boolean;
+        total_snippets: number;
+      }>(`/extraction/${projectId}/extract`, {});
+      if (result.success) {
+        await reloadSnippets();
+      }
+    } catch (error) {
+      console.error('Extract all failed:', error);
+    } finally {
+      setIsExtracting(false);
+    }
+  }, [projectId, reloadSnippets]);
+
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
@@ -794,6 +801,33 @@ export function EvidenceCardPool() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {/* Extract button */}
+            {snippets.length > 0 ? (
+              <span className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-emerald-600">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                Extracted
+              </span>
+            ) : (
+              <button
+                onClick={handleExtractAll}
+                disabled={isExtracting}
+                className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
+                  isExtracting
+                    ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+                title="Extract snippets from all exhibits"
+              >
+                {isExtracting ? (
+                  <>
+                    <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    <span>Extracting...</span>
+                  </>
+                ) : (
+                  <span>Extract</span>
+                )}
+              </button>
+            )}
             {/* Edit/Save button when SubArgument is focused */}
             {focusedSubArgument && (
               isEditingSnippets ? (
@@ -828,23 +862,9 @@ export function EvidenceCardPool() {
                 </button>
               )
             )}
-            <button
-              onClick={() => setShowGraphModal(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-              title="View Relationship Graph"
-            >
-              <GraphIcon />
-              <span>Graph</span>
-            </button>
           </div>
         </div>
       </div>
-
-      {/* Relationship Graph Modal */}
-      <RelationshipGraphModal
-        isOpen={showGraphModal}
-        onClose={() => setShowGraphModal(false)}
-      />
 
       {/* Cards list with scroll indicators */}
       <div className="flex-1 relative overflow-hidden">

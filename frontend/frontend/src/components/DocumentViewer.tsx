@@ -421,8 +421,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
 
   // Extraction state management
   const [extractionStates, setExtractionStates] = useState<Record<string, ExtractionState>>({});
-  const [isExtractingAll, setIsExtractingAll] = useState(false);
-  const [extractAllProgress, setExtractAllProgress] = useState(0);
 
   // Extract snippets for a specific category
   const handleExtractCategory = async (category: string, exhibitIds: string[]) => {
@@ -458,29 +456,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
     }
   };
 
-  // Extract all snippets
-  const handleExtractAll = async () => {
-    setIsExtractingAll(true);
-    setExtractAllProgress(0);
-
-    try {
-      const result = await apiClient.post<{
-        success: boolean;
-        snippet_count: number;
-        message: string;
-      }>(`/analysis/extract/${projectId}`, { use_llm: true });
-
-      if (result.success) {
-        setExtractAllProgress(100);
-        // Reload snippets after extraction
-        await reloadSnippets();
-      }
-    } catch (error) {
-      console.error('Extract all failed:', error);
-    } finally {
-      setIsExtractingAll(false);
-    }
-  };
 
   // Fetch exhibits from backend
   useEffect(() => {
@@ -651,36 +626,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
       {!compact && (
       <div className="flex-shrink-0 border-b border-slate-200 bg-white max-h-48 overflow-y-auto">
         <div className="px-3 py-2">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">
-              Exhibits ({exhibits.length})
-            </div>
-            <button
-              onClick={handleExtractAll}
-              disabled={isExtractingAll || exhibits.length === 0}
-              className={`
-                flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors
-                ${isExtractingAll
-                  ? 'bg-blue-100 text-blue-600 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-                }
-              `}
-              title="Extract snippets from all exhibits"
-            >
-              {isExtractingAll ? (
-                <>
-                  <SpinnerIcon />
-                  <span>Extracting...</span>
-                </>
-              ) : (
-                <>
-                  <ExtractIcon />
-                  <span>Extract All</span>
-                </>
-              )}
-            </button>
-          </div>
-
           {isLoading ? (
             <div className="text-sm text-slate-500 py-2">Loading exhibits...</div>
           ) : (
@@ -713,7 +658,7 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
                           e.stopPropagation();
                           handleExtractCategory(category, categoryExhibits.map(e => e.id));
                         }}
-                        disabled={isExtracting || isExtractingAll}
+                        disabled={isExtracting}
                         className={`
                           flex items-center gap-1 px-1.5 py-1 text-xs rounded transition-colors
                           ${isExtracting

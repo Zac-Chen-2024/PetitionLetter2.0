@@ -10,7 +10,6 @@ import {
   ConnectionLines,
   SankeyView,
   MaterialOrganization,
-  WritingCanvas,
   LanguageSwitcher,
   ArgumentGraph,
 } from './components';
@@ -159,40 +158,12 @@ function MaterialsPage() {
   );
 }
 
-function WritingPage() {
-  const navigate = useNavigate();
-  const { t } = useTranslation();
-
-  return (
-    <div className="flex flex-col h-screen">
-      {/* Page navigation */}
-      <div className="flex-shrink-0 px-4 py-2 bg-slate-900 text-white flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/mapping')}
-            className="text-sm text-slate-400 hover:text-white transition-colors"
-          >
-            ← {t('nav.backToMapping')}
-          </button>
-          <span className="text-sm font-medium">{t('nav.writingCanvas')}</span>
-        </div>
-        <LanguageSwitcher />
-      </div>
-      <div className="flex-1 overflow-hidden">
-        <ErrorBoundary>
-          <WritingCanvas />
-        </ErrorBoundary>
-      </div>
-    </div>
-  );
-}
 
 function AppContent() {
   return (
     <Routes>
       <Route path="/mapping" element={<MappingPage />} />
       <Route path="/materials" element={<MaterialsPage />} />
-      <Route path="/writing" element={<WritingPage />} />
       <Route path="*" element={<Navigate to="/mapping" replace />} />
     </Routes>
   );
