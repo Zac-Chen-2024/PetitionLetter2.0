@@ -669,6 +669,153 @@ What is the relationship? (2-5 words)"""
         return "Supports main argument"  # 降级默认值
 
 
+async def consolidate_subarguments(
+    project_id: str,
+    subargument_ids: List[str],
+    target_argument_id: str,
+    provider: str = "deepseek"
+) -> Dict:
+    """
+    将多个 SubArguments 合并为一个新的 SubArgument（同级合并）
+
+    与 merge 不同：merge 创建新 Argument（升级），consolidate 创建新 SubArgument（同级）。
+
+    约束：
+    1. subargument_ids >= 2
+    2. 所有 sub-args 必须属于同一个 standard_key
+
+    流程：
+    - 验证所有 sub-args 存在且同 standard
+    - 收集 snippet_ids（去重保序）
+    - LLM 生成新 title / purpose / relationship
+    - 创建新 SubArgument 挂到 target_argument_id
+    - 删除原 sub-args
+    """
+    import uuid
+
+    if len(subargument_ids) < 2:
+        raise ValueError("At least 2 sub-arguments are required for consolidation")
+
+    legal_args = load_legal_arguments(project_id)
+    sub_arguments = legal_args.get("sub_arguments", [])
+    arguments = legal_args.get("arguments", [])
+    arg_map = {a["id"]: a for a in arguments}
+
+    # Validate target argument exists
+    target_arg = arg_map.get(target_argument_id)
+    if not target_arg:
+        raise ValueError(f"Target argument not found: {target_argument_id}")
+
+    target_standard = target_arg.get("standard_key")
+
+    # Find all source sub-args
+    source_subargs = []
+    for sa_id in subargument_ids:
+        found = next((sa for sa in sub_arguments if sa.get("id") == sa_id), None)
+        if not found:
+            raise ValueError(f"SubArgument not found: {sa_id}")
+        source_subargs.append(found)
+
+    # Validate same standard_key
+    for sa in source_subargs:
+        parent = arg_map.get(sa.get("argument_id"))
+        if parent and parent.get("standard_key") != target_standard:
+            raise ValueError(
+                f"SubArgument {sa['id']} belongs to standard "
+                f"'{parent.get('standard_key')}', cannot consolidate into '{target_standard}'"
+            )
+
+    # Collect snippet_ids (deduplicated, order-preserving)
+    seen: Set[str] = set()
+    all_snippet_ids: List[str] = []
+    for sa in source_subargs:
+        for snip_id in sa.get("snippet_ids", []):
+            if snip_id not in seen:
+                seen.add(snip_id)
+                all_snippet_ids.append(snip_id)
+
+    # LLM: generate new title, purpose, relationship
+    source_info = "\n".join(
+        f"- Title: {sa.get('title', '')}\n  Purpose: {sa.get('purpose', '')}"
+        for sa in source_subargs
+    )
+    target_title = target_arg.get("title", "")
+
+    system_prompt = """You are an expert EB-1A immigration attorney.
+Your task is to consolidate multiple sub-arguments into a single cohesive sub-argument.
+
+Respond in JSON format:
+{
+  "title": "A concise title (5-15 words) that captures the combined scope",
+  "purpose": "A brief description of the consolidated sub-argument's purpose (1-2 sentences)",
+  "relationship": "A short phrase (2-5 words) describing how this supports the parent argument"
+}
+
+Output ONLY valid JSON, nothing else."""
+
+    user_prompt = f"""Standard: {target_standard}
+Parent Argument: {target_title}
+
+Sub-arguments to consolidate:
+{source_info}
+
+Generate a consolidated title, purpose, and relationship for the merged sub-argument:"""
+
+    try:
+        result = await call_llm(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            max_tokens=200,
+            provider=provider
+        )
+        new_title = result.get("title", "Consolidated sub-argument")
+        new_purpose = result.get("purpose", "")
+        new_relationship = result.get("relationship", "Combined evidence")
+    except Exception as e:
+        print(f"LLM consolidation failed: {e}")
+        # Fallback: use title from the sub-arg with most snippets
+        best = max(source_subargs, key=lambda sa: len(sa.get("snippet_ids", [])))
+        new_title = best.get("title", "Consolidated sub-argument")
+        purposes = [sa.get("purpose", "").strip() for sa in source_subargs if sa.get("purpose", "").strip()]
+        new_purpose = "; ".join(dict.fromkeys(purposes))  # deduplicate while preserving order
+        new_relationship = best.get("relationship", "Combined evidence")
+
+    # Create new SubArgument (reuse existing helper for persistence)
+    new_subarg = create_subargument(
+        project_id=project_id,
+        argument_id=target_argument_id,
+        title=new_title,
+        purpose=new_purpose,
+        relationship=new_relationship,
+        snippet_ids=all_snippet_ids,
+    )
+
+    # Delete original sub-args: reload (create_subargument saved), then remove
+    legal_args = load_legal_arguments(project_id)
+    sub_arguments = legal_args.get("sub_arguments", [])
+    arguments = legal_args.get("arguments", [])
+
+    delete_set = set(subargument_ids)
+
+    # Remove from sub_arguments list
+    legal_args["sub_arguments"] = [sa for sa in sub_arguments if sa["id"] not in delete_set]
+
+    # Remove from parent arguments' sub_argument_ids
+    for arg in arguments:
+        old_ids = arg.get("sub_argument_ids", [])
+        if any(sid in delete_set for sid in old_ids):
+            arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in delete_set]
+
+    save_legal_arguments(project_id, legal_args)
+
+    return {
+        "success": True,
+        "new_subargument": new_subarg,
+        "deleted_subargument_ids": subargument_ids,
+    }
+
+
 async def infer_argument_title(
     project_id: str,
     argument_id: str,

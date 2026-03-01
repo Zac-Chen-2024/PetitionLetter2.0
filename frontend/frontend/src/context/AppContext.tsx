@@ -168,6 +168,35 @@ export function useApp() {
     }
   }, [args.moveSubArguments, args.subArguments, args.arguments, writing.markSectionStale, project.projectId]);
 
+  // consolidateSubArguments: facade binds projectId + llmProvider
+  // Fuses multiple sub-args into one new SubArgument under target Argument
+  const consolidateSubArguments = useCallback(async (
+    subArgumentIds: string[],
+    targetArgumentId: string
+  ) => {
+    // Collect source standardKeys before consolidation
+    const sourceStandardKeys = new Set<string>();
+    for (const saId of subArgumentIds) {
+      const sa = args.subArguments.find(s => s.id === saId);
+      const parentArg = args.arguments.find(a => a.id === sa?.argumentId);
+      if (parentArg?.standardKey) sourceStandardKeys.add(parentArg.standardKey);
+    }
+
+    const result = await args.consolidateSubArguments(subArgumentIds, targetArgumentId, project.projectId, project.llmProvider);
+
+    // Mark target standard as stale
+    const targetArg = args.arguments.find(a => a.id === targetArgumentId);
+    if (targetArg?.standardKey) {
+      writing.markSectionStale(targetArg.standardKey);
+    }
+    // Mark source standards as stale
+    for (const key of sourceStandardKeys) {
+      writing.markSectionStale(key);
+    }
+
+    return result;
+  }, [args.consolidateSubArguments, args.subArguments, args.arguments, writing.markSectionStale, project.projectId, project.llmProvider]);
+
   // createArgument: facade binds projectId
   const createArgument = useCallback(async (standardKey: string) => {
     return args.createArgument(standardKey, project.projectId);
@@ -291,6 +320,7 @@ export function useApp() {
     regenerateSubArgument,
     mergeSubArguments,
     moveSubArguments,
+    consolidateSubArguments,
     createArgument,
     isGeneratingArguments: args.isGeneratingArguments,
     generateArguments,
@@ -374,7 +404,7 @@ export function useApp() {
     extractionProgress: writing.extractionProgress,
   }), [
     project, snippets, args, ui, writing,
-    generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, createArgument,
+    generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument,
     rewriteStandard, removeStandard,
     removeArgument, commitChanges, extractSnippets, confirmAllMappings, generatePetition,
     reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges,

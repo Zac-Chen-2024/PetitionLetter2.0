@@ -96,6 +96,7 @@ export interface ArgumentsContextType {
   regenerateSubArgument: (subArgumentId: string, projectId: string) => Promise<void>;
   mergeSubArguments: (subArgumentIds: string[], title: string, purpose: string, relationship: string, projectId: string) => Promise<{ newArgument: Argument; movedSubArgumentIds: string[] }>;
   moveSubArguments: (subArgumentIds: string[], targetArgumentId: string, projectId: string) => Promise<void>;
+  consolidateSubArguments: (subArgumentIds: string[], targetArgumentId: string, projectId: string, llmProvider: string) => Promise<{ newSubArgument: SubArgument; deletedSubArgumentIds: string[] }>;
   createArgument: (standardKey: string, projectId: string) => Promise<Argument>;
   removeStandard: (standardKey: string, projectId: string) => Promise<void>;
   isGeneratingArguments: boolean;
@@ -444,6 +445,76 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  // Consolidate SubArguments → fuse into a single new SubArgument under target Argument
+  const consolidateSubArguments = useCallback(async (
+    subArgumentIds: string[],
+    targetArgumentId: string,
+    projectId: string,
+    llmProvider: string
+  ): Promise<{ newSubArgument: SubArgument; deletedSubArgumentIds: string[] }> => {
+    const response = await apiClient.post<{
+      success: boolean;
+      new_subargument: {
+        id: string;
+        argument_id: string;
+        title: string;
+        purpose: string;
+        relationship: string;
+        snippet_ids: string[];
+        is_ai_generated: boolean;
+        status: string;
+        created_at: string;
+      };
+      deleted_subargument_ids: string[];
+    }>(`/arguments/${projectId}/subarguments/consolidate`, {
+      subargument_ids: subArgumentIds,
+      target_argument_id: targetArgumentId,
+      provider: llmProvider,
+    });
+
+    if (!response.success) {
+      throw new Error('Failed to consolidate sub-arguments');
+    }
+
+    const saData = response.new_subargument;
+    const newSubArgument: SubArgument = {
+      id: saData.id,
+      argumentId: saData.argument_id,
+      title: saData.title,
+      purpose: saData.purpose,
+      relationship: saData.relationship,
+      snippetIds: saData.snippet_ids,
+      isAIGenerated: saData.is_ai_generated,
+      status: saData.status as 'draft' | 'verified',
+      createdAt: new Date(saData.created_at),
+      updatedAt: new Date(),
+    };
+
+    const deletedSet = new Set(response.deleted_subargument_ids);
+
+    // Remove deleted sub-args from state and add the new one
+    setSubArguments(prev => [...prev.filter(sa => !deletedSet.has(sa.id)), newSubArgument]);
+
+    // Update arguments: remove deleted sub-arg IDs from old parents, add new to target
+    setArguments(prev => prev.map(arg => {
+      const oldIds = arg.subArgumentIds || [];
+      if (arg.id === targetArgumentId) {
+        // Remove deleted ones and add the new sub-arg (create_subargument already added it on backend)
+        const filtered = oldIds.filter(id => !deletedSet.has(id));
+        if (!filtered.includes(newSubArgument.id)) {
+          filtered.push(newSubArgument.id);
+        }
+        return { ...arg, subArgumentIds: filtered, updatedAt: new Date() };
+      }
+      if (oldIds.some(id => deletedSet.has(id))) {
+        return { ...arg, subArgumentIds: oldIds.filter(id => !deletedSet.has(id)), updatedAt: new Date() };
+      }
+      return arg;
+    }));
+
+    return { newSubArgument, deletedSubArgumentIds: response.deleted_subargument_ids };
+  }, []);
+
   // Create a new Argument under a standard (persisted to backend)
   const createArgument = useCallback(async (
     standardKey: string,
@@ -570,11 +641,12 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     removeStandard,
     mergeSubArguments,
     moveSubArguments,
+    consolidateSubArguments,
     createArgument,
     isGeneratingArguments,
     generateArguments,
     generatedMainSubject,
-  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, createArgument, generateArguments]);
+  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, generateArguments]);
 
   return <ArgumentsContext.Provider value={value}>{children}</ArgumentsContext.Provider>;
 }

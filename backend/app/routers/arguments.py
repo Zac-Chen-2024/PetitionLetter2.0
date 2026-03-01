@@ -212,6 +212,7 @@ from ..services.snippet_recommender import (
     get_assigned_snippet_ids,
     infer_relationship,
     merge_subarguments,
+    consolidate_subarguments,
 )
 
 
@@ -404,6 +405,46 @@ async def merge_subarguments_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Merge sub-arguments failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ConsolidateSubArgumentsRequest(BaseModel):
+    """合并 SubArguments 为单个新 SubArgument"""
+    subargument_ids: List[str]  # min 2
+    target_argument_id: str
+    provider: str = "deepseek"
+
+
+@router.post("/{project_id}/subarguments/consolidate")
+async def consolidate_subarguments_endpoint(
+    project_id: str,
+    request: ConsolidateSubArgumentsRequest
+):
+    """
+    合并多个 SubArguments → 新的单个 SubArgument（同级合并）
+
+    与 merge 不同：merge 创建新 Argument（升级），consolidate 保持同级。
+    snippet_ids = 所有来源的并集，LLM 生成新 title/purpose/relationship。
+
+    要求：
+    - subargument_ids 至少 2 个
+    - 所有 sub-args 必须属于同一个 standard（可跨 Argument）
+
+    Returns:
+        {success, new_subargument, deleted_subargument_ids}
+    """
+    try:
+        result = await consolidate_subarguments(
+            project_id=project_id,
+            subargument_ids=request.subargument_ids,
+            target_argument_id=request.target_argument_id,
+            provider=request.provider,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Consolidate sub-arguments failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

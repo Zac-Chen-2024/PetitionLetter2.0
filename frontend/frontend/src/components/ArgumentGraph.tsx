@@ -1163,6 +1163,7 @@ export function ArgumentGraph() {
     addSubArgument,
     mergeSubArguments,
     moveSubArguments,
+    consolidateSubArguments,
     createArgument,
     rewriteStandard,
     removeStandard,
@@ -1198,6 +1199,9 @@ export function ArgumentGraph() {
   // Move mode state (within merge mode)
   const [isMoveMode, setIsMoveMode] = useState(false);
   const [isMoving, setIsMoving] = useState(false);
+  // Consolidate mode state (within merge mode)
+  const [isConsolidateMode, setIsConsolidateMode] = useState(false);
+  const [isConsolidating, setIsConsolidating] = useState(false);
   const panStartPos = useRef<Position | null>(null);
   const offsetStartPos = useRef<Position | null>(null);
 
@@ -1531,6 +1535,7 @@ export function ArgumentGraph() {
     setMergeSelectedIds(new Set());
     setBatchDeleteConfirm(false);
     setIsMoveMode(false);
+    setIsConsolidateMode(false);
   }, []);
 
   // Batch delete selected sub-arguments
@@ -1604,6 +1609,26 @@ export function ArgumentGraph() {
     }
   }, [moveSubArguments, mergeSelectedIds, setFocusState]);
 
+  // Handle consolidate: fuse selected sub-args into one new sub-arg under target argument
+  const handleConsolidateConfirm = useCallback(async (targetArgumentId: string) => {
+    if (!consolidateSubArguments || mergeSelectedIds.size < 2) return;
+    setIsConsolidating(true);
+    try {
+      const count = mergeSelectedIds.size;
+      const result = await consolidateSubArguments(Array.from(mergeSelectedIds), targetArgumentId);
+      setSelectedNodeId(result.newSubArgument.id);
+      setFocusState({ type: 'subargument', id: result.newSubArgument.id });
+      setIsMergeMode(false);
+      setMergeSelectedIds(new Set());
+      setIsConsolidateMode(false);
+      toast.success(`Consolidated ${count} sub-arguments`);
+    } catch (error) {
+      toast.error('Consolidation failed');
+    } finally {
+      setIsConsolidating(false);
+    }
+  }, [consolidateSubArguments, mergeSelectedIds, setFocusState]);
+
   // Handle add Argument under a Standard
   const handleAddArgument = useCallback(async (standardKey: string) => {
     if (!createArgument) return;
@@ -1619,9 +1644,9 @@ export function ArgumentGraph() {
     }
   }, [createArgument, setFocusState]);
 
-  // Compute valid move targets (same standard, not source parents of selected sub-args)
+  // Compute valid move/consolidate targets (same standard)
   const moveTargetArgumentIds = useMemo(() => {
-    if (!isMoveMode || mergeSelectedIds.size === 0) return new Set<string>();
+    if ((!isMoveMode && !isConsolidateMode) || mergeSelectedIds.size === 0) return new Set<string>();
     // Get the locked standard key
     const firstId = mergeSelectedIds.values().next().value;
     const sa = contextSubArguments.find(s => s.id === firstId);
@@ -1633,7 +1658,7 @@ export function ArgumentGraph() {
     return new Set(
       contextArguments.filter(a => a.standardKey === lockedStandard).map(a => a.id)
     );
-  }, [isMoveMode, mergeSelectedIds, contextSubArguments, contextArguments]);
+  }, [isMoveMode, isConsolidateMode, mergeSelectedIds, contextSubArguments, contextArguments]);
 
   // Handle standard selection
   const handleStandardSelect = useCallback((standardId: string) => {
@@ -1775,7 +1800,9 @@ export function ArgumentGraph() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isMoveMode) {
+        if (isConsolidateMode) {
+          setIsConsolidateMode(false);
+        } else if (isMoveMode) {
           setIsMoveMode(false);
         } else if (isMergeMode) {
           exitMergeMode();
@@ -1787,7 +1814,7 @@ export function ArgumentGraph() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMergeMode, isMoveMode, exitMergeMode]);
+  }, [isMergeMode, isMoveMode, isConsolidateMode, exitMergeMode]);
 
   // Get generateArguments from context
   const { generateArguments, isGeneratingArguments } = useApp();
@@ -2014,9 +2041,9 @@ export function ArgumentGraph() {
                 onAITitle={handleArgumentAITitle}
                 onRewrite={handleArgumentRewrite}
                 isRewriting={rewritingArgId === node.id}
-                isMoveMode={isMoveMode}
+                isMoveMode={isMoveMode || isConsolidateMode}
                 isMoveTarget={moveTargetArgumentIds.has(node.id)}
-                onMoveTarget={handleMoveConfirm}
+                onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
               />
             ))}
 
@@ -2052,7 +2079,7 @@ export function ArgumentGraph() {
             >
               Cancel
             </button>
-            {!isMoveMode ? (
+            {!isMoveMode && !isConsolidateMode ? (
               <>
                 <button
                   onClick={() => setBatchDeleteConfirm(true)}
@@ -2069,6 +2096,13 @@ export function ArgumentGraph() {
                   {`Move ${mergeSelectedIds.size} →`}
                 </button>
                 <button
+                  onClick={() => setIsConsolidateMode(true)}
+                  disabled={mergeSelectedIds.size < 2 || isConsolidating}
+                  className="px-4 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {`Consolidate ${mergeSelectedIds.size} →`}
+                </button>
+                <button
                   onClick={handleMergeConfirm}
                   disabled={mergeSelectedIds.size < 2 || isMerging}
                   className="px-4 py-1.5 text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
@@ -2076,9 +2110,13 @@ export function ArgumentGraph() {
                   {isMerging ? 'Merging...' : `Merge ${mergeSelectedIds.size}`}
                 </button>
               </>
-            ) : (
+            ) : isMoveMode ? (
               <span className="text-xs text-purple-700 font-medium">
                 {isMoving ? 'Moving...' : 'Click a target argument to move selected sub-arguments'}
+              </span>
+            ) : (
+              <span className="text-xs text-blue-700 font-medium">
+                {isConsolidating ? 'Consolidating...' : 'Click a target argument to consolidate into a new sub-argument'}
               </span>
             )}
           </div>
