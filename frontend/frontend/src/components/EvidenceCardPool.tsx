@@ -154,6 +154,11 @@ function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }
   const isHighlighted = isElementHighlighted('snippet', snippet.id);
   // isFocused now depends on selectedSnippetId (for card visual highlighting)
   const isFocused = selectedSnippetId === snippet.id;
+
+  // Auto-expand when focused, collapse when unfocused
+  useEffect(() => {
+    setIsExpanded(isFocused);
+  }, [isFocused]);
   const isDragging = draggedSnippetId === snippet.id;
   const connections = getConnectionsForSnippet(snippet.id);
 

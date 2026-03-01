@@ -72,12 +72,6 @@ const ZoomOutIcon = () => (
   </svg>
 );
 
-const FitIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-  </svg>
-);
-
 const ArrangeIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
@@ -1703,11 +1697,6 @@ export function ArgumentGraph() {
     setScale(prev => Math.max(0.5, Math.min(2, prev + delta)));
   }, []);
 
-  const handleFit = () => {
-    setScale(1);
-    setOffset({ x: 0, y: 0 });
-  };
-
   // Handle auto-arrange nodes
   const handleArrangeNodes = useCallback(() => {
     clearArgumentGraphPositions();
@@ -1818,28 +1807,8 @@ export function ArgumentGraph() {
             </div>
           </div>
 
-          {/* Right side: Merge button + Generate button */}
+          {/* Right side: Generate button */}
           <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              if (isMergeMode) {
-                exitMergeMode();
-              } else {
-                setIsMergeMode(true);
-                setMergeSelectedIds(new Set());
-              }
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-              isMergeMode
-                ? 'text-white bg-amber-500 hover:bg-amber-600'
-                : 'text-slate-600 bg-slate-100 hover:bg-slate-200'
-            }`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-            <span>{isMergeMode ? 'Exit Merge' : 'Merge'}</span>
-          </button>
           <button
               onClick={() => generateArguments(true)}
               disabled={isGeneratingArguments}
@@ -1884,11 +1853,26 @@ export function ArgumentGraph() {
             <ZoomOutIcon />
           </button>
           <div className="border-t border-slate-200 my-0.5" />
-          <button onClick={handleFit} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Fit to View">
-            <FitIcon />
-          </button>
           <button onClick={handleArrangeNodes} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Auto Arrange">
             <ArrangeIcon />
+          </button>
+          <button
+            onClick={() => {
+              if (isMergeMode) {
+                exitMergeMode();
+              } else {
+                setIsMergeMode(true);
+                setMergeSelectedIds(new Set());
+              }
+            }}
+            className={`p-1.5 rounded transition-colors ${
+              isMergeMode ? 'bg-amber-100 text-amber-700' : 'hover:bg-slate-100'
+            }`}
+            title={isMergeMode ? 'Exit Merge' : 'Merge'}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
           </button>
         </div>
 
@@ -2042,7 +2026,7 @@ export function ArgumentGraph() {
 
         {/* Merge mode floating action bar */}
         {isMergeMode && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-xl border border-amber-300 px-5 py-3 flex items-center gap-4">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-xl border border-amber-300 px-5 py-3 flex items-center gap-3 whitespace-nowrap">
             <span className="text-sm text-slate-700 font-medium">
               {mergeSelectedIds.size} selected
             </span>
