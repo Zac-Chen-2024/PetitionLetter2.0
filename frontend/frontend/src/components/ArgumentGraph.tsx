@@ -6,6 +6,7 @@ import { STANDARD_KEY_TO_ID } from '../constants/colors';
 import toast from 'react-hot-toast';
 import { apiClient } from '../services/api';
 import StandardActionModal from './StandardActionModal';
+import { Portal } from './Portal';
 import type { Position, Argument, SubArgument } from '../types';
 
 // ============================================
@@ -1173,6 +1174,7 @@ export function ArgumentGraph() {
     projectId,
     llmProvider,
     setWritingTreePanelBounds,
+    writingTreePanelBounds,
     workMode,
   } = useApp();
 
@@ -1819,6 +1821,18 @@ export function ArgumentGraph() {
   // Get generateArguments from context
   const { generateArguments, isGeneratingArguments } = useApp();
 
+  // Modal backdrop positioning: scoped to writing tree canvas area
+  const modalOverlayStyle = useMemo((): React.CSSProperties => {
+    if (!writingTreePanelBounds) return { inset: 0 };
+    const b = writingTreePanelBounds;
+    return {
+      top: b.top,
+      left: b.left,
+      width: b.right - b.left,
+      height: b.bottom - b.top,
+    };
+  }, [writingTreePanelBounds]);
+
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
@@ -2138,6 +2152,7 @@ export function ArgumentGraph() {
             argumentCount={argCount}
             subArgumentCount={subArgCount}
             onConfirm={handleStandardRemoveConfirm}
+            overlayStyle={modalOverlayStyle}
             onCancel={() => setRemoveModalStandardKey(null)}
             isRemoving={isRemovingStandard}
           />
@@ -2148,45 +2163,47 @@ export function ArgumentGraph() {
       {deleteSubArgModalId && (() => {
         const sa = contextSubArguments.find(s => s.id === deleteSubArgModalId);
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeleteSubArgModalId(null)} />
-            <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
-                <div className="flex items-center gap-2">
-                  <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
-                  <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeSubArg.title', 'Remove Sub-Argument')}</h3>
+          <Portal>
+            <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setDeleteSubArgModalId(null)} />
+              <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeSubArg.title', 'Remove Sub-Argument')}</h3>
+                  </div>
                 </div>
-              </div>
-              <div className="px-5 py-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-emerald-500 flex-shrink-0" />
-                  <span className="text-sm font-medium text-slate-700 line-clamp-2">{sa?.title || deleteSubArgModalId}</span>
+                <div className="px-5 py-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-emerald-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-slate-700 line-clamp-2">{sa?.title || deleteSubArgModalId}</span>
+                  </div>
+                  <p className="text-sm text-slate-600">
+                    {t('graph.removeSubArg.description', 'This will permanently remove this sub-argument and its associated letter content.')}
+                  </p>
+                  <p className="text-xs text-red-600 font-medium">
+                    {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+                  </p>
                 </div>
-                <p className="text-sm text-slate-600">
-                  {t('graph.removeSubArg.description', 'This will permanently remove this sub-argument and its associated letter content.')}
-                </p>
-                <p className="text-xs text-red-600 font-medium">
-                  {t('graph.removeStandard.warning', 'This action cannot be undone.')}
-                </p>
-              </div>
-              <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
-                <button
-                  onClick={() => setDeleteSubArgModalId(null)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  {t('common.cancel', 'Cancel')}
-                </button>
-                <button
-                  onClick={handleSubArgumentDeleteConfirm}
-                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
-                >
-                  {t('graph.removeStandard.confirm', 'Remove')}
-                </button>
+                <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteSubArgModalId(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button
+                    onClick={handleSubArgumentDeleteConfirm}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    {t('graph.removeStandard.confirm', 'Remove')}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          </Portal>
         );
       })()}
 
@@ -2195,102 +2212,106 @@ export function ArgumentGraph() {
         const arg = contextArguments.find(a => a.id === deleteArgModalId);
         const childCount = contextSubArguments.filter(sa => sa.argumentId === deleteArgModalId).length;
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeleteArgModalId(null)} />
+          <Portal>
+            <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setDeleteArgModalId(null)} />
+              <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeArg.title', 'Remove Argument')}</h3>
+                  </div>
+                </div>
+                <div className="px-5 py-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-purple-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-slate-700 line-clamp-2">{arg?.title || deleteArgModalId}</span>
+                  </div>
+                  <p className="text-sm text-slate-600">
+                    {t('graph.removeArg.description', {
+                      defaultValue: 'This will permanently remove this argument and its {{count}} sub-argument(s).',
+                      count: childCount,
+                    })}
+                  </p>
+                  <p className="text-xs text-red-600 font-medium">
+                    {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+                  </p>
+                </div>
+                <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteArgModalId(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button
+                    onClick={handleArgumentDeleteConfirm}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    {t('graph.removeStandard.confirm', 'Remove')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Portal>
+        );
+      })()}
+
+      {/* Batch delete confirmation modal */}
+      {batchDeleteConfirm && mergeSelectedIds.size > 0 && (
+        <Portal>
+          <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setBatchDeleteConfirm(false)} />
             <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
                 <div className="flex items-center gap-2">
                   <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
                   </svg>
-                  <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeArg.title', 'Remove Argument')}</h3>
+                  <h3 className="text-sm font-semibold text-slate-800">{t('graph.batchDelete.title', 'Batch Delete')}</h3>
                 </div>
               </div>
               <div className="px-5 py-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-purple-500 flex-shrink-0" />
-                  <span className="text-sm font-medium text-slate-700 line-clamp-2">{arg?.title || deleteArgModalId}</span>
-                </div>
                 <p className="text-sm text-slate-600">
-                  {t('graph.removeArg.description', {
-                    defaultValue: 'This will permanently remove this argument and its {{count}} sub-argument(s).',
-                    count: childCount,
+                  {t('graph.batchDelete.description', {
+                    defaultValue: 'This will permanently remove {{count}} selected sub-argument(s) and their associated letter content.',
+                    count: mergeSelectedIds.size,
                   })}
                 </p>
+                <div className="max-h-32 overflow-y-auto space-y-1">
+                  {Array.from(mergeSelectedIds).map(id => {
+                    const sa = contextSubArguments.find(s => s.id === id);
+                    return (
+                      <div key={id} className="flex items-center gap-2 text-xs text-slate-600">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                        <span className="line-clamp-1">{sa?.title || id}</span>
+                      </div>
+                    );
+                  })}
+                </div>
                 <p className="text-xs text-red-600 font-medium">
                   {t('graph.removeStandard.warning', 'This action cannot be undone.')}
                 </p>
               </div>
               <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
                 <button
-                  onClick={() => setDeleteArgModalId(null)}
+                  onClick={() => setBatchDeleteConfirm(false)}
                   className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
                 >
                   {t('common.cancel', 'Cancel')}
                 </button>
                 <button
-                  onClick={handleArgumentDeleteConfirm}
+                  onClick={handleBatchDeleteConfirm}
                   className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
                 >
-                  {t('graph.removeStandard.confirm', 'Remove')}
+                  {t('graph.batchDelete.confirm', { defaultValue: 'Delete {{count}}', count: mergeSelectedIds.size })}
                 </button>
               </div>
             </div>
           </div>
-        );
-      })()}
-
-      {/* Batch delete confirmation modal */}
-      {batchDeleteConfirm && mergeSelectedIds.size > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setBatchDeleteConfirm(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
-              <div className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                </svg>
-                <h3 className="text-sm font-semibold text-slate-800">{t('graph.batchDelete.title', 'Batch Delete')}</h3>
-              </div>
-            </div>
-            <div className="px-5 py-4 space-y-3">
-              <p className="text-sm text-slate-600">
-                {t('graph.batchDelete.description', {
-                  defaultValue: 'This will permanently remove {{count}} selected sub-argument(s) and their associated letter content.',
-                  count: mergeSelectedIds.size,
-                })}
-              </p>
-              <div className="max-h-32 overflow-y-auto space-y-1">
-                {Array.from(mergeSelectedIds).map(id => {
-                  const sa = contextSubArguments.find(s => s.id === id);
-                  return (
-                    <div key={id} className="flex items-center gap-2 text-xs text-slate-600">
-                      <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
-                      <span className="line-clamp-1">{sa?.title || id}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-red-600 font-medium">
-                {t('graph.removeStandard.warning', 'This action cannot be undone.')}
-              </p>
-            </div>
-            <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
-              <button
-                onClick={() => setBatchDeleteConfirm(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-              >
-                {t('common.cancel', 'Cancel')}
-              </button>
-              <button
-                onClick={handleBatchDeleteConfirm}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
-              >
-                {t('graph.batchDelete.confirm', { defaultValue: 'Delete {{count}}', count: mergeSelectedIds.size })}
-              </button>
-            </div>
-          </div>
-        </div>
+        </Portal>
       )}
     </div>
   );

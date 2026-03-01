@@ -154,7 +154,7 @@ export function ConnectionLines() {
 
   return (
     <svg
-      className="fixed inset-0 pointer-events-none z-[9999]"
+      className="fixed inset-0 pointer-events-none z-30"
       width={window.innerWidth}
       height={window.innerHeight}
     >

@@ -16,22 +16,36 @@ interface SectionNavProps {
 }
 
 function SectionNav({ sections, activeSection, onSectionClick, generatingStandard, rewritingStandard }: SectionNavProps) {
-  if (rewritingStandard) {
-    console.log('[SectionNav] rewritingStandard =', rewritingStandard, 'sections:', sections.map(s => s.standardId));
-  }
+  const navRef = useRef<HTMLDivElement>(null);
+  const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  // Auto-scroll to the latest stale section tab
+  useEffect(() => {
+    const lastStale = [...sections].reverse().find(s => s.isStale);
+    if (!lastStale) return;
+    const tab = tabRefs.current.get(lastStale.id);
+    if (tab && navRef.current) {
+      tab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [sections, generatingStandard, rewritingStandard]);
+
   return (
     <div className="flex-shrink-0 bg-white shadow-md relative z-10">
-      <div className="flex overflow-x-auto scrollbar-hide">
+      <div ref={navRef} className="flex overflow-x-auto scrollbar-hide">
         {sections.map((section, idx) => {
           const isActive = activeSection === section.id;
+          const isStale = section.isStale && generatingStandard !== section.standardId && rewritingStandard !== section.standardId;
           return (
             <button
               key={section.id}
+              ref={(el) => { if (el) tabRefs.current.set(section.id, el); }}
               onClick={() => onSectionClick(section.id)}
               className={`relative px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-all
                 ${isActive
                   ? 'text-blue-600'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
+                  : isStale
+                    ? 'text-amber-700'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
             >
               <span className="flex items-center gap-1.5">
                 {(generatingStandard === section.standardId || rewritingStandard === section.standardId) ? (
@@ -43,13 +57,15 @@ function SectionNav({ sections, activeSection, onSectionClick, generatingStandar
                   <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold
                     ${isActive
                       ? 'bg-blue-600 text-white'
-                      : 'bg-slate-200 text-slate-500'}`}>
+                      : isStale
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-slate-200 text-slate-500'}`}>
                     {idx + 1}
                   </span>
                 )}
                 {section.title}
-                {section.isStale && !generatingStandard && !rewritingStandard && (
-                  <span className="w-2 h-2 bg-amber-500 rounded-full flex-shrink-0" title="Content out of date" />
+                {isStale && (
+                  <span className="w-2 h-2 bg-amber-500 rounded-full flex-shrink-0 animate-stale-glow" title="Content out of date" />
                 )}
               </span>
               {/* Active indicator line */}
@@ -400,60 +416,36 @@ function LetterSectionComponent({
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-slate-800">{section.title}</h3>
         <div className="flex items-center gap-2">
-          {section.isGenerated && (
-            <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full">
-              {t('writing.aiGenerated')}
-            </span>
-          )}
-          {/* V3: Show SubArgument count */}
-          {section.sentences && section.sentences.length > 0 && (
-            <>
-              <span className="text-[10px] px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full" title="SubArguments">
-                ◆ {new Set(section.sentences.map(s => s.subargument_id).filter(Boolean)).size}
-              </span>
-              <span className="text-[10px] px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full" title="Source snippets">
-                {section.sentences.filter(s => s.snippet_ids?.length > 0).length} sources
-              </span>
-            </>
-          )}
           {section.isEdited && (
             <span className="text-[10px] px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">
               edited
             </span>
           )}
-          {/* Rewrite button — always visible, highlighted when stale */}
+          {/* Regenerate button — always visible, highlighted + pulsing when stale */}
           {section.standardId && onRewrite && (
             <button
               onClick={() => onRewrite(section.standardId!)}
               disabled={isRewriting}
-              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors ${
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-xs transition-colors ${
                 isRewriting
                   ? 'text-slate-400 cursor-not-allowed'
                   : section.isStale
-                    ? 'text-amber-700 bg-amber-100 hover:bg-amber-200 font-medium'
+                    ? 'text-amber-700 bg-amber-100 hover:bg-amber-200 font-medium animate-stale-glow'
                     : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
               }`}
-              title={section.isStale ? 'Content out of date — click to rewrite' : 'Rewrite this section'}
+              title={section.isStale ? 'Content out of date — click to regenerate' : 'Rewrite this section'}
             >
               {isRewriting ? (
-                <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
               ) : (
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               )}
-              {section.isStale && <span>Outdated</span>}
-            </button>
-          )}
-          {!isEditing && (
-            <button
-              onClick={() => setIsEditing(true)}
-              className="text-xs text-slate-400 hover:text-slate-600"
-            >
-              {t('common.edit')}
+              <span>{section.isStale ? 'Regenerate' : 'Rewrite'}</span>
             </button>
           )}
         </div>

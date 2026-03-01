@@ -72,31 +72,20 @@ export function useApp() {
     return result;
   }, [args.addSubArgument, args.arguments, writing.markSectionStale, project.projectId]);
 
-  // removeSubArgument: delete sub-argument then auto-rewrite the affected section
+  // removeSubArgument: delete sub-argument then mark section as stale
   const removeSubArgument = useCallback(async (id: string) => {
     const subArg = args.subArguments.find(sa => sa.id === id);
     const parentArg = args.arguments.find(a => a.id === subArg?.argumentId);
     const standardKey = parentArg?.standardKey;
 
-    console.log('[removeSubArgument] id:', id, 'subArg:', !!subArg, 'parentArg:', !!parentArg, 'standardKey:', standardKey);
-
     // Delete the sub-argument (backend + frontend state)
     args.removeSubArgument(id, project.projectId);
 
-    // Auto-rewrite the affected standard's letter section
+    // Mark section as stale (user manually clicks Regenerate)
     if (standardKey) {
-      try {
-        console.log('[removeSubArgument] calling rewriteStandard for:', standardKey);
-        await writing.rewriteStandard(standardKey, project.projectId, project.llmProvider);
-        console.log('[removeSubArgument] rewriteStandard completed for:', standardKey);
-      } catch (err) {
-        console.warn('[removeSubArgument] Auto-rewrite failed:', err);
-        writing.markSectionStale(standardKey);
-      }
-    } else {
-      console.warn('[removeSubArgument] No standardKey found, skipping rewrite');
+      writing.markSectionStale(standardKey);
     }
-  }, [args.removeSubArgument, args.arguments, args.subArguments, writing.rewriteStandard, writing.markSectionStale, project.projectId, project.llmProvider]);
+  }, [args.removeSubArgument, args.arguments, args.subArguments, writing.markSectionStale, project.projectId]);
 
   // Change cascade: bind projectId for commitChanges
   const commitChanges = useCallback(async (sectionId: string) => {
