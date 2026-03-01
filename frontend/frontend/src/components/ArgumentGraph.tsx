@@ -492,6 +492,7 @@ function SubArgumentNodeComponent({
   onRegenerate,
   onTitleChange,
   onDelete,
+  onCancelCreate,
   autoEdit,
   onAutoEditComplete,
   mergeMode,
@@ -506,6 +507,7 @@ function SubArgumentNodeComponent({
   onRegenerate?: (subArgumentId: string) => void;
   onTitleChange?: (subArgumentId: string, newTitle: string) => void;
   onDelete?: (subArgumentId: string) => void;  // Delete callback
+  onCancelCreate?: (subArgumentId: string) => void;  // Silent delete for untitled new nodes
   autoEdit?: boolean;  // Auto-enter edit mode for newly created nodes
   onAutoEditComplete?: () => void;  // Callback when auto-edit is acknowledged
   mergeMode?: boolean;
@@ -548,14 +550,24 @@ function SubArgumentNodeComponent({
   const handleTitleSave = () => {
     if (editTitle.trim() && editTitle !== node.data.title) {
       onTitleChange?.(node.id, editTitle.trim());
+      setIsEditing(false);
+    } else if (!editTitle.trim() && !node.data.title) {
+      // Newly created node with no title — silently cancel creation
+      onCancelCreate?.(node.id);
+    } else {
+      setIsEditing(false);
     }
-    setIsEditing(false);
   };
 
   // Handle title edit cancel
   const handleTitleCancel = () => {
-    setEditTitle(node.data.title);
-    setIsEditing(false);
+    if (!node.data.title) {
+      // Newly created node — cancel means discard
+      onCancelCreate?.(node.id);
+    } else {
+      setEditTitle(node.data.title);
+      setIsEditing(false);
+    }
   };
 
   // Handle key events in edit mode
@@ -1391,6 +1403,16 @@ export function ArgumentGraph() {
     setDeleteSubArgModalId(subArgumentId);
   }, []);
 
+  // Handle cancel creation of untitled SubArgument — silent delete, no confirmation
+  const handleSubArgumentCancelCreate = useCallback((subArgumentId: string) => {
+    removeSubArgument(subArgumentId);
+    if (focusState.type === 'subargument' && focusState.id === subArgumentId) {
+      setFocusState({ type: 'none', id: null });
+    }
+    setSelectedNodeId(null);
+    toast('Sub-argument discarded — no title entered', { duration: 2000 });
+  }, [removeSubArgument, focusState, setFocusState]);
+
   // Confirm delete SubArgument from modal (with undo)
   const handleSubArgumentDeleteConfirm = useCallback(() => {
     if (!deleteSubArgModalId || !removeSubArgument) return;
@@ -2028,6 +2050,7 @@ export function ArgumentGraph() {
                   onRegenerate={isMergeMode ? undefined : handleSubArgumentRegenerate}
                   onTitleChange={isMergeMode ? undefined : handleSubArgumentTitleChange}
                   onDelete={isMergeMode ? undefined : handleSubArgumentDelete}
+                  onCancelCreate={handleSubArgumentCancelCreate}
                   autoEdit={node.id === newlyCreatedSubArgId}
                   onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
                   mergeMode={isMergeMode}

@@ -278,6 +278,7 @@ class WriteV3Request(BaseModel):
     subargument_ids: Optional[List[str]] = None  # 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
     style: str = "legal"
     additional_instructions: Optional[str] = None
+    exploration_writing: bool = False  # ON: backfill uses global registry + syncs new snippets to subarguments
 
 
 class SentenceWithProvenanceV3(BaseModel):
@@ -313,6 +314,7 @@ class WriteV3Response(BaseModel):
     provenance_index: ProvenanceIndex
     validation: ValidationResult
     error: Optional[str] = None
+    updated_subargument_snippets: Optional[Dict[str, List[str]]] = None
 
 
 @router_v3.get("/{project_id}/sections")
@@ -401,7 +403,8 @@ async def write_petition_v3(
             argument_ids=req.argument_ids,
             subargument_ids=req.subargument_ids,
             additional_instructions=req.additional_instructions,
-            provider=req.provider
+            provider=req.provider,
+            exploration_writing=req.exploration_writing
         )
 
         if not result.get("success"):
@@ -424,7 +427,8 @@ async def write_petition_v3(
             paragraph_text=result["paragraph_text"],
             sentences=[SentenceWithProvenanceV3(**s) for s in result["sentences"]],
             provenance_index=ProvenanceIndex(**result.get("provenance_index", {})),
-            validation=ValidationResult(**result.get("validation", {}))
+            validation=ValidationResult(**result.get("validation", {})),
+            updated_subargument_snippets=result.get("updated_subargument_snippets")
         )
 
     except Exception as e:

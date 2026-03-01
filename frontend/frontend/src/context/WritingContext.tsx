@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react';
 import type { WritingEdge, LetterSection, Position, Snippet, Argument, SubArgument, PipelineState, MergeSuggestion } from '../types';
 import { apiClient } from '../services/api';
 
@@ -95,7 +95,7 @@ export interface WritingContextType {
   // Pipeline operations take projectId & llmProvider as parameters
   extractSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
   confirmAllMappings: (projectId: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
-  generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[]) => Promise<void>;
+  generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[], onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void) => Promise<void>;
   reloadSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>) => Promise<void>;
   // Unified extraction
   unifiedExtract: (projectId: string, llmProvider: string, applicantName: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
@@ -125,7 +125,10 @@ export interface WritingContextType {
   // Mark a section as stale (content out of sync with writing tree)
   markSectionStale: (standardKey: string) => void;
   // Rewrite a single standard's letter section
-  rewriteStandard: (standardKey: string, projectId: string, llmProvider: string) => Promise<void>;
+  rewriteStandard: (standardKey: string, projectId: string, llmProvider: string, onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void) => Promise<void>;
+  // Exploration writing toggle
+  explorationWriting: boolean;
+  setExplorationWriting: React.Dispatch<React.SetStateAction<boolean>>;
   // Which standard is currently being rewritten (for UI spinner)
   rewritingStandardKey: string | null;
   // Change cascade: accept/reject/commit
@@ -158,6 +161,16 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
   // Rewriting state — tracks which standard is currently being rewritten
   const [rewritingStandardKey, setRewritingStandardKey] = useState<string | null>(null);
+
+  // Exploration writing toggle (persisted to localStorage)
+  const [explorationWriting, setExplorationWriting] = useState<boolean>(() =>
+    localStorage.getItem('explorationWriting') === 'true'
+  );
+  const explorationWritingRef = useRef(explorationWriting);
+  useEffect(() => {
+    explorationWritingRef.current = explorationWriting;
+    localStorage.setItem('explorationWriting', String(explorationWriting));
+  }, [explorationWriting]);
 
   // Unified extraction state
   const [mergeSuggestions, setMergeSuggestions] = useState<MergeSuggestion[]>([]);
@@ -281,7 +294,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     projectId: string,
     llmProvider: string,
     setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>,
-    arguments_?: Argument[]
+    arguments_?: Argument[],
+    onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void
   ) => {
     // Determine which standards to generate based on actual arguments
     const allStandards = [
@@ -339,9 +353,17 @@ export function WritingProvider({ children }: { children: ReactNode }) {
               traced_sentences: number;
               warnings: string[];
             };
-          }>(`/write/v3/${projectId}/${section}`, { provider: llmProvider });
+            updated_subargument_snippets?: Record<string, string[]>;
+          }>(`/write/v3/${projectId}/${section}`, {
+            provider: llmProvider,
+            exploration_writing: explorationWritingRef.current,
+          });
 
           if (response.success && response.paragraph_text) {
+            // Notify about new snippet discoveries (exploration mode)
+            if (response.updated_subargument_snippets && onSubArgSnippetsUpdated) {
+              onSubArgSnippetsUpdated(response.updated_subargument_snippets);
+            }
             const newSection: LetterSection = {
               id: `section-${section}`,
               title: section.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
@@ -389,7 +411,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
   const rewriteStandard = useCallback(async (
     standardKey: string,
     projectId: string,
-    llmProvider: string
+    llmProvider: string,
+    onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void
   ) => {
     console.log('[rewriteStandard] START, setting rewritingStandardKey =', standardKey);
     setRewritingStandardKey(standardKey);
@@ -412,13 +435,22 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           by_argument: Record<string, number[]>;
           by_snippet: Record<string, number[]>;
         };
-      }>(`/write/v3/${projectId}/${standardKey}`, { provider: llmProvider });
+        updated_subargument_snippets?: Record<string, string[]>;
+      }>(`/write/v3/${projectId}/${standardKey}`, {
+        provider: llmProvider,
+        exploration_writing: explorationWritingRef.current,
+      });
     } catch (err) {
       setRewritingStandardKey(null);
       throw err;
     }
 
     if (response.success && response.paragraph_text) {
+      // Notify about new snippet discoveries (exploration mode)
+      if (response.updated_subargument_snippets && onSubArgSnippetsUpdated) {
+        onSubArgSnippetsUpdated(response.updated_subargument_snippets);
+      }
+
       const newSection: LetterSection = {
         id: `section-${standardKey}`,
         title: standardKey.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
@@ -1058,6 +1090,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     isExtracting,
     isMerging,
     extractionProgress,
+    explorationWriting,
+    setExplorationWriting,
     regenerateSubArgumentInLetter,
     removeSubArgumentFromLetter,
     markSectionStale,
@@ -1067,7 +1101,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     rejectSuggestion,
     commitChanges,
     dismissChanges,
-  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, extractSnippets, confirmAllMappings, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
+  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, explorationWriting, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, extractSnippets, confirmAllMappings, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
 
   return <WritingContext.Provider value={value}>{children}</WritingContext.Provider>;
 }

@@ -517,6 +517,8 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
     pipelineState,
     rewriteStandard,
     rewritingStandardKey,
+    explorationWriting,
+    setExplorationWriting,
   } = useApp();
 
   const [hoveredStandardId, setHoveredStandardId] = useState<string | undefined>(undefined);
@@ -682,8 +684,12 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
 
     letterSections.forEach(section => {
       if (section.sentences) {
-        totalSentences += section.sentences.length;
-        tracedSentences += section.sentences.filter(s =>
+        // Exclude opening/closing boilerplate from trace stats
+        const contentSentences = section.sentences.filter(s =>
+          s.sentence_type !== 'opening' && s.sentence_type !== 'closing'
+        );
+        totalSentences += contentSentences.length;
+        tracedSentences += contentSentences.filter(s =>
           s.snippet_ids?.length > 0 || s.subargument_id
         ).length;
         editedSentences += section.sentences.filter(s => s.isEdited).length;
@@ -698,9 +704,22 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
       {/* Letter Header */}
       <div className="flex-shrink-0 px-4 py-2 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-slate-800">{t('writing.petitionLetter')}</h2>
-            <p className="text-xs text-slate-500">{t('writing.eb1aApplication')}</p>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <div className={`relative w-7 h-4 rounded-full transition-colors ${
+                explorationWriting ? 'bg-emerald-500' : 'bg-slate-300'
+              }`}
+                onClick={() => setExplorationWriting(p => !p)}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+                  explorationWriting ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`} />
+              </div>
+              <span className={`text-[11px] font-medium ${
+                explorationWriting ? 'text-emerald-700' : 'text-slate-400'
+              }`}>Exploration</span>
+            </label>
           </div>
           <div className="flex items-center gap-2">
             <button

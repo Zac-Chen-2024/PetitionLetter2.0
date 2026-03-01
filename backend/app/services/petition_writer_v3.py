@@ -147,6 +147,22 @@ def _build_snippet_lookup(snippet_registry: List[Dict]) -> Dict:
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
 
+
+def _load_snippet_source(project_id: str) -> List[Dict]:
+    """加载 snippet 数据源，优先 combined_extraction（和前端一致，snp_ 格式）。
+
+    前端始终从 extraction 端点加载 snippet（snp_ 格式 ID），
+    所以 writing pipeline 也必须优先使用同一数据源，确保全链路 ID 一致。
+    """
+    combined_file = PROJECTS_DIR / project_id / "extraction" / "combined_extraction.json"
+    if combined_file.exists():
+        with open(combined_file, 'r', encoding='utf-8') as f:
+            snippets = json.load(f).get("snippets", [])
+        if snippets:
+            return snippets
+    # Fallback: registry.json（仅当 combined_extraction 不存在时）
+    return load_registry(project_id)
+
 # EB-1A 标准名称映射
 EB1A_STANDARDS = {
     "awards": "Awards",
@@ -364,15 +380,7 @@ def load_subargument_context(
     if not legal_args:
         return {"standard": None, "arguments": []}
 
-    snippet_registry = load_registry(project_id)
-
-    # If registry is empty, fall back to combined extraction data
-    if not snippet_registry:
-        combined_file = PROJECTS_DIR / project_id / "extraction" / "combined_extraction.json"
-        if combined_file.exists():
-            with open(combined_file, 'r', encoding='utf-8') as f:
-                combined_data = json.load(f)
-            snippet_registry = combined_data.get("snippets", [])
+    snippet_registry = _load_snippet_source(project_id)
 
     # 构建双向查找表（支持新旧两种 ID 格式）
     snippet_lookup = _build_snippet_lookup(snippet_registry)
@@ -1062,7 +1070,8 @@ _EXHIBIT_REF_PATTERN = re.compile(r'Exhibit\s+([A-Za-z0-9-]+),\s*p\.?\s*(\d+)')
 
 def _backfill_snippet_ids(
     sentences: List[Dict],
-    snippet_registry: List[Dict]
+    snippet_registry: List[Dict],
+    allowed_snippet_ids_by_subarg: Optional[Dict[str, set]] = None
 ) -> int:
     """
     对 snippet_ids 为空的句子，从文本中解析 [Exhibit X, p.Y] 引用，
@@ -1073,6 +1082,8 @@ def _backfill_snippet_ids(
     Args:
         sentences: [{"text", "snippet_ids", "exhibit_refs", ...}]
         snippet_registry: snippet 列表，每个包含 {snippet_id, exhibit_id, page}
+        allowed_snippet_ids_by_subarg: 如果提供，回填时只保留该 subargument 已有的 snippet_ids
+            (exploration_writing=False 时使用)
 
     Returns:
         回填的句子数量
@@ -1090,13 +1101,23 @@ def _backfill_snippet_ids(
 
     backfilled = 0
     for sent in sentences:
-        if sent.get("snippet_ids"):
-            continue  # Already has snippet_ids, skip
         if sent.get("sentence_type") in ("opening", "closing"):
             continue  # Opening/closing don't need snippet tracing
 
+        existing_ids = sent.get("snippet_ids", [])
+        if existing_ids:
+            continue  # LLM 已提供 snippet_ids — 信任 LLM 的选择，不做增补
+
         text = sent.get("text", "")
         refs = _EXHIBIT_REF_PATTERN.findall(text)
+
+        # Also parse from exhibit_refs field (LLM may fill this even when text lacks inline citations)
+        for ref_str in sent.get("exhibit_refs", []):
+            extra_refs = _EXHIBIT_REF_PATTERN.findall(ref_str)
+            for er in extra_refs:
+                if er not in refs:
+                    refs.append(er)
+
         if not refs:
             continue
 
@@ -1118,14 +1139,24 @@ def _backfill_snippet_ids(
                 if sid not in seen:
                     seen.add(sid)
                     unique_ids.append(sid)
+
+            # Filter by allowed set when exploration_writing is OFF
+            if allowed_snippet_ids_by_subarg is not None:
+                subarg_id = sent.get("subargument_id")
+                if subarg_id and subarg_id in allowed_snippet_ids_by_subarg:
+                    allowed = allowed_snippet_ids_by_subarg[subarg_id]
+                    unique_ids = [sid for sid in unique_ids if sid in allowed]
+                elif subarg_id:
+                    # SubArgument has no snippets at all — skip backfill
+                    unique_ids = []
+
+            if not unique_ids:
+                continue
+
             sent["snippet_ids"] = unique_ids
             if not sent.get("exhibit_refs"):
                 sent["exhibit_refs"] = matched_exhibit_refs
             backfilled += 1
-            logger.debug(
-                f"Backfilled snippet_ids for sentence: "
-                f"{len(unique_ids)} snippets from {len(refs)} exhibit refs"
-            )
 
     return backfilled
 
@@ -1449,7 +1480,8 @@ async def write_petition_section_v3(
     argument_ids: List[str] = None,
     subargument_ids: List[str] = None,
     additional_instructions: str = None,
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    exploration_writing: bool = False
 ) -> Dict:
     """
     V3.1 版本的写作入口 — OCR 回溯三步流水线
@@ -1629,16 +1661,77 @@ async def write_petition_section_v3(
         sent["snippet_ids"] = valid_ids
 
     # 溯源回填：对 snippet_ids 为空的句子，从文本中解析 exhibit 引用反查 snippet
-    snippet_registry = load_registry(project_id)
-    if not snippet_registry:
-        # Fallback to combined extraction data (unified_extractor output)
-        combined_file = PROJECTS_DIR / project_id / "extraction" / "combined_extraction.json"
-        if combined_file.exists():
-            with open(combined_file, 'r', encoding='utf-8') as f:
-                snippet_registry = json.load(f).get("snippets", [])
-    backfilled_count = _backfill_snippet_ids(all_sentences, snippet_registry)
+    snippet_registry = _load_snippet_source(project_id)
+
+    # Build allowed snippet set per subargument (exploration OFF → restrict backfill)
+    allowed_snippet_ids_by_subarg = None
+    if not exploration_writing:
+        allowed_snippet_ids_by_subarg = {}
+        for arg in all_arguments:
+            for sa in arg.get("sub_arguments", []):
+                sa_id = sa.get("id", "")
+                sa_snip_ids = set(snip["id"] for snip in sa.get("snippets", []))
+                allowed_snippet_ids_by_subarg[sa_id] = sa_snip_ids
+
+    # Snapshot original snippet_ids per subargument (for exploration diff)
+    original_subarg_snippets: Dict[str, set] = {}
+    if exploration_writing:
+        for arg in all_arguments:
+            for sa in arg.get("sub_arguments", []):
+                sa_id = sa.get("id", "")
+                original_subarg_snippets[sa_id] = set(
+                    snip["id"] for snip in sa.get("snippets", [])
+                )
+
+    backfilled_count = _backfill_snippet_ids(all_sentences, snippet_registry, allowed_snippet_ids_by_subarg)
     if backfilled_count:
         logger.info(f"Backfilled snippet_ids for {backfilled_count} sentences via exhibit ref parsing")
+
+    # Exploration writing: discover new snippets and persist to legal_arguments.json
+    # backfill 只对 LLM 没给 snippet_ids 的句子做回填（从文中 [Exhibit X, p.Y] 反查），
+    # 不会对已有 snippet_ids 的句子做增补，所以这里读 post-backfill 结果是精确的。
+    updated_subargument_snippets = None
+    if exploration_writing:
+        # Collect all snippet_ids per subargument from generated sentences
+        current_subarg_snippets: Dict[str, set] = defaultdict(set)
+        for sent in all_sentences:
+            sa_id = sent.get("subargument_id")
+            if sa_id:
+                for sid in sent.get("snippet_ids", []):
+                    current_subarg_snippets[sa_id].add(sid)
+
+        # Find newly discovered snippet_ids
+        new_snippets_map: Dict[str, List[str]] = {}
+        for sa_id, current_ids in current_subarg_snippets.items():
+            original_ids = original_subarg_snippets.get(sa_id, set())
+            new_ids = current_ids - original_ids
+            if new_ids:
+                new_snippets_map[sa_id] = sorted(new_ids)
+
+        if new_snippets_map:
+            logger.info(f"Exploration writing: discovered new snippets for {len(new_snippets_map)} subarguments")
+            # Persist to legal_arguments.json
+            try:
+                from .snippet_recommender import load_legal_arguments, save_legal_arguments
+                legal_data = load_legal_arguments(project_id)
+
+                for sa_data in legal_data.get("sub_arguments", []):
+                    sa_id = sa_data.get("id", "")
+                    if sa_id in new_snippets_map:
+                        existing_ids = set(sa_data.get("snippet_ids", []))
+                        for new_sid in new_snippets_map[sa_id]:
+                            if new_sid not in existing_ids:
+                                sa_data.setdefault("snippet_ids", []).append(new_sid)
+
+                save_legal_arguments(project_id, legal_data)
+                logger.info(f"Persisted new snippet associations to legal_arguments.json")
+            except Exception as e:
+                logger.warning(f"Failed to persist exploration snippets: {e}")
+
+            # Return the full updated snippet list per subargument (not just new ones)
+            updated_subargument_snippets = {}
+            for sa_id in new_snippets_map:
+                updated_subargument_snippets[sa_id] = sorted(current_subarg_snippets[sa_id])
 
     # 确保文本中包含 [Exhibit X] 引用：如果 exhibit_refs 有值但文本中没有，追加到句尾
     injected_count = _inject_exhibit_citations(all_sentences)
@@ -1658,7 +1751,7 @@ async def write_petition_section_v3(
         if s.get("snippet_ids") or s.get("subargument_id")
     )
 
-    return {
+    result = {
         "success": True,
         "section": standard_key,
         "paragraph_text": paragraph_text,
@@ -1670,6 +1763,9 @@ async def write_petition_section_v3(
             "warnings": all_warnings
         }
     }
+    if updated_subargument_snippets:
+        result["updated_subargument_snippets"] = updated_subargument_snippets
+    return result
 
 
 # ============================================

@@ -191,10 +191,17 @@ export function useApp() {
     return args.createArgument(standardKey, project.projectId);
   }, [args.createArgument, project.projectId]);
 
+  // Exploration writing: sync new snippet_ids discovered during writing back to subarguments
+  const handleSubArgSnippetsUpdated = useCallback((updates: Record<string, string[]>) => {
+    for (const [subArgId, snippetIds] of Object.entries(updates)) {
+      args.updateSubArgument(subArgId, { snippetIds });
+    }
+  }, [args.updateSubArgument]);
+
   // rewriteStandard: re-generate letter section for a single standard
   const rewriteStandard = useCallback(async (standardKey: string) => {
-    return writing.rewriteStandard(standardKey, project.projectId, project.llmProvider);
-  }, [writing.rewriteStandard, project.projectId, project.llmProvider]);
+    return writing.rewriteStandard(standardKey, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated);
+  }, [writing.rewriteStandard, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated]);
 
   // removeStandard: delete all arguments/sub-args under a standard + remove letter section
   const removeStandard = useCallback(async (standardKey: string) => {
@@ -221,8 +228,8 @@ export function useApp() {
   }, [writing.confirmAllMappings, project.projectId, project.setPipelineState]);
 
   const generatePetition = useCallback(async () => {
-    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments);
-  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments]);
+    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated);
+  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated]);
 
   const reloadSnippets = useCallback(async () => {
     return writing.reloadSnippets(project.projectId, snippets.setSnippets);
@@ -362,6 +369,10 @@ export function useApp() {
     updateLetterSection: writing.updateLetterSection,
     writingNodePositions: writing.writingNodePositions,
     updateWritingNodePosition: writing.updateWritingNodePosition,
+
+    // Exploration writing toggle
+    explorationWriting: writing.explorationWriting,
+    setExplorationWriting: writing.setExplorationWriting,
 
     // Stale marking
     markSectionStale: writing.markSectionStale,

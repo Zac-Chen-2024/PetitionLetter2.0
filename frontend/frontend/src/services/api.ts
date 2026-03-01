@@ -2,7 +2,7 @@
  * API Client - 统一的 HTTP 请求客户端
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8004/api';
 
 // Backend origin (without /api path) for direct resource URLs (e.g. PDF files)
 export const BACKEND_URL = API_BASE.replace(/\/api\/?$/, '');
