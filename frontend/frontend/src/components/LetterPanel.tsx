@@ -227,46 +227,58 @@ function LetterSectionComponent({
   } | null>(null);
 
   // Render text with clickable exhibit refs (blue, clickable)
-  // Pass sentence info so we can focus SubArgument when clicking exhibit
+  // Each exhibit ref inside [...] is independently clickable and points to its own snippet
   const renderTextWithExhibitRefs = useCallback((text: string, sentence: SentenceWithProvenance) => {
-    // Match patterns like [Exhibit C2, p.2] or [Exhibit C4, p.3; Exhibit C5, p.2]
-    const exhibitPattern = /\[Exhibit\s+([A-Z0-9-]+)(?:,\s*p\.?(\d+))?(?:;\s*Exhibit\s+([A-Z0-9-]+)(?:,\s*p\.?(\d+))?)?\]/gi;
+    // Match the entire bracket: [Exhibit A1, p.2] or [Exhibit A1, p.2; Exhibit B3, p.4; ...]
+    const bracketPattern = /\[([^\]]*Exhibit\s+[A-Z0-9-][^\]]*)\]/gi;
+    // Individual exhibit within a bracket
+    const singlePattern = /Exhibit\s+([A-Z0-9-]+)(?:,\s*p\.?(\d+))?/gi;
 
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match;
     let keyIdx = 0;
 
-    while ((match = exhibitPattern.exec(text)) !== null) {
-      // Add text before match
+    while ((match = bracketPattern.exec(text)) !== null) {
       if (match.index > lastIndex) {
         parts.push(text.slice(lastIndex, match.index));
       }
 
-      // Extract exhibit info
-      const exhibitId = match[1];
-      const page = match[2] ? parseInt(match[2]) : undefined;
+      // Parse all individual exhibits inside this bracket
+      const inner = match[1];
+      const exhibits: { id: string; page?: number; text: string }[] = [];
+      let sm;
+      singlePattern.lastIndex = 0;
+      while ((sm = singlePattern.exec(inner)) !== null) {
+        exhibits.push({
+          id: sm[1],
+          page: sm[2] ? parseInt(sm[2]) : undefined,
+          text: sm[0],
+        });
+      }
 
-      // Add clickable exhibit ref
-      parts.push(
-        <span
-          key={`exhibit-${keyIdx++}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            // Pass sentence's SubArgument and all snippet_ids for proper focus chain
-            onExhibitClick?.(exhibitId, page, sentence.subargument_id, sentence.snippet_ids);
-          }}
-          className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer font-medium"
-          title={`Click to view Exhibit ${exhibitId}${page ? `, page ${page}` : ''}`}
-        >
-          {match[0]}
-        </span>
-      );
+      parts.push(<span key={`br-${keyIdx++}`}>[</span>);
+      exhibits.forEach((ex, i) => {
+        if (i > 0) parts.push(<span key={`sep-${keyIdx++}`}>; </span>);
+        parts.push(
+          <span
+            key={`ex-${keyIdx++}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onExhibitClick?.(ex.id, ex.page, sentence.subargument_id, sentence.snippet_ids);
+            }}
+            className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer font-medium"
+            title={`Click to view Exhibit ${ex.id}${ex.page ? `, page ${ex.page}` : ''}`}
+          >
+            {ex.text}
+          </span>
+        );
+      });
+      parts.push(<span key={`br-${keyIdx++}`}>]</span>);
 
       lastIndex = match.index + match[0].length;
     }
 
-    // Add remaining text
     if (lastIndex < text.length) {
       parts.push(text.slice(lastIndex));
     }

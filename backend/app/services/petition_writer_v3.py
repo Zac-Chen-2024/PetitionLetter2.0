@@ -1130,6 +1130,61 @@ def _backfill_snippet_ids(
     return backfilled
 
 
+def _inject_exhibit_citations(sentences: List[Dict]) -> int:
+    """
+    对有 exhibit_refs 但文本中缺少 [Exhibit X] 引用的句子，
+    将引用追加到句尾。已有引用的句子跳过。
+
+    Returns: 注入的句子数量
+    Mutates sentences in-place.
+    """
+    injected = 0
+    for sent in sentences:
+        exhibit_refs = sent.get("exhibit_refs", [])
+        if not exhibit_refs:
+            continue
+        text = sent.get("text", "")
+        # 已经有 [Exhibit ...] 引用的跳过
+        if re.search(r'\[Exhibit\s+[A-Za-z0-9]', text):
+            continue
+        # 跳过 opening/closing
+        if sent.get("sentence_type") in ("opening", "closing"):
+            continue
+
+        # 构建引用标记，如 [Exhibit A1, p.2; Exhibit B1, p.3]
+        # exhibit_refs 格式可能是 "A1-2", "Exhibit A1, p.2", "A1" 等，统一处理
+        formatted = []
+        for ref in exhibit_refs:
+            ref = ref.strip()
+            if ref.startswith("Exhibit "):
+                formatted.append(ref)
+            elif "-" in ref:
+                # "A1-2" -> "Exhibit A1, p.2"
+                parts = ref.rsplit("-", 1)
+                formatted.append(f"Exhibit {parts[0]}, p.{parts[1]}")
+            else:
+                formatted.append(f"Exhibit {ref}")
+        # 去重保持顺序
+        seen = set()
+        unique = []
+        for f in formatted:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
+
+        citation = "[" + "; ".join(unique) + "]"
+
+        # 追加到句尾：句号前插入
+        text = text.rstrip()
+        if text.endswith("."):
+            sent["text"] = text[:-1] + " " + citation + "."
+        else:
+            sent["text"] = text + " " + citation + "."
+        injected += 1
+
+    return injected
+
+
 # ============================================
 # 验证和修正函数
 # ============================================
@@ -1584,6 +1639,11 @@ async def write_petition_section_v3(
     backfilled_count = _backfill_snippet_ids(all_sentences, snippet_registry)
     if backfilled_count:
         logger.info(f"Backfilled snippet_ids for {backfilled_count} sentences via exhibit ref parsing")
+
+    # 确保文本中包含 [Exhibit X] 引用：如果 exhibit_refs 有值但文本中没有，追加到句尾
+    injected_count = _inject_exhibit_citations(all_sentences)
+    if injected_count:
+        logger.info(f"Injected exhibit citations into {injected_count} sentences")
 
     # 构建溯源索引
     provenance_index = _build_provenance_from_sentences(all_sentences)
