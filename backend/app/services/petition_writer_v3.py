@@ -214,6 +214,91 @@ def _get_standard_display_name(standard_key: str) -> str:
     return EB1A_STANDARDS.get(standard_key, standard_key)
 
 
+def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[str]:
+    """
+    Build cross-prong context for Prong 3 waiver arguments.
+
+    Only activates for prong3_balance. Loads prong1/prong2 writing outputs
+    and extracts representative sentences so the LLM can cross-reference
+    accomplishments when arguing the waiver.
+
+    Returns:
+        Formatted summary string, or None if no prior prong data available.
+    """
+    if standard_key != "prong3_balance":
+        return None
+
+    prong_summaries = []
+
+    for prong_key, prong_label in [
+        ("prong1_merit", "Prong 1 — Substantial Merit & National Importance"),
+        ("prong2_positioned", "Prong 2 — Well Positioned to Advance"),
+    ]:
+        # Primary strategy: load generated writing text
+        writing = load_latest_writing_v3(project_id, prong_key)
+        if writing and writing.get("sentences"):
+            body_sents = [
+                s for s in writing["sentences"]
+                if s.get("sentence_type") == "body" and s.get("text")
+            ]
+            if body_sents:
+                # Extract first sentence of each sub-argument group (max 8)
+                seen_subargs = set()
+                representative = []
+                for s in body_sents:
+                    sa_id = s.get("subargument_id", "")
+                    if sa_id not in seen_subargs:
+                        seen_subargs.add(sa_id)
+                        representative.append(s["text"])
+                    if len(representative) >= 8:
+                        break
+                prong_summaries.append(
+                    f"  {prong_label}:\n" +
+                    "\n".join(f"    - {sent}" for sent in representative)
+                )
+                continue
+
+        # Fallback strategy: use argument/sub-argument titles from legal_arguments
+        legal_args = load_legal_arguments(project_id)
+        if legal_args:
+            arguments = legal_args.get("arguments", [])
+            sub_arguments = legal_args.get("sub_arguments", [])
+            # Find arguments for this prong
+            prong_args = [a for a in arguments if a.get("standard") == prong_key]
+            if prong_args:
+                lines = []
+                for arg in prong_args:
+                    lines.append(f"    Argument: {arg.get('title', '')}")
+                    arg_subargs = [
+                        sa for sa in sub_arguments
+                        if sa.get("argument_id") == arg.get("id")
+                    ]
+                    for sa in arg_subargs:
+                        lines.append(f"      - {sa.get('title', '')}")
+                prong_summaries.append(
+                    f"  {prong_label} (titles only — writing not yet generated):\n" +
+                    "\n".join(lines)
+                )
+
+    if not prong_summaries:
+        return None
+
+    return (
+        "=== CROSS-PRONG CONTEXT (accomplishments already established in Prongs 1 & 2) ===\n"
+        "Use these accomplishments to STRENGTHEN your Prong 3 waiver arguments.\n\n"
+        + "\n\n".join(prong_summaries) +
+        "\n\n"
+        "CROSS-REFERENCE RULES:\n"
+        "- When referencing Prong 1/2 accomplishments, if the SAME exhibit appears in your\n"
+        "  SNIPPET INDEX above, cite it normally with [Exhibit X, p.Y] and snippet_ids.\n"
+        "- If the exhibit is NOT in your SNIPPET INDEX, restate the fact WITHOUT any\n"
+        "  exhibit citation — just write the sentence naturally (e.g., 'The Beneficiary\n"
+        "  has demonstrated...' or 'Given the Beneficiary\\'s established contributions...').\n"
+        "- NEVER fabricate citation formats like [Cross-reference Prong X] or [See above].\n"
+        "=== END CROSS-PRONG CONTEXT ==="
+    )
+
+
 # ============================================
 # Exhibit OCR 缓存和加载
 # ============================================
@@ -609,6 +694,59 @@ Return ONLY valid JSON, no markdown."""
     return sentences
 
 
+def _build_step1_instructions(project_type: str, standard_key: str) -> str:
+    """Build per-prong Step 1 instructions. NIW gets prong-specific chains; EB-1A gets generic."""
+    if project_type == "NIW":
+        # Per-prong argumentation chain and sentence guidance
+        prong_instructions = {
+            "prong1_merit": (
+                "ARGUMENTATION CHAIN for Prong 1 (Substantial Merit & National Importance):\n"
+                "  endeavor definition → substantive value with concrete evidence → national-level importance (statistics, policy relevance, broad applicability)\n"
+                "- Write one paragraph (3-6 sentences) per Sub-Argument listed above"
+            ),
+            "prong2_positioned": (
+                "ARGUMENTATION CHAIN for Prong 2 (Well Positioned to Advance):\n"
+                "  qualifications & expertise → track record of achievements → progress already made → concrete future plans\n"
+                "- Write one paragraph (3-5 sentences) per Sub-Argument listed above (keep tight — avoid redundancy across sub-arguments)"
+            ),
+            "prong3_balance": (
+                "ARGUMENTATION CHAIN for Prong 3 (Balance of Equities — Waiver Justification):\n"
+                "  national interest served → benefits beyond any single employer → urgency / time-sensitivity → impracticality of labor certification\n"
+                "- Write one paragraph (8-12 sentences) per Sub-Argument listed above (Prong 3 demands thorough legal reasoning)"
+            ),
+        }
+        chain_block = prong_instructions.get(standard_key, (
+            "- Write one paragraph (3-6 sentences) per Sub-Argument listed above"
+        ))
+        return (
+            f"INSTRUCTIONS:\n"
+            f"{chain_block}\n"
+            f"- The \"Key evidence pointers\" highlight the most important evidence, but you SHOULD\n"
+            f"  also extract additional supporting details from the source materials (numbers,\n"
+            f"  evaluation criteria, peer names, organization credentials, etc.)\n"
+            f"- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids\n"
+            f"  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.\n"
+            f"- Use exact numbers and names from the source materials\n"
+            f"- Professional legal tone, 100% English (translate any non-English source text)\n"
+            f"- Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence"
+        )
+    else:
+        # EB-1A: original generic instructions
+        return (
+            "INSTRUCTIONS:\n"
+            "- Write one paragraph (3-6 sentences) per Sub-Argument listed above\n"
+            "- The \"Key evidence pointers\" highlight the most important evidence, but you SHOULD\n"
+            "  also extract additional supporting details from the source materials (numbers,\n"
+            "  evaluation criteria, peer names, organization credentials, etc.)\n"
+            "- Build argument chains: fact → authority → rigor → scale → peer comparison\n"
+            "- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids\n"
+            "  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.\n"
+            "- Use exact numbers and names from the source materials\n"
+            "- Professional legal tone, 100% English (translate any non-English source text)\n"
+            "- Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence"
+        )
+
+
 async def _step1_generate_argument_body(
     project_id: str,
     standard: Dict,
@@ -616,7 +754,8 @@ async def _step1_generate_argument_body(
     exhibit_texts: Dict[str, str],
     additional_instructions: str = None,
     provider: str = "deepseek",
-    project_type: str = "EB-1A"
+    project_type: str = "EB-1A",
+    cross_prong_context: str = None
 ) -> List[Dict]:
     """
     Step 1 (v3.1): 为整个 Argument 生成 body，LLM 看到完整 OCR 原文。
@@ -768,19 +907,11 @@ SUB-ARGUMENTS (use as structural outline — write one paragraph per sub-argumen
 {snippet_index_text}
 === END SNIPPET INDEX ===
 
+{cross_prong_context or ""}
+
 {f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else ""}
 
-INSTRUCTIONS:
-- Write one paragraph (3-6 sentences) per Sub-Argument listed above
-- The "Key evidence pointers" highlight the most important evidence, but you SHOULD
-  also extract additional supporting details from the source materials (numbers,
-  evaluation criteria, peer names, organization credentials, etc.)
-- Build argument chains: fact → authority → rigor → scale → peer comparison
-- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids
-  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.
-- Use exact numbers and names from the source materials
-- Professional legal tone, 100% English (translate any non-English source text)
-- Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence
+{_build_step1_instructions(project_type, standard.get('key', ''))}
 
 Return JSON:
 {{
@@ -849,11 +980,95 @@ Return ONLY valid JSON, no markdown."""
     return validated_paragraphs
 
 
+async def _step2_polish_single_subarg_niw(
+    standard: Dict,
+    subargument_bodies: List[Dict],
+    provider: str = "deepseek"
+) -> List[Dict]:
+    """
+    Lightweight self-revision for a single NIW sub-argument.
+
+    Improves sentence flow and argumentative language without changing
+    any citations or snippet_ids.
+    """
+    if not subargument_bodies:
+        return subargument_bodies
+
+    body = subargument_bodies[0]
+    sentences = body.get("sentences", [])
+    if not sentences:
+        return subargument_bodies
+
+    sentences_text = "\n".join(
+        f'  {i+1}. "{s["text"]}"' for i, s in enumerate(sentences)
+    )
+
+    system_prompt = """You are a Senior Immigration Attorney revising a single paragraph in an NIW petition letter for argumentative strength and sentence flow."""
+
+    user_prompt = f"""Revise the following paragraph for the "{standard.get('name', '')}" section.
+
+CURRENT TEXT ({len(sentences)} sentences):
+{sentences_text}
+
+INSTRUCTIONS:
+1. Improve sentence-to-sentence flow: add connective phrases, vary sentence openings
+2. Strengthen argumentative language — make legal conclusions more assertive
+3. PRESERVE all [Exhibit X, p.Y] citations EXACTLY — do not change, add, or remove any
+4. PRESERVE the exact number of sentences ({len(sentences)})
+5. Do NOT add new facts or remove existing ones
+6. 100% English output
+
+Return JSON:
+{{
+  "sentences": [
+    {{"text": "revised sentence...", "snippet_ids": ["..."], "exhibit_refs": ["..."]}}
+  ]
+}}
+
+CRITICAL: Return EXACTLY {len(sentences)} sentences. Return ONLY valid JSON."""
+
+    try:
+        result = await call_llm(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            json_schema={},
+            temperature=0.3,
+            max_tokens=4096,
+            provider=provider
+        )
+
+        polished_sents = result.get("sentences", [])
+
+        # Validate: must have same number of sentences
+        if len(polished_sents) != len(sentences):
+            logger.warning(
+                f"NIW single-subarg polish returned {len(polished_sents)} sentences, "
+                f"expected {len(sentences)}. Using originals."
+            )
+            return subargument_bodies
+
+        # Restore original snippet_ids and exhibit_refs (don't trust LLM)
+        for j, psent in enumerate(polished_sents):
+            psent["snippet_ids"] = sentences[j].get("snippet_ids", [])
+            psent["exhibit_refs"] = sentences[j].get("exhibit_refs", [])
+
+        return [{
+            "subargument_id": body["subargument_id"],
+            "title": body.get("title", ""),
+            "sentences": polished_sents
+        }]
+
+    except Exception as e:
+        logger.warning(f"NIW single-subarg polish failed, using originals: {e}")
+        return subargument_bodies
+
+
 async def _step2_polish_argument(
     standard: Dict,
     argument: Dict,
     subargument_bodies: List[Dict],
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    project_type: str = "EB-1A"
 ) -> List[Dict]:
     """
     Step 2: 将同一 Argument 下多个 SubArgument 的段落润色整合。
@@ -867,7 +1082,12 @@ async def _step2_polish_argument(
         润色后的 subargument_bodies（同结构）
     """
     if len(subargument_bodies) <= 1:
-        # 只有一个 SubArgument，不需要润色过渡
+        if project_type == "NIW":
+            # NIW: single sub-arg still gets a lightweight self-revision pass
+            return await _step2_polish_single_subarg_niw(
+                standard, subargument_bodies, provider
+            )
+        # EB-1A: single SubArgument, no polish needed
         return subargument_bodies
 
     # 构建输入文本（包含 snippet_ids 以便 LLM 知道它们）
@@ -1620,6 +1840,13 @@ async def write_petition_section_v3(
     per_argument_bodies: List[List[Dict]] = []  # [[{subargument_id, title, sentences}]]
     per_argument_refs: List[Dict] = []
 
+    # NIW Prong 3: build cross-prong context from Prong 1 & 2 outputs
+    cross_prong_context = None
+    if project_type == "NIW" and standard_key == "prong3_balance":
+        cross_prong_context = _build_cross_prong_summary(project_id, standard_key)
+        if cross_prong_context:
+            logger.info("Step1: Loaded cross-prong context for Prong 3 waiver arguments")
+
     for argument in all_arguments:
         arg_id = argument.get("id", "")
         sub_arguments = argument.get("sub_arguments", [])
@@ -1643,7 +1870,8 @@ async def write_petition_section_v3(
             exhibit_texts=exhibit_texts,
             additional_instructions=additional_instructions,
             provider=provider,
-            project_type=project_type
+            project_type=project_type,
+            cross_prong_context=cross_prong_context
         )
 
         if not arg_bodies:
@@ -1681,7 +1909,8 @@ async def write_petition_section_v3(
             standard=standard,
             argument=argument_ref,
             subargument_bodies=arg_bodies,
-            provider=provider
+            provider=provider,
+            project_type=project_type
         )
 
         # 确保润色后的文本也是英文

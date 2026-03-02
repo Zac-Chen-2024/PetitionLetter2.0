@@ -76,6 +76,19 @@ STANDARD_SUBDIVISION_GUIDANCE = {
         "Split by INDIVIDUAL COMMERCIAL ACHIEVEMENT. Each sub-argument = one product or commercial metric. "
         "Within each: commercial data → industry benchmark → media recognition."
     ),
+    # NIW prong guidance (fallback safety net — NIW v2 normally bypasses subdivide)
+    "prong1_merit": (
+        "Split by theme: endeavor description, merit evidence, national importance, "
+        "field impact, contribution significance. Each sub-argument = one aspect of merit/importance."
+    ),
+    "prong2_positioned": (
+        "Split by qualification type: education and training, publications and citations, "
+        "work experience and achievements, expert endorsements, awards and certifications."
+    ),
+    "prong3_balance": (
+        "Split by waiver justification angle: national benefit outweighs labor market protection, "
+        "applicant's work extends beyond any single employer, urgency of the national need."
+    ),
 }
 
 SUBDIVIDE_USER_PROMPT = """Main Argument: {argument_title}

@@ -386,6 +386,89 @@ Return JSON:
 }}"""
 
 
+# ==================== NIW v2 Prompts ====================
+
+NIW_CLASSIFY_OTHER_SYSTEM_PROMPT = """You are an expert NIW immigration attorney. Classify each evidence snippet
+into the most appropriate Dhanasar prong based on its content.
+ALL output must be in English."""
+
+NIW_CLASSIFY_OTHER_USER_PROMPT = """Classify each of the following evidence snippets into the most appropriate
+Dhanasar prong for an NIW petition.
+
+Prong definitions:
+- prong1_merit: The proposed endeavor has substantial merit and national importance
+  (e.g., endeavor descriptions, field impact, national importance evidence, contributions)
+- prong2_positioned: The applicant is well positioned to advance the endeavor
+  (e.g., education, work experience, publications, awards, certifications, expert endorsements)
+- prong3_balance: On balance, waiving labor certification benefits the US
+  (e.g., national benefit arguments, beyond-employer impact, urgency)
+- skip: Not relevant to any prong (e.g., pure formatting, boilerplate, table of contents)
+
+## Snippets to classify
+
+{snippets_text}
+
+Return JSON:
+{{
+  "classifications": [
+    {{"snippet_id": "snp-xxx", "prong": "prong1_merit"}},
+    {{"snippet_id": "snp-yyy", "prong": "prong2_positioned"}},
+    {{"snippet_id": "snp-zzz", "prong": "skip"}}
+  ]
+}}
+
+RULES:
+1. Every snippet MUST appear exactly once in the output
+2. Prefer prong1_merit or prong2_positioned over skip — only skip truly irrelevant content
+3. Recommendation letters discussing the applicant's qualifications → prong2_positioned
+4. Recommendation letters discussing the endeavor's importance → prong1_merit
+5. General professional achievements without clear prong fit → prong2_positioned"""
+
+NIW_PRONG_ORGANIZE_SYSTEM_PROMPT = """You are an expert NIW immigration attorney organizing evidence for one prong
+of the Dhanasar three-prong test.
+Your task: organize ALL provided evidence snippets into coherent sub-arguments.
+ALL output must be in English."""
+
+NIW_PRONG_ORGANIZE_USER_PROMPT = """## Prong: {prong_name}
+## Legal Standard: {prong_citation}
+## Applicant: {applicant_name}
+
+{prong_description}
+
+## Evidence Snippets ({snippet_count} total)
+
+{snippets_text}
+
+## Task
+
+Organize ALL the above snippets into coherent sub-arguments for this prong.
+
+RULES:
+1. Each sub-argument should be a distinct legal point with a clear theme
+2. Cross-reference evidence from different exhibits when they support the same point
+3. Recommendation letter content should be distributed to the relevant sub-argument topics
+   (do NOT create a separate "recommendation letters" sub-argument)
+4. EVERY snippet must be assigned to exactly one sub-argument — 100% coverage required
+5. Aim for {target_subargs} sub-arguments depending on evidence volume
+6. Title should be a concise legal argument heading (e.g., "Applicant's Research Addresses Critical National Need in X")
+7. Purpose should explain what legal point this sub-argument establishes
+8. Relationship should be 3-8 words explaining how it supports the prong
+
+Return JSON:
+{{
+  "sub_arguments": [
+    {{
+      "title": "Applicant's Research Addresses Critical Need in Renewable Energy",
+      "claim": "Brief statement of the legal claim this sub-argument makes",
+      "purpose": "Establishes that the applicant's proposed endeavor in X has substantial merit because...",
+      "relationship": "Demonstrates substantial merit of endeavor",
+      "snippet_ids": ["S1", "S3", "S7", "S12"],
+      "reasoning": "These snippets collectively show... grouped because..."
+    }}
+  ]
+}}"""
+
+
 # ==================== NIW snippet grouping ====================
 
 NIW_EVIDENCE_TYPE_MAPPING = {
@@ -411,6 +494,8 @@ NIW_EVIDENCE_TYPE_MAPPING = {
     "membership": "prong2_positioned",
     "publication": "prong2_positioned",
     "media_coverage": "prong1_merit",
+    "certification": "prong2_positioned",
+    "citation_impact": "prong2_positioned",
 }
 
 
@@ -704,6 +789,351 @@ def _format_snippets_by_standard(grouped: Dict[str, List[Dict]], applicant_name:
     return "\n".join(lines)
 
 
+# ==================== NIW v2 Functions ====================
+
+async def niw_classify_other_snippets(
+    other_snippets: List[Dict], provider: str = "deepseek"
+) -> Dict[str, str]:
+    """
+    将 'other' 类型 snippet 分类到 prong，返回 {snippet_id: prong_key}。
+    批量发送（每批 50 条）。
+    """
+    if not other_snippets:
+        return {}
+
+    result_map = {}
+    batch_size = 50
+
+    for batch_start in range(0, len(other_snippets), batch_size):
+        batch = other_snippets[batch_start:batch_start + batch_size]
+
+        # Format snippets for prompt
+        lines = []
+        for snp in batch:
+            sid = snp.get('snippet_id', snp.get('id', ''))
+            text = snp.get('text', '')[:200]
+            exhibit = snp.get('exhibit_id', '')
+            lines.append(f"[{sid}] (Exhibit {exhibit}) {text}")
+
+        snippets_text = "\n".join(lines)
+
+        try:
+            result = await call_llm(
+                prompt=NIW_CLASSIFY_OTHER_USER_PROMPT.format(snippets_text=snippets_text),
+                provider=provider,
+                system_prompt=NIW_CLASSIFY_OTHER_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=4000
+            )
+
+            classifications = result.get('classifications', [])
+            for item in classifications:
+                sid = item.get('snippet_id', '')
+                prong = item.get('prong', 'skip')
+                if prong in ('prong1_merit', 'prong2_positioned', 'prong3_balance', 'skip'):
+                    result_map[sid] = prong
+                else:
+                    result_map[sid] = 'prong2_positioned'  # default fallback
+
+            print(f"[NIW-v2] Classified batch {batch_start//batch_size + 1}: "
+                  f"{len(classifications)} snippets")
+
+        except Exception as e:
+            print(f"[NIW-v2] Error classifying other snippets batch: {e}")
+            # Fallback: assign all to prong2
+            for snp in batch:
+                sid = snp.get('snippet_id', snp.get('id', ''))
+                result_map[sid] = 'prong2_positioned'
+
+        if batch_start + batch_size < len(other_snippets):
+            await asyncio.sleep(0.3)
+
+    # Summary
+    prong_counts = {}
+    for prong in result_map.values():
+        prong_counts[prong] = prong_counts.get(prong, 0) + 1
+    print(f"[NIW-v2] Other snippet classification: {prong_counts}")
+
+    return result_map
+
+
+async def niw_organize_per_prong(
+    prong_key: str, prong_snippets: List[Dict],
+    applicant_name: str, provider: str = "deepseek"
+) -> Tuple[LegalArgument, List[Dict]]:
+    """
+    对单个 prong 的所有 snippet 调用 LLM 组织成 sub-arguments。
+
+    Returns:
+        (LegalArgument for this prong, list of sub_argument dicts)
+    """
+    prong_info = NIW_LEGAL_STANDARDS.get(prong_key, {})
+    prong_name = prong_info.get('name', prong_key)
+    prong_citation = prong_info.get('citation', '')
+    prong_description = prong_info.get('requirements', '')
+
+    # Create simplified ID mapping for the prompt
+    id_mapping = {}  # simple_id -> real_snippet_id
+    lines = []
+    truncate_text = len(prong_snippets) > 50
+
+    for i, snp in enumerate(prong_snippets, 1):
+        real_id = snp.get('snippet_id', snp.get('id', ''))
+        simple_id = f"S{i}"
+        id_mapping[simple_id] = real_id
+
+        text = snp.get('text', '')
+        if truncate_text:
+            text = text[:150]
+        else:
+            text = text[:300]
+        exhibit = snp.get('exhibit_id', '')
+        etype = snp.get('evidence_type', '')
+        lines.append(f"[{simple_id}] (Exhibit {exhibit}, type: {etype}) {text}")
+
+    snippets_text = "\n".join(lines)
+
+    # Determine target sub-argument count
+    n = len(prong_snippets)
+    if n <= 10:
+        target = "3-4"
+    elif n <= 30:
+        target = "4-6"
+    else:
+        target = "5-8"
+
+    user_prompt = NIW_PRONG_ORGANIZE_USER_PROMPT.format(
+        prong_name=prong_name,
+        prong_citation=prong_citation,
+        applicant_name=applicant_name,
+        prong_description=prong_description,
+        snippet_count=len(prong_snippets),
+        snippets_text=snippets_text,
+        target_subargs=target,
+    )
+
+    arg_id = f"arg-{uuid.uuid4().hex[:8]}"
+
+    try:
+        result = await call_llm(
+            prompt=user_prompt,
+            provider=provider,
+            system_prompt=NIW_PRONG_ORGANIZE_SYSTEM_PROMPT,
+            temperature=0.1,
+            max_tokens=8000
+        )
+
+        raw_sub_args = result.get('sub_arguments', [])
+        print(f"[NIW-v2] Prong {prong_key}: LLM returned {len(raw_sub_args)} sub-arguments")
+
+        if not raw_sub_args:
+            # Fallback: single sub-argument with all snippets
+            raw_sub_args = [{
+                "title": f"{applicant_name}'s Evidence for {prong_name}",
+                "purpose": f"All evidence supporting {prong_name}",
+                "relationship": f"Supports {prong_name}",
+                "snippet_ids": [f"S{i}" for i in range(1, len(prong_snippets) + 1)],
+            }]
+
+        # Convert sub-arguments, mapping simple IDs back to real IDs
+        sub_arguments = []
+        all_assigned_real_ids = set()
+
+        for raw_sa in raw_sub_args:
+            simple_ids = raw_sa.get('snippet_ids', [])
+            real_ids = []
+            for sid in simple_ids:
+                normalized = sid.upper() if isinstance(sid, str) else str(sid)
+                if not normalized.startswith('S'):
+                    normalized = f"S{normalized}"
+                if normalized in id_mapping:
+                    real_ids.append(id_mapping[normalized])
+
+            if not real_ids:
+                continue
+
+            all_assigned_real_ids.update(real_ids)
+
+            sa_dict = {
+                "id": f"subarg-{uuid.uuid4().hex[:8]}",
+                "argument_id": arg_id,
+                "title": raw_sa.get('title', 'Evidence Group'),
+                "purpose": raw_sa.get('purpose', ''),
+                "relationship": raw_sa.get('relationship', f'Supports {prong_name}'),
+                "snippet_ids": real_ids,
+                "is_ai_generated": True,
+                "status": "draft",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            sub_arguments.append(sa_dict)
+
+        # Catch unassigned snippets
+        all_real_ids = set(id_mapping.values())
+        unassigned = all_real_ids - all_assigned_real_ids
+        if unassigned:
+            print(f"[NIW-v2] Prong {prong_key}: {len(unassigned)} unassigned snippets, adding catch-all")
+            catch_all = {
+                "id": f"subarg-{uuid.uuid4().hex[:8]}",
+                "argument_id": arg_id,
+                "title": "Additional Supporting Evidence",
+                "purpose": "Supplementary evidence for this prong",
+                "relationship": f"Additional support for {prong_name}",
+                "snippet_ids": list(unassigned),
+                "is_ai_generated": True,
+                "status": "draft",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            sub_arguments.append(catch_all)
+            all_assigned_real_ids.update(unassigned)
+
+        # Build the LegalArgument
+        all_snippet_ids = list(all_assigned_real_ids)
+        sub_arg_ids = [sa["id"] for sa in sub_arguments]
+
+        argument = LegalArgument(
+            id=arg_id,
+            standard=prong_key,
+            title=f"{applicant_name}'s {prong_name}",
+            rationale=f"Organized {len(prong_snippets)} evidence snippets into {len(sub_arguments)} sub-arguments for {prong_name}",
+            snippet_ids=all_snippet_ids,
+            evidence_strength="strong" if len(prong_snippets) >= 10 else "medium",
+            sub_argument_ids=sub_arg_ids,
+            subject=applicant_name,
+        )
+
+        print(f"[NIW-v2] Prong {prong_key}: {len(sub_arguments)} sub-args, "
+              f"{len(all_snippet_ids)} snippets assigned")
+        return argument, sub_arguments
+
+    except Exception as e:
+        print(f"[NIW-v2] Error organizing prong {prong_key}: {e}")
+        # Fallback: single sub-argument
+        all_ids = [snp.get('snippet_id', snp.get('id', '')) for snp in prong_snippets]
+        sa_id = f"subarg-{uuid.uuid4().hex[:8]}"
+        fallback_sa = {
+            "id": sa_id,
+            "argument_id": arg_id,
+            "title": f"Evidence for {prong_name}",
+            "purpose": f"All evidence supporting {prong_name}",
+            "relationship": f"Supports {prong_name}",
+            "snippet_ids": all_ids,
+            "is_ai_generated": True,
+            "status": "draft",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        argument = LegalArgument(
+            id=arg_id,
+            standard=prong_key,
+            title=f"{applicant_name}'s {prong_name}",
+            rationale=f"Fallback: all {len(prong_snippets)} snippets in one group",
+            snippet_ids=all_ids,
+            evidence_strength="medium",
+            sub_argument_ids=[sa_id],
+            subject=applicant_name,
+        )
+        return argument, [fallback_sa]
+
+
+async def niw_organize_arguments_v2(
+    snippets: List[Dict], applicant_name: str, provider: str = "deepseek"
+) -> Tuple[List[LegalArgument], List[Dict], List[Dict]]:
+    """
+    NIW v2: 规则分配 + "other"分类 + 按prong LLM组织
+
+    Three-step flow:
+    1. Rule-based assignment: use NIW_EVIDENCE_TYPE_MAPPING for known evidence_types
+    2. "other" classification: LLM classifies "other" type snippets into prongs
+    3. Per-prong organization: parallel LLM calls organize each prong's snippets
+
+    Returns:
+        (arguments, sub_arguments, filtered_out)
+    """
+    print(f"[NIW-v2] Starting with {len(snippets)} total snippets")
+
+    # Step 1: Rule-based assignment
+    prong_buckets = {
+        "prong1_merit": [],
+        "prong2_positioned": [],
+        "prong3_balance": [],
+    }
+    other_snippets = []
+    skipped_non_applicant = 0
+
+    for snp in snippets:
+        if not snp.get('is_applicant_achievement', True):
+            skipped_non_applicant += 1
+            continue
+
+        etype = snp.get('evidence_type', '').lower()
+        mapped_prong = NIW_EVIDENCE_TYPE_MAPPING.get(etype)
+
+        if mapped_prong and mapped_prong in prong_buckets:
+            prong_buckets[mapped_prong].append(snp)
+        elif etype == 'other' or not mapped_prong:
+            other_snippets.append(snp)
+
+    rule_counts = {k: len(v) for k, v in prong_buckets.items()}
+    print(f"[NIW-v2] Step 1 rule-based: {rule_counts}, other: {len(other_snippets)}, "
+          f"skipped non-applicant: {skipped_non_applicant}")
+
+    # Step 2: Classify "other" snippets
+    filtered_out = []
+    if other_snippets:
+        print(f"[NIW-v2] Step 2: Classifying {len(other_snippets)} 'other' snippets...")
+        classify_map = await niw_classify_other_snippets(other_snippets, provider)
+
+        for snp in other_snippets:
+            sid = snp.get('snippet_id', snp.get('id', ''))
+            prong = classify_map.get(sid, 'prong2_positioned')
+            if prong == 'skip':
+                filtered_out.append({
+                    "snippet_ids": [sid],
+                    "reason": "Classified as not relevant to any Dhanasar prong"
+                })
+            elif prong in prong_buckets:
+                prong_buckets[prong].append(snp)
+            else:
+                prong_buckets['prong2_positioned'].append(snp)
+
+    final_counts = {k: len(v) for k, v in prong_buckets.items()}
+    print(f"[NIW-v2] After classification: {final_counts}, filtered: {len(filtered_out)}")
+
+    # Step 3: Per-prong organization (parallel)
+    print("[NIW-v2] Step 3: Organizing per prong...")
+    tasks = []
+    active_prongs = []
+    for prong_key, prong_snps in prong_buckets.items():
+        if prong_snps:
+            active_prongs.append(prong_key)
+            tasks.append(niw_organize_per_prong(prong_key, prong_snps, applicant_name, provider))
+
+    if not tasks:
+        print("[NIW-v2] No snippets to organize!")
+        return [], [], filtered_out
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    arguments = []
+    all_sub_arguments = []
+
+    for prong_key, result in zip(active_prongs, results):
+        if isinstance(result, Exception):
+            print(f"[NIW-v2] Prong {prong_key} failed: {result}")
+            continue
+        arg, sub_args = result
+        arguments.append(arg)
+        all_sub_arguments.extend(sub_args)
+
+    # Coverage stats
+    total_input = len(snippets) - skipped_non_applicant
+    total_assigned = sum(len(a.snippet_ids) for a in arguments)
+    coverage = (total_assigned / total_input * 100) if total_input > 0 else 0
+    print(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+    print(f"[NIW-v2] Coverage: {total_assigned}/{total_input} snippets ({coverage:.1f}%)")
+
+    return arguments, all_sub_arguments, filtered_out
+
+
 def _fallback_organize(snippets: List[Dict], applicant_name: str, legal_stds: Dict = None) -> List[LegalArgument]:
     """Fallback: 简单分组"""
     if legal_stds is None:
@@ -791,42 +1221,51 @@ async def full_legal_pipeline(
         except Exception:
             project_type = "EB-1A"
 
-    # Step 1: 组织子论点
-    print(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
-    arguments, filtered = await organize_arguments_with_legal_framework(
-        snippets, applicant_name, provider, project_type
-    )
-
-    print(f"[Step 1] Generated {len(arguments)} arguments")
-
-    # Build snippet lookup
-    snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
-
-    # Step 2: 划分次级子论点
-    print("\n[Step 2] Subdividing into sub-arguments...")
-    all_sub_arguments = []
-
-    from .subargument_generator import subdivide_argument
-
-    for arg in arguments:
-        # Get snippets for this argument
-        arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
-
-        if not arg_snippets:
-            continue
-
-        sub_args = await subdivide_argument(
-            argument={'id': arg.id, 'title': arg.title, 'standard': arg.standard},
-            snippets=arg_snippets,
-            provider=provider
+    if project_type == "NIW":
+        # NIW v2: rule-based + LLM classify + per-prong organize (one-step, no separate subdivide)
+        print(f"\n[NIW-v2] Running NIW v2 pipeline...")
+        arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
+            snippets, applicant_name, provider
+        )
+        print(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+    else:
+        # EB-1A: original two-step flow
+        # Step 1: 组织子论点
+        print(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
+        arguments, filtered = await organize_arguments_with_legal_framework(
+            snippets, applicant_name, provider, project_type
         )
 
-        arg.sub_argument_ids = [sa.id for sa in sub_args]
-        all_sub_arguments.extend([asdict(sa) for sa in sub_args])
+        print(f"[Step 1] Generated {len(arguments)} arguments")
 
-        await asyncio.sleep(0.2)
+        # Build snippet lookup
+        snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
 
-    print(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
+        # Step 2: 划分次级子论点
+        print("\n[Step 2] Subdividing into sub-arguments...")
+        all_sub_arguments = []
+
+        from .subargument_generator import subdivide_argument
+
+        for arg in arguments:
+            # Get snippets for this argument
+            arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
+
+            if not arg_snippets:
+                continue
+
+            sub_args = await subdivide_argument(
+                argument={'id': arg.id, 'title': arg.title, 'standard': arg.standard},
+                snippets=arg_snippets,
+                provider=provider
+            )
+
+            arg.sub_argument_ids = [sa.id for sa in sub_args]
+            all_sub_arguments.extend([asdict(sa) for sa in sub_args])
+
+            await asyncio.sleep(0.2)
+
+        print(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
 
     # 统计
     by_standard = {}
@@ -936,32 +1375,41 @@ async def regenerate_standard_pipeline(
 
     print(f"[RegenerateStandard] Found {len(target_snippets)} snippets for '{standard_key}'")
 
-    # --- Step 1: organize arguments (仅含该 standard 的 snippets) ---
-    arguments, filtered = await organize_arguments_with_legal_framework(
-        target_snippets, applicant_name, provider, project_type
-    )
-    print(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
-
-    # --- Step 2: subdivide into sub-arguments ---
-    snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
-    all_sub_arguments = []
-
-    for arg in arguments:
-        arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
-        if not arg_snippets:
-            continue
-
-        sub_args = await subdivide_argument(
-            argument={'id': arg.id, 'title': arg.title, 'standard': arg.standard},
-            snippets=arg_snippets,
-            provider=provider
+    if project_type == "NIW":
+        # NIW v2: use per-prong organizer directly (includes sub-argument generation)
+        argument, all_sub_arguments = await niw_organize_per_prong(
+            standard_key, target_snippets, applicant_name, provider
         )
+        arguments = [argument]
+        print(f"[RegenerateStandard] NIW v2: {len(all_sub_arguments)} sub-arguments")
+    else:
+        # EB-1A: original two-step flow
+        # --- Step 1: organize arguments (仅含该 standard 的 snippets) ---
+        arguments, filtered = await organize_arguments_with_legal_framework(
+            target_snippets, applicant_name, provider, project_type
+        )
+        print(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
 
-        arg.sub_argument_ids = [sa.id for sa in sub_args]
-        all_sub_arguments.extend([asdict(sa) for sa in sub_args])
-        await asyncio.sleep(0.2)
+        # --- Step 2: subdivide into sub-arguments ---
+        snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
+        all_sub_arguments = []
 
-    print(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
+        for arg in arguments:
+            arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
+            if not arg_snippets:
+                continue
+
+            sub_args = await subdivide_argument(
+                argument={'id': arg.id, 'title': arg.title, 'standard': arg.standard},
+                snippets=arg_snippets,
+                provider=provider
+            )
+
+            arg.sub_argument_ids = [sa.id for sa in sub_args]
+            all_sub_arguments.extend([asdict(sa) for sa in sub_args])
+            await asyncio.sleep(0.2)
+
+        print(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
 
     new_arguments = [a.to_dict() for a in arguments]
 
