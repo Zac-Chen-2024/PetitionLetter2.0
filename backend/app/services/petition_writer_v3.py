@@ -603,6 +603,7 @@ Return ONLY valid JSON, no markdown."""
 
 
 async def _step1_generate_argument_body(
+    project_id: str,
     standard: Dict,
     argument: Dict,
     exhibit_texts: Dict[str, str],
@@ -655,6 +656,28 @@ async def _step1_generate_argument_body(
         source_parts.append(f"--- Exhibit {exhibit_id} ---\n{text}")
     source_text = "\n\n".join(source_parts)
 
+    # Build snippet index: all snippet blocks on referenced exhibits
+    # so the LLM can cite specific block-level snippet_ids
+    referenced_exhibits = set()
+    for subarg in sub_arguments:
+        for snip in subarg.get("snippets", []):
+            referenced_exhibits.add(snip.get("exhibit", ""))
+
+    snippet_registry = _load_snippet_source(project_id)
+    snippet_index_lines = []
+    all_available_snippet_ids = set(all_snippet_ids)  # start with outline IDs
+    for snip in snippet_registry:
+        if snip.get("exhibit_id") in referenced_exhibits:
+            sid = snip.get("snippet_id", "")
+            preview = snip.get("text", "")[:150]
+            page = snip.get("page", 0)
+            snippet_index_lines.append(
+                f'  [{sid}] Exhibit {snip["exhibit_id"]}, p.{page}: "{preview}"'
+            )
+            all_available_snippet_ids.add(sid)
+
+    snippet_index_text = "\n".join(snippet_index_lines)
+
     # Build subargument_id list for JSON example
     subarg_ids = [sa["id"] for sa in sub_arguments]
     subarg_json_example = ",\n    ".join(
@@ -681,7 +704,9 @@ ABSOLUTE RULES:
 1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
 2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
 3. Write in THIRD PERSON about "the Beneficiary".
-4. Each sentence must cite [Exhibit X, p.Y].
+4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching
+   snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the
+   MOST RELEVANT block(s) — do NOT include all blocks on the page.
 5. Professional legal argumentative tone, 100% English."""
 
     user_prompt = f"""Draft the body paragraphs for this argument in a petition letter.
@@ -698,6 +723,10 @@ SUB-ARGUMENTS (use as structural outline — write one paragraph per sub-argumen
 
 === END SOURCE MATERIALS ===
 
+=== SNIPPET INDEX (all evidence blocks on cited exhibits — use these IDs in snippet_ids) ===
+{snippet_index_text}
+=== END SNIPPET INDEX ===
+
 {f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else ""}
 
 INSTRUCTIONS:
@@ -706,7 +735,8 @@ INSTRUCTIONS:
   also extract additional supporting details from the source materials (numbers,
   evaluation criteria, peer names, organization credentials, etc.)
 - Build argument chains: fact → authority → rigor → scale → peer comparison
-- Every sentence must cite [Exhibit X, p.Y]
+- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids
+  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.
 - Use exact numbers and names from the source materials
 - Professional legal tone, 100% English (translate any non-English source text)
 - Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence
@@ -757,7 +787,7 @@ Return ONLY valid JSON, no markdown."""
             # Keep all snippet_ids from this argument (not just this subargument)
             # since the LLM has visibility of all evidence now
             raw_ids = sent.get("snippet_ids", [])
-            sent["snippet_ids"] = [sid for sid in raw_ids if sid in all_snippet_ids]
+            sent["snippet_ids"] = [sid for sid in raw_ids if sid in all_available_snippet_ids]
             sent["exhibit_refs"] = sent.get("exhibit_refs", [])
 
         validated_paragraphs.append({
@@ -1065,7 +1095,8 @@ async def ensure_english_output(llm_output: Dict) -> Dict:
 # ============================================
 
 # Pattern: matches "Exhibit X, p.Y" anywhere (handles [Exhibit D1, p.1; Exhibit D4, p.1])
-_EXHIBIT_REF_PATTERN = re.compile(r'Exhibit\s+([A-Za-z0-9-]+),\s*p\.?\s*(\d+)')
+_EXHIBIT_REF_PATTERN = re.compile(r'Exhibit\s+([A-Za-z0-9-]+),\s*pp?\.?\s*(\d+)')
+_EXHIBIT_REF_RANGE_PATTERN = re.compile(r'Exhibit\s+([A-Za-z0-9-]+),\s*pp\.?\s*(\d+)\s*-\s*(\d+)')
 
 
 def _backfill_snippet_ids(
@@ -1111,12 +1142,25 @@ def _backfill_snippet_ids(
         text = sent.get("text", "")
         refs = _EXHIBIT_REF_PATTERN.findall(text)
 
+        # Also parse page ranges like "pp.2-3" → expand to individual pages
+        for exhibit_id, start_p, end_p in _EXHIBIT_REF_RANGE_PATTERN.findall(text):
+            for p in range(int(start_p), int(end_p) + 1):
+                pair = (exhibit_id, str(p))
+                if pair not in refs:
+                    refs.append(pair)
+
         # Also parse from exhibit_refs field (LLM may fill this even when text lacks inline citations)
         for ref_str in sent.get("exhibit_refs", []):
             extra_refs = _EXHIBIT_REF_PATTERN.findall(ref_str)
             for er in extra_refs:
                 if er not in refs:
                     refs.append(er)
+            # Handle page ranges in exhibit_refs too
+            for exhibit_id, start_p, end_p in _EXHIBIT_REF_RANGE_PATTERN.findall(ref_str):
+                for p in range(int(start_p), int(end_p) + 1):
+                    pair = (exhibit_id, str(p))
+                    if pair not in refs:
+                        refs.append(pair)
 
         if not refs:
             continue
@@ -1541,6 +1585,7 @@ async def write_petition_section_v3(
 
         # Generate body at argument level with full OCR context
         arg_bodies = await _step1_generate_argument_body(
+            project_id=project_id,
             standard=standard,
             argument=argument,
             exhibit_texts=exhibit_texts,
@@ -1647,11 +1692,20 @@ async def write_petition_section_v3(
     })
 
     # 溯源校验：重新校验 snippet_ids 合法性
+    # Include all snippet IDs from referenced exhibits (not just subargument pointers)
+    # since step1 now gives LLM a full snippet index for block-level citation
     valid_snippet_ids = set()
+    referenced_exhibits = set()
     for arg in all_arguments:
         for sa in arg.get("sub_arguments", []):
             for snip in sa.get("snippets", []):
                 valid_snippet_ids.add(snip["id"])
+                referenced_exhibits.add(snip.get("exhibit", ""))
+    # Expand with all registry snippets on referenced exhibits
+    assembly_registry = _load_snippet_source(project_id)
+    for snip in assembly_registry:
+        if snip.get("exhibit_id") in referenced_exhibits:
+            valid_snippet_ids.add(snip.get("snippet_id", ""))
 
     for sent in all_sentences:
         original_ids = sent.get("snippet_ids", [])
