@@ -243,7 +243,7 @@ function DataLoader({ children }: { children: ReactNode }) {
           project_id: string;
           total: number;
           snippets: BackendSnippet[];
-        }>(`/analysis/${projectId}/snippets?limit=2000`);
+        }>(`/extraction/${projectId}/snippets?limit=2000`);
 
         if (cancelled) return;
 

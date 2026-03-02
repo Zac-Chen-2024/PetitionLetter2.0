@@ -7,6 +7,7 @@ Frontend expects:
 """
 import json
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -75,11 +76,17 @@ def get_exhibit_pdf(project_id: str, exhibit_id: str):
     source = _get_source_path(project_id)
     letter = exhibit_id[0].upper()
 
-    # Try multiple naming conventions: A1.pdf, a1.pdf
+    # Build dash-separated variant: "A1" -> "A-1", "B10" -> "B-10"
+    dash_id = re.sub(r'([A-Za-z])(\d)', r'\1-\2', exhibit_id)
+
+    # Try multiple naming conventions: A1.pdf, a1.pdf, A-1.pdf
     candidates = [
         source / "PDF" / letter / f"{exhibit_id}.pdf",
         source / "PDF" / letter / f"{exhibit_id.lower()}.pdf",
         source / "PDF" / letter / f"{exhibit_id.upper()}.pdf",
+        source / "PDF" / letter / f"{dash_id}.pdf",
+        source / "PDF" / letter / f"{dash_id.lower()}.pdf",
+        source / "PDF" / letter / f"{dash_id.upper()}.pdf",
     ]
 
     for pdf_path in candidates:

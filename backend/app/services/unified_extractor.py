@@ -15,6 +15,7 @@ Unified Extractor - 统一的 Snippets + Entities + Relations 提取服务
 
 import json
 import uuid
+import asyncio
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from datetime import datetime, timezone
@@ -449,6 +450,261 @@ CRITICAL: Extract BOTH direct evidence AND supporting evidence!
 Do NOT skip supporting evidence - it is ESSENTIAL for EB-1A petitions!"""
 
 
+# ==================== NIW Extraction Prompts ====================
+
+NIW_EXTRACTION_SYSTEM_PROMPT = """You are an expert immigration attorney assistant specializing in NIW (National Interest Waiver) petitions under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
+
+Your task is to analyze a document and extract THREE types of information:
+1. Evidence Snippets — text excerpts supporting the Dhanasar three-prong test
+2. Named Entities — people, organizations, publications, etc.
+3. Relationships — how entities relate to each other
+
+The applicant for this petition is: {applicant_name}
+
+Evidence types organized by Dhanasar prong:
+
+## Prong 1 — Substantial Merit & National Importance
+- endeavor_description: Description of the proposed endeavor
+- field_impact: How the endeavor impacts the field or addresses national need
+- national_importance: Evidence of national-level significance (government policy, public health, economic impact, etc.)
+- merit_evidence: Evidence of substantial merit (innovation, societal benefit)
+
+## Prong 2 — Well Positioned to Advance
+- education: Degrees, certifications, academic training
+- work_experience: Professional experience and track record
+- publication: Scholarly articles authored by applicant
+- citation_metrics: Citation counts, h-index, impact metrics
+- research_project: Grants, funded research, ongoing projects
+- recommendation: Expert recommendation letters
+- award: Prizes and recognition
+- membership: Professional memberships
+- leadership: Leadership positions
+- contribution: Original contributions demonstrating expertise
+- quantitative_impact: Non-salary metrics (adoption, usage, etc.)
+- media_coverage: Press about applicant's work
+
+## Prong 3 — Balance of Equities (Waiver Justification)
+- waiver_justification: Why labor certification should be waived
+- national_benefit: How applicant's work benefits the US broadly
+- beyond_employer: Evidence work transcends a single employer
+- urgency: Time-sensitive national need
+
+## General
+- other: Other relevant evidence
+
+CRITICAL RULES:
+- NAME ALIASES: The applicant may appear under DIFFERENT NAMES in documents:
+  * English name vs Chinese name (e.g., "John Smith" = "约翰·史密斯")
+  * First name only, last name only, or nickname
+  * If document is ABOUT someone with SAME SURNAME as applicant and matching context, treat as applicant
+- DOCUMENT CONTEXT MATTERS: A media article about the applicant = applicant's achievement evidence
+- A recommendation letter confirming "applicant did X" = applicant achievement (recommender confirms it)
+- Recommender's OWN credentials ("I have PhD from Harvard") = NOT applicant achievement
+- Extract ALL supporting context, including:
+  * Organization reputation and credentials
+  * Quantitative impact data (metrics, statistics, adoption rates)
+  * Expert endorsements and recommendation content
+- Do NOT skip low-confidence items - include them with appropriate confidence scores
+
+Evidence Purpose (WHY this evidence matters):
+- direct_proof: Directly proves applicant's qualification or endeavor merit
+- selectivity_proof: Proves selectivity/prestige of credential or organization
+- credibility_proof: Proves credibility of source or recommender
+- impact_proof: Proves quantitative impact or national significance
+
+IMPORTANT: Extract BOTH direct evidence AND supporting evidence that proves WHY the direct evidence matters!"""
+
+
+NIW_EXTRACTION_USER_PROMPT = """Analyze this document (Exhibit {exhibit_id}) and extract structured information for an NIW petition under Matter of Dhanasar.
+
+The applicant's name is: {applicant_name}
+
+## Step 1: Identify Document Context and Applicant Names
+First, determine: What is the PRIMARY PURPOSE of this document?
+- Recommendation letter FOR {applicant_name}? (recommender praises applicant)
+- Media coverage / news article ABOUT {applicant_name}?
+- Official certification/degree document FOR {applicant_name}?
+- Resume or CV of {applicant_name}?
+- Research publication by {applicant_name}?
+- Third-party background information?
+
+IMPORTANT - Check for NAME ALIASES:
+- The applicant "{applicant_name}" may appear under DIFFERENT NAMES:
+  * English name vs Chinese name (or other language variations)
+  * Abbreviated name, nickname, or title (Dr., Prof., etc.)
+  * Same surname with similar context = likely the applicant
+- If document is about someone with SAME SURNAME as "{applicant_name}" and the document is exhibit evidence for this applicant, treat that person AS the applicant.
+
+This context determines how to classify is_applicant_achievement.
+
+## Document Text Blocks
+Each block has format: [block_id] text content
+
+{blocks_text}
+
+## Instructions
+
+Extract the following in a single JSON response:
+
+1. **document_summary**: Identify document type and primary subject
+2. **snippets**: Evidence text with SUBJECT attribution
+3. **entities**: All named entities with identity and relationship to applicant
+4. **relations**: Relationships between entities
+
+For each SNIPPET, you MUST determine:
+- subject: Whose achievement/credential is this? (exact name or "{applicant_name}")
+- subject_role: "applicant", "recommender", "evaluator", "colleague", "mentor", "peer", "organization", or "other"
+- recommender_name: If this is from a recommendation/evaluation, who is the recommender?
+- is_applicant_achievement:
+  * TRUE if: subject is applicant, OR document is ABOUT applicant and confirms their achievement
+  * TRUE ALSO if: evidence SUPPORTS applicant's case (credibility proof, impact proof)
+  * FALSE only if: someone else's OWN background completely unrelated to applicant's case
+- evidence_type: Choose MOST SPECIFIC type from Dhanasar prong categories (see system prompt)
+- evidence_purpose: WHY does this evidence matter?
+  * "direct_proof" - Directly proves applicant's qualification or endeavor merit
+  * "selectivity_proof" - Proves selectivity/prestige of credential
+  * "credibility_proof" - Proves source credibility
+  * "impact_proof" - Proves quantitative impact or national significance
+
+CRITICAL EXAMPLES for NIW:
+
+1. PRONG 1 - "Applicant's research addresses the national need for renewable energy solutions":
+   → evidence_type="national_importance", evidence_purpose="direct_proof"
+
+2. PRONG 1 - "The proposed endeavor focuses on developing AI-driven diagnostic tools for early cancer detection":
+   → evidence_type="endeavor_description", evidence_purpose="direct_proof"
+
+3. PRONG 2 - "Applicant received PhD in Computer Science from MIT":
+   → evidence_type="education", evidence_purpose="direct_proof"
+
+4. PRONG 2 - "Applicant's publications have been cited over 500 times":
+   → evidence_type="citation_metrics", evidence_purpose="impact_proof"
+
+5. PRONG 2 - "Dr. Smith, a leading expert, states the applicant's work is groundbreaking":
+   → evidence_type="recommendation", evidence_purpose="credibility_proof"
+
+6. PRONG 3 - "The applicant's work benefits the broader US healthcare system, not just a single employer":
+   → evidence_type="beyond_employer", evidence_purpose="direct_proof"
+
+7. PRONG 3 - "Requiring a labor certification would delay critical research in pandemic preparedness":
+   → evidence_type="urgency", evidence_purpose="direct_proof"
+
+CRITICAL: Extract BOTH direct evidence AND supporting evidence!"""
+
+
+NIW_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "required": ["document_summary", "snippets", "entities", "relations"],
+    "properties": {
+        "document_summary": {
+            "type": "object",
+            "required": ["document_type", "primary_subject", "key_themes"],
+            "properties": {
+                "document_type": {
+                    "type": "string",
+                    "description": "Type: resume, recommendation_letter, award_certificate, publication, media_article, research_paper, degree_certificate, other"
+                },
+                "primary_subject": {
+                    "type": "string",
+                    "description": "Main person this document is about"
+                },
+                "key_themes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Key themes or topics"
+                }
+            },
+            "additionalProperties": False
+        },
+        "snippets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["block_id", "text", "subject", "subject_role", "recommender_name", "is_applicant_achievement", "evidence_type", "evidence_purpose", "evidence_layer", "confidence", "reasoning"],
+                "properties": {
+                    "block_id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "subject": {"type": "string", "description": "Person whose achievement this is"},
+                    "subject_role": {
+                        "type": "string",
+                        "enum": ["applicant", "recommender", "evaluator", "colleague", "mentor", "peer", "organization", "other"]
+                    },
+                    "recommender_name": {
+                        "type": ["string", "null"],
+                        "description": "If from recommendation/evaluation, who is the recommender/evaluator? Use null if not applicable."
+                    },
+                    "is_applicant_achievement": {"type": "boolean"},
+                    "evidence_type": {
+                        "type": "string",
+                        "description": """Evidence type by Dhanasar prong (use these labels):
+Prong 1: endeavor_description, field_impact, national_importance, merit_evidence
+Prong 2: education, work_experience, publication, citation_metrics, research_project, recommendation, award, membership, leadership, contribution, quantitative_impact, media_coverage
+Prong 3: waiver_justification, national_benefit, beyond_employer, urgency
+General: other"""
+                    },
+                    "evidence_purpose": {
+                        "type": "string",
+                        "enum": ["direct_proof", "selectivity_proof", "credibility_proof", "impact_proof"],
+                        "description": "WHY this evidence matters: direct_proof (applicant qualification), selectivity_proof (proves prestige), credibility_proof (proves source credibility), impact_proof (proves national significance)"
+                    },
+                    "evidence_layer": {
+                        "type": "string",
+                        "enum": ["claim", "proof", "significance", "context"],
+                        "description": "Evidence pyramid layer: claim (what applicant did), proof (how to prove), significance (why it matters), context (background)"
+                    },
+                    "confidence": {"type": "number"},
+                    "reasoning": {"type": "string"}
+                },
+                "additionalProperties": False
+            }
+        },
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "type", "identity", "relation_to_applicant", "mentioned_in_blocks"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {
+                        "type": "string",
+                        "enum": ["person", "organization", "award", "publication", "position", "project", "event", "metric"]
+                    },
+                    "identity": {"type": "string", "description": "Role/title/description"},
+                    "relation_to_applicant": {
+                        "type": "string",
+                        "enum": ["self", "recommender", "mentor", "colleague", "employer", "organization", "award_giver", "other"]
+                    },
+                    "mentioned_in_blocks": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "additionalProperties": False
+            }
+        },
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["from_entity", "relation_type", "to_entity", "context", "source_blocks"],
+                "properties": {
+                    "from_entity": {"type": "string"},
+                    "relation_type": {"type": "string"},
+                    "to_entity": {"type": "string"},
+                    "context": {"type": "string"},
+                    "source_blocks": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "additionalProperties": False
+            }
+        }
+    },
+    "additionalProperties": False
+}
+
+
 UNIFIED_EXTRACTION_SCHEMA = {
     "type": "object",
     "required": ["document_summary", "snippets", "entities", "relations"],
@@ -666,7 +922,8 @@ async def extract_exhibit_unified(
     project_id: str,
     exhibit_id: str,
     applicant_name: str,
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    project_type: str = "EB-1A"
 ) -> Dict:
     """
     统一提取单个 exhibit 的 snippets + entities + relations
@@ -676,6 +933,7 @@ async def extract_exhibit_unified(
         exhibit_id: Exhibit ID
         applicant_name: 申请人姓名
         provider: LLM 提供商 ("deepseek" 或 "openai")
+        project_type: "EB-1A" or "NIW"
 
     Returns:
         提取结果 dict
@@ -708,23 +966,33 @@ async def extract_exhibit_unified(
             "exhibit_id": exhibit_id
         }
 
-    # 3. 构建 prompt
-    system_prompt = UNIFIED_EXTRACTION_SYSTEM_PROMPT.format(applicant_name=applicant_name)
-    user_prompt = UNIFIED_EXTRACTION_USER_PROMPT.format(
-        exhibit_id=exhibit_id,
-        applicant_name=applicant_name,
-        blocks_text=blocks_text
-    )
+    # 3. 构建 prompt — 根据 project_type 选择
+    if project_type == "NIW":
+        system_prompt = NIW_EXTRACTION_SYSTEM_PROMPT.format(applicant_name=applicant_name)
+        user_prompt = NIW_EXTRACTION_USER_PROMPT.format(
+            exhibit_id=exhibit_id,
+            applicant_name=applicant_name,
+            blocks_text=blocks_text
+        )
+        extraction_schema = NIW_EXTRACTION_SCHEMA
+    else:
+        system_prompt = UNIFIED_EXTRACTION_SYSTEM_PROMPT.format(applicant_name=applicant_name)
+        user_prompt = UNIFIED_EXTRACTION_USER_PROMPT.format(
+            exhibit_id=exhibit_id,
+            applicant_name=applicant_name,
+            blocks_text=blocks_text
+        )
+        extraction_schema = UNIFIED_EXTRACTION_SCHEMA
 
     # 4. 调用 LLM
-    print(f"[UnifiedExtractor] Calling LLM ({provider}) for {exhibit_id}...")
+    print(f"[UnifiedExtractor] Calling LLM ({provider}) for {exhibit_id} (project_type={project_type})...")
 
     try:
         result = await call_llm(
             prompt=user_prompt,
             provider=provider,
             system_prompt=system_prompt,
-            json_schema=UNIFIED_EXTRACTION_SCHEMA,
+            json_schema=extraction_schema,
             temperature=0.2,   # 提高到 0.2：允许更多变化，更好地识别上下文
             max_tokens=8000   # DeepSeek 限制 8192，使用 8000 留余量
         )
@@ -745,24 +1013,41 @@ async def extract_exhibit_unified(
     # 6. 处理 snippets - 添加 ID 和 bbox
     # 使用分层置信度阈值：支持性内容（如 membership_criteria）用更低阈值
     CONFIDENCE_THRESHOLDS = {
+        # EB-1A types
         "award": 0.5,
         "membership": 0.4,
-        "membership_criteria": 0.3,      # 低阈值：标准描述都重要
-        "membership_evaluation": 0.3,    # 低阈值：评估过程都重要
-        "peer_assessment": 0.3,          # 低阈值：同行评价都有意义
+        "membership_criteria": 0.3,
+        "membership_evaluation": 0.3,
+        "peer_assessment": 0.3,
         "media_coverage": 0.4,
         "recommendation": 0.4,
         "contribution": 0.4,
         "leadership": 0.4,
         "judging": 0.4,
         "publication": 0.4,
-        "salary": 0.3,                   # 低阈值：薪资数据很重要
+        "salary": 0.3,
         "compensation": 0.3,
         "salary_benchmark": 0.3,
         "exhibition": 0.4,
         "commercial_success": 0.4,
+        # NIW Prong 1 types
+        "endeavor_description": 0.3,
+        "field_impact": 0.3,
+        "national_importance": 0.3,
+        "merit_evidence": 0.3,
+        # NIW Prong 2 types
+        "education": 0.3,
+        "work_experience": 0.3,
+        "citation_metrics": 0.3,
+        "research_project": 0.3,
+        "quantitative_impact": 0.3,
+        # NIW Prong 3 types
+        "waiver_justification": 0.3,
+        "national_benefit": 0.3,
+        "beyond_employer": 0.3,
+        "urgency": 0.3,
     }
-    DEFAULT_THRESHOLD = 0.35  # 默认阈值从 0.5 降低到 0.35
+    DEFAULT_THRESHOLD = 0.35
 
     processed_snippets = []
     for item in raw_snippets:
@@ -913,7 +1198,8 @@ async def extract_all_unified(
     project_id: str,
     applicant_name: str,
     provider: str = "deepseek",
-    progress_callback=None
+    progress_callback=None,
+    project_type: str = "EB-1A"
 ) -> Dict:
     """
     提取项目中所有 exhibits
@@ -923,6 +1209,7 @@ async def extract_all_unified(
         applicant_name: 申请人姓名
         provider: LLM 提供商 ("deepseek" 或 "openai")
         progress_callback: 进度回调 (current, total, message)
+        project_type: "EB-1A" or "NIW"
 
     Returns:
         提取结果汇总
@@ -947,34 +1234,50 @@ async def extract_all_unified(
     successful = 0
     failed = 0
 
-    for idx, exhibit_file in enumerate(exhibit_files):
+    # 并发提取 — 使用 semaphore 限流，避免 API 过载
+    CONCURRENCY = 5
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+    completed_count = 0
+
+    async def _extract_one(exhibit_file):
+        nonlocal successful, failed, completed_count
         exhibit_id = exhibit_file.stem
 
-        if progress_callback:
-            progress_callback(idx, total_exhibits, f"Extracting {exhibit_id}...")
+        async with semaphore:
+            try:
+                result = await extract_exhibit_unified(
+                    project_id, exhibit_id, applicant_name,
+                    provider=provider, project_type=project_type
+                )
+                completed_count += 1
 
-        try:
-            result = await extract_exhibit_unified(project_id, exhibit_id, applicant_name, provider=provider)
+                if progress_callback:
+                    progress_callback(completed_count, total_exhibits, f"Extracted {exhibit_id}")
 
-            if result.get("success"):
-                successful += 1
+                return exhibit_id, result
+            except Exception as e:
+                completed_count += 1
+                print(f"[UnifiedExtractor] Exception extracting {exhibit_id}: {e}")
+                return exhibit_id, {"success": False, "error": str(e)}
 
-                # 加载提取结果
-                extraction_file = get_extraction_dir(project_id) / f"{exhibit_id}_extraction.json"
-                if extraction_file.exists():
-                    with open(extraction_file, 'r', encoding='utf-8') as f:
-                        extraction_data = json.load(f)
+    print(f"[UnifiedExtractor] Extracting {total_exhibits} exhibits with concurrency={CONCURRENCY}...")
+    tasks = [_extract_one(ef) for ef in exhibit_files]
+    results = await asyncio.gather(*tasks)
 
-                    all_snippets.extend(extraction_data.get("snippets", []))
-                    all_entities.extend(extraction_data.get("entities", []))
-                    all_relations.extend(extraction_data.get("relations", []))
-            else:
-                failed += 1
-                print(f"[UnifiedExtractor] Failed to extract {exhibit_id}: {result.get('error')}")
-
-        except Exception as e:
+    # 收集结果
+    for exhibit_id, result in results:
+        if result.get("success"):
+            successful += 1
+            extraction_file = get_extraction_dir(project_id) / f"{exhibit_id}_extraction.json"
+            if extraction_file.exists():
+                with open(extraction_file, 'r', encoding='utf-8') as f:
+                    extraction_data = json.load(f)
+                all_snippets.extend(extraction_data.get("snippets", []))
+                all_entities.extend(extraction_data.get("entities", []))
+                all_relations.extend(extraction_data.get("relations", []))
+        else:
             failed += 1
-            print(f"[UnifiedExtractor] Exception extracting {exhibit_id}: {e}")
+            print(f"[UnifiedExtractor] Failed {exhibit_id}: {result.get('error')}")
 
     if progress_callback:
         progress_callback(total_exhibits, total_exhibits, "Saving combined results...")

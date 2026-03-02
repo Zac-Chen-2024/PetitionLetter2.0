@@ -389,6 +389,20 @@ Return JSON:
 # ==================== NIW snippet grouping ====================
 
 NIW_EVIDENCE_TYPE_MAPPING = {
+    # NIW-specific extraction types (from NIW extraction prompt)
+    "endeavor_description": "prong1_merit",
+    "field_impact": "prong1_merit",
+    "national_importance": "prong1_merit",
+    "merit_evidence": "prong1_merit",
+    "education": "prong2_positioned",
+    "work_experience": "prong2_positioned",
+    "citation_metrics": "prong2_positioned",
+    "research_project": "prong2_positioned",
+    "waiver_justification": "prong3_balance",
+    "national_benefit": "prong3_balance",
+    "beyond_employer": "prong3_balance",
+    "urgency": "prong3_balance",
+    # Shared types (from both EB-1A and NIW extraction)
     "contribution": "prong1_merit",
     "quantitative_impact": "prong1_merit",
     "recommendation": "prong2_positioned",

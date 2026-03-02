@@ -195,6 +195,13 @@ LEGAL_REFS = {
     "commercial_success": "8 C.F.R. §204.5(h)(3)(x)"
 }
 
+# NIW 法规引用
+NIW_LEGAL_REFS = {
+    "prong1_merit": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 1",
+    "prong2_positioned": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 2",
+    "prong3_balance": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 3",
+}
+
 
 def _get_standard_display_name(standard_key: str) -> str:
     """Get display name for a standard key, trying registry first then legacy dict."""
@@ -453,7 +460,7 @@ def load_subargument_context(
         "standard": {
             "key": standard_key,
             "name": _get_standard_display_name(standard_key),
-            "legal_ref": LEGAL_REFS.get(standard_key, "")
+            "legal_ref": LEGAL_REFS.get(standard_key, "") or NIW_LEGAL_REFS.get(standard_key, "")
         },
         "arguments": result_arguments
     }
@@ -608,7 +615,8 @@ async def _step1_generate_argument_body(
     argument: Dict,
     exhibit_texts: Dict[str, str],
     additional_instructions: str = None,
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    project_type: str = "EB-1A"
 ) -> List[Dict]:
     """
     Step 1 (v3.1): 为整个 Argument 生成 body，LLM 看到完整 OCR 原文。
@@ -687,7 +695,40 @@ async def _step1_generate_argument_body(
     if len(subarg_ids) > 2:
         subarg_json_example += ",\n    ..."
 
-    system_prompt = """You are a Senior Immigration Attorney at a top-tier law firm drafting an EB-1A petition letter.
+    if project_type == "NIW":
+        system_prompt = """You are a Senior Immigration Attorney drafting a National Interest Waiver (NIW) petition letter under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
+
+ARGUMENTATION METHOD — For each Dhanasar prong, build a COMPLETE argument chain:
+
+Prong 1 (Substantial Merit & National Importance):
+  1. ENDEAVOR: Define the proposed endeavor clearly and precisely
+  2. MERIT: Show substantial merit with concrete evidence (innovation, societal benefit)
+  3. NATIONAL SCOPE: Prove national importance beyond regional impact — cite statistics, policy relevance, or broad applicability
+
+Prong 2 (Well Positioned to Advance):
+  1. QUALIFICATIONS: Education, expertise, specialized training
+  2. TRACK RECORD: Publications, citations, prior achievements demonstrating ability
+  3. PROGRESS: What has already been accomplished toward the endeavor
+  4. PLAN: Concrete plans and resources to advance the endeavor further
+
+Prong 3 (Balance of Equities — Waiver Justification):
+  1. NATIONAL BENEFIT: How the US benefits from waiving labor certification
+  2. BEYOND EMPLOYER: Work transcends any single employer's interests
+  3. URGENCY: Time-sensitive need that labor certification would delay (if applicable)
+  4. SELF-DIRECTION: Applicant's work requires autonomy that employer-based sponsorship would constrain
+
+Not every evidence needs all layers, but the strongest arguments have most of them.
+
+ABSOLUTE RULES:
+1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
+2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
+3. Write in THIRD PERSON about "the Beneficiary".
+4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching
+   snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the
+   MOST RELEVANT block(s) — do NOT include all blocks on the page.
+5. Professional legal argumentative tone, 100% English."""
+    else:
+        system_prompt = """You are a Senior Immigration Attorney at a top-tier law firm drafting an EB-1A petition letter.
 
 ARGUMENTATION METHOD — For each piece of evidence, build a COMPLETE argument chain:
 1. FACT: State what the applicant did / what happened (cite Exhibit)
@@ -924,7 +965,8 @@ Return ONLY valid JSON."""
 async def _step3_generate_section_frame(
     standard: Dict,
     arguments: List[Dict],
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    project_type: str = "EB-1A"
 ) -> Dict:
     """
     Step 3: 生成段落的 opening 和 closing 句子。
@@ -942,7 +984,10 @@ async def _step3_generate_section_frame(
             summary_lines.append(f"    - {sa.get('title', '')}")
     summary_text = "\n".join(summary_lines)
 
-    system_prompt = """You are a Senior Immigration Attorney writing an EB-1A petition letter."""
+    if project_type == "NIW":
+        system_prompt = """You are a Senior Immigration Attorney writing an NIW petition letter under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016)."""
+    else:
+        system_prompt = """You are a Senior Immigration Attorney writing an EB-1A petition letter."""
 
     user_prompt = f"""Write an opening sentence and a closing sentence for the "{standard.get('name', '')}" ({standard.get('legal_ref', '')}) section of a petition letter.
 
@@ -1544,6 +1589,13 @@ async def write_petition_section_v3(
     # 0. 加载上下文
     context = load_subargument_context(project_id, standard_key, argument_ids, subargument_ids)
 
+    # Detect project_type
+    try:
+        from .storage import get_project_type
+        project_type = get_project_type(project_id)
+    except Exception:
+        project_type = "EB-1A"
+
     if not context.get("arguments"):
         return {
             "success": False,
@@ -1590,7 +1642,8 @@ async def write_petition_section_v3(
             argument=argument,
             exhibit_texts=exhibit_texts,
             additional_instructions=additional_instructions,
-            provider=provider
+            provider=provider,
+            project_type=project_type
         )
 
         if not arg_bodies:
@@ -1644,7 +1697,8 @@ async def write_petition_section_v3(
     frame = await _step3_generate_section_frame(
         standard=standard,
         arguments=all_arguments,
-        provider=provider
+        provider=provider,
+        project_type=project_type
     )
 
     # 确保英文

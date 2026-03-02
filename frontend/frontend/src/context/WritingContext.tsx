@@ -235,7 +235,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         snippet_count: number;
         by_standard: Record<string, number>;
         message: string;
-      }>(`/analysis/extract/${projectId}`, { use_llm: false });
+      }>(`/extraction/${projectId}/extract`, { use_llm: false });
 
       if (response.success) {
         setPipelineState(prev => ({
@@ -247,7 +247,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
         const snippetsResponse = await apiClient.get<{
           snippets: BackendSnippet[];
-        }>(`/analysis/${projectId}/snippets?limit=2000`);
+        }>(`/extraction/${projectId}/snippets?limit=2000`);
 
         if (snippetsResponse.snippets) {
           const converted = snippetsResponse.snippets.map(convertBackendSnippet);
@@ -272,7 +272,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       const response = await apiClient.post<{
         success: boolean;
         confirmed_count: number;
-      }>(`/analysis/${projectId}/snippets/confirm-all`, {});
+      }>(`/extraction/${projectId}/snippets/confirm-all`, {});
 
       if (response.success) {
         setPipelineState(prev => ({
@@ -485,7 +485,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     try {
       const response = await apiClient.get<{
         snippets: BackendSnippet[];
-      }>(`/analysis/${projectId}/snippets?limit=2000`);
+      }>(`/extraction/${projectId}/snippets?limit=2000`);
 
       if (response.snippets && response.snippets.length > 0) {
         const converted = response.snippets.map(convertBackendSnippet);

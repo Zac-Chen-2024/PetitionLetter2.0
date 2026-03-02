@@ -432,7 +432,7 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
     try {
       let completed = 0;
       for (const exhibitId of exhibitIds) {
-        await apiClient.post(`/analysis/extract/${projectId}/${exhibitId}`, { use_llm: true });
+        await apiClient.post(`/extraction/${projectId}/extract/${exhibitId}`, { use_llm: true });
         completed++;
         setExtractionStates(prev => ({
           ...prev,

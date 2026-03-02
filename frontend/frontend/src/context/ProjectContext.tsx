@@ -106,25 +106,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 3. Load pipeline stage
-      try {
-        const stageResponse = await apiClient.get<{
-          stage: PipelineStage;
-          can_extract: boolean;
-          can_confirm: boolean;
-          can_generate: boolean;
-        }>(`/analysis/${projectId}/stage`);
-
-        if (!cancelled) {
-          setPipelineState(prev => ({
-            ...prev,
-            stage: stageResponse.stage,
-          }));
-        }
-      } catch {
-        if (!cancelled) {
-          setPipelineState(prev => ({ ...prev, stage: 'ocr_complete' }));
-        }
+      // 3. Pipeline stage — default to ocr_complete (analysis router was archived)
+      if (!cancelled) {
+        setPipelineState(prev => ({ ...prev, stage: 'ocr_complete' }));
       }
     }
 

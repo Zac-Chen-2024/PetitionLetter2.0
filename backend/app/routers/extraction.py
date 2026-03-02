@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/extraction", tags=["extraction"])
 class ExtractionRequest(BaseModel):
     applicant_name: str
     provider: str = "deepseek"  # LLM provider: "deepseek" or "openai"
+    project_type: Optional[str] = None  # "EB-1A" or "NIW"; auto-detected if not provided
 
 
 class MergeConfirmation(BaseModel):
@@ -59,11 +60,21 @@ async def extract_project(
     if not applicant_name:
         raise HTTPException(status_code=400, detail="applicant_name is required")
 
+    # Auto-detect project_type from storage if not provided
+    project_type = request.project_type
+    if not project_type:
+        try:
+            from ..services.storage import get_project_type
+            project_type = get_project_type(project_id)
+        except Exception:
+            project_type = "EB-1A"
+
     try:
         result = await extract_all_unified(
             project_id=project_id,
             applicant_name=applicant_name,
-            provider=provider
+            provider=provider,
+            project_type=project_type
         )
 
         if not result.get("success"):
