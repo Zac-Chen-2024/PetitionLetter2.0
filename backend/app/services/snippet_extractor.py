@@ -11,6 +11,7 @@ Snippet Extractor - LLM 驱动的 EB-1A 证据提取
 """
 
 import json
+import re
 import uuid
 from typing import List, Dict, Optional
 from pathlib import Path
@@ -162,8 +163,13 @@ def format_blocks_for_llm(pages: List[Dict]) -> tuple:
             if block_type in ["title", "sub_title"] and len(text) < 30:
                 continue
 
-            # 复合 ID: p{页码}_{block_id}
-            composite_id = f"p{page_num}_{block_id}"
+            # block_id 通常已含页码前缀(如 p2_b0)，直接用作 composite_id
+            # 旧代码 f"p{page_num}_{block_id}" 会产生 p2_p2_b0 冗余前缀，
+            # 导致部分 exhibit 的提取 LLM 无法正确归因 block，所有 snippet 被分配到 p1
+            if re.match(r'^p\d+_', block_id):
+                composite_id = block_id  # 已含页码前缀，直接使用
+            else:
+                composite_id = f"p{page_num}_{block_id}"  # 兼容无前缀的 block_id
             block_map[composite_id] = (page_num, block)
             lines.append(f"[{composite_id}] {text}")
 
