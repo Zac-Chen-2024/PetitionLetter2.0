@@ -5,6 +5,7 @@ import { apiClient, BACKEND_URL } from '../services/api';
 import type { Snippet, BoundingBox, MaterialType } from '../types';
 import { SnippetCreationModal } from './SnippetCreationModal';
 import { Magnifier } from './Magnifier';
+import { BBoxLightbox } from './BBoxLightbox';
 
 // Configure PDF.js worker - use CDN for compatibility
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -87,9 +88,13 @@ const SpinnerIcon = () => (
 );
 
 // Snippet bounding box overlay with position tracking
-function SnippetBboxOverlay({ snippet, onClick }: { snippet: Snippet; onClick: (e: React.MouseEvent) => void }) {
+function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pdfUrl: string; onClick: (e: React.MouseEvent) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const { updatePdfBboxPosition } = useApp();
+
+  // Lightbox hover state
+  const [lightbox, setLightbox] = useState<{ originRect: DOMRect } | null>(null);
+  const [isLeaving, setIsLeaving] = useState(false);
 
   // Convert bbox coordinates (assuming 1000x1000 normalized)
   const left = (snippet.boundingBox.x / 1000) * 100;
@@ -120,29 +125,60 @@ function SnippetBboxOverlay({ snippet, onClick }: { snippet: Snippet; onClick: (
     };
   }, [snippet.id, updatePdfBboxPosition]);
 
+  const handleMouseEnter = () => {
+    if (!ref.current) return;
+    setIsLeaving(false);
+    setLightbox({ originRect: ref.current.getBoundingClientRect() });
+  };
+
+  const handleMouseLeave = () => {
+    if (!lightbox) return;
+    setIsLeaving(true);
+  };
+
+  const handleLightboxTransitionEnd = () => {
+    setLightbox(null);
+    setIsLeaving(false);
+  };
+
   return (
-    <div
-      ref={ref}
-      onClick={onClick}
-      className="absolute transition-all duration-200 border-2 rounded cursor-pointer ring-2 ring-offset-2 ring-blue-500 z-20"
-      style={{
-        left: `${left}%`,
-        top: `${top}%`,
-        width: `${width}%`,
-        height: `${height}%`,
-        backgroundColor: `${snippet.color}30`,
-        borderColor: snippet.color,
-      }}
-      title={snippet.summary}
-    >
-      {/* Snippet indicator badge */}
+    <>
       <div
-        className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-medium shadow-sm"
-        style={{ backgroundColor: snippet.color }}
+        ref={ref}
+        onClick={onClick}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className="absolute transition-all duration-200 border-2 rounded cursor-pointer ring-2 ring-offset-2 ring-blue-500 z-20"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${width}%`,
+          height: `${height}%`,
+          backgroundColor: `${snippet.color}30`,
+          borderColor: snippet.color,
+        }}
+        title={snippet.summary}
       >
-        {snippet.id.slice(-3)}
+        {/* Snippet indicator badge */}
+        <div
+          className="absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-medium shadow-sm"
+          style={{ backgroundColor: snippet.color }}
+        >
+          {snippet.id.slice(-3)}
+        </div>
       </div>
-    </div>
+      {lightbox && (
+        <BBoxLightbox
+          pdfUrl={pdfUrl}
+          pageNumber={snippet.boundingBox.page}
+          bbox={snippet.boundingBox}
+          originRect={lightbox.originRect}
+          snippetColor={snippet.color}
+          isLeaving={isLeaving}
+          onTransitionEnd={handleLightboxTransitionEnd}
+        />
+      )}
+    </>
   );
 }
 
@@ -388,6 +424,7 @@ function PDFViewer({
                       <SnippetBboxOverlay
                         key={snippet.id}
                         snippet={snippet}
+                        pdfUrl={fullPdfUrl}
                         onClick={(e) => handleSnippetClick(e, snippet)}
                       />
                     );
