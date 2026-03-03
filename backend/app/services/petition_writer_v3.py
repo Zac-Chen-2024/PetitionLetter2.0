@@ -24,6 +24,7 @@ from collections import defaultdict
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
+from .writing_strategies import get_writing_strategy
 import re
 
 logger = logging.getLogger(__name__)
@@ -163,55 +164,15 @@ def _load_snippet_source(project_id: str) -> List[Dict]:
     # Fallback: registry.json（仅当 combined_extraction 不存在时）
     return load_registry(project_id)
 
-# EB-1A 标准名称映射
-EB1A_STANDARDS = {
-    "awards": "Awards",
-    "membership": "Membership in Associations",
-    "press": "Published Material",
-    "published_material": "Published Material",
-    "judging": "Judging",
-    "original_contribution": "Original Contribution",
-    "original_contributions": "Original Contribution",
-    "scholarly_articles": "Scholarly Articles",
-    "exhibitions": "Artistic Exhibitions",
-    "leading_role": "Leading or Critical Role",
-    "high_salary": "High Salary",
-    "commercial_success": "Commercial Success"
-}
-
-# 法规引用
-LEGAL_REFS = {
-    "awards": "8 C.F.R. §204.5(h)(3)(i)",
-    "membership": "8 C.F.R. §204.5(h)(3)(ii)",
-    "press": "8 C.F.R. §204.5(h)(3)(iii)",
-    "published_material": "8 C.F.R. §204.5(h)(3)(iii)",
-    "judging": "8 C.F.R. §204.5(h)(3)(iv)",
-    "original_contribution": "8 C.F.R. §204.5(h)(3)(v)",
-    "original_contributions": "8 C.F.R. §204.5(h)(3)(v)",
-    "scholarly_articles": "8 C.F.R. §204.5(h)(3)(vi)",
-    "exhibitions": "8 C.F.R. §204.5(h)(3)(vii)",
-    "leading_role": "8 C.F.R. §204.5(h)(3)(viii)",
-    "high_salary": "8 C.F.R. §204.5(h)(3)(ix)",
-    "commercial_success": "8 C.F.R. §204.5(h)(3)(x)"
-}
-
-# NIW 法规引用
-NIW_LEGAL_REFS = {
-    "prong1_merit": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 1",
-    "prong2_positioned": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 2",
-    "prong3_balance": "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 3",
-}
 
 
 def _get_standard_display_name(standard_key: str) -> str:
-    """Get display name for a standard key, trying registry first then legacy dict."""
-    # Try all project types via registry
+    """Get display name for a standard key via standards registry."""
     for ptype in ("EB-1A", "NIW"):
         name = get_standard_name(ptype, standard_key)
         if name != standard_key:
             return name
-    # Fallback to legacy dict
-    return EB1A_STANDARDS.get(standard_key, standard_key)
+    return standard_key
 
 
 def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[str]:
@@ -434,7 +395,8 @@ def load_subargument_context(
     project_id: str,
     standard_key: str,
     argument_ids: List[str] = None,
-    subargument_ids: List[str] = None
+    subargument_ids: List[str] = None,
+    project_type: str = "EB-1A"
 ) -> Dict:
     """
     加载用于写作的 SubArgument 上下文
@@ -545,7 +507,7 @@ def load_subargument_context(
         "standard": {
             "key": standard_key,
             "name": _get_standard_display_name(standard_key),
-            "legal_ref": LEGAL_REFS.get(standard_key, "") or NIW_LEGAL_REFS.get(standard_key, "")
+            "legal_ref": get_writing_strategy(project_type, standard_key).legal_ref
         },
         "arguments": result_arguments
     }
@@ -695,56 +657,9 @@ Return ONLY valid JSON, no markdown."""
 
 
 def _build_step1_instructions(project_type: str, standard_key: str) -> str:
-    """Build per-prong Step 1 instructions. NIW gets prong-specific chains; EB-1A gets generic."""
-    if project_type == "NIW":
-        # Per-prong argumentation chain and sentence guidance
-        prong_instructions = {
-            "prong1_merit": (
-                "ARGUMENTATION CHAIN for Prong 1 (Substantial Merit & National Importance):\n"
-                "  endeavor definition → substantive value with concrete evidence → national-level importance (statistics, policy relevance, broad applicability)\n"
-                "- Write one paragraph (3-6 sentences) per Sub-Argument listed above"
-            ),
-            "prong2_positioned": (
-                "ARGUMENTATION CHAIN for Prong 2 (Well Positioned to Advance):\n"
-                "  qualifications & expertise → track record of achievements → progress already made → concrete future plans\n"
-                "- Write one paragraph (3-5 sentences) per Sub-Argument listed above (keep tight — avoid redundancy across sub-arguments)"
-            ),
-            "prong3_balance": (
-                "ARGUMENTATION CHAIN for Prong 3 (Balance of Equities — Waiver Justification):\n"
-                "  national interest served → benefits beyond any single employer → urgency / time-sensitivity → impracticality of labor certification\n"
-                "- Write one paragraph (8-12 sentences) per Sub-Argument listed above (Prong 3 demands thorough legal reasoning)"
-            ),
-        }
-        chain_block = prong_instructions.get(standard_key, (
-            "- Write one paragraph (3-6 sentences) per Sub-Argument listed above"
-        ))
-        return (
-            f"INSTRUCTIONS:\n"
-            f"{chain_block}\n"
-            f"- The \"Key evidence pointers\" highlight the most important evidence, but you SHOULD\n"
-            f"  also extract additional supporting details from the source materials (numbers,\n"
-            f"  evaluation criteria, peer names, organization credentials, etc.)\n"
-            f"- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids\n"
-            f"  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.\n"
-            f"- Use exact numbers and names from the source materials\n"
-            f"- Professional legal tone, 100% English (translate any non-English source text)\n"
-            f"- Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence"
-        )
-    else:
-        # EB-1A: original generic instructions
-        return (
-            "INSTRUCTIONS:\n"
-            "- Write one paragraph (3-6 sentences) per Sub-Argument listed above\n"
-            "- The \"Key evidence pointers\" highlight the most important evidence, but you SHOULD\n"
-            "  also extract additional supporting details from the source materials (numbers,\n"
-            "  evaluation criteria, peer names, organization credentials, etc.)\n"
-            "- Build argument chains: fact → authority → rigor → scale → peer comparison\n"
-            "- Every sentence must cite [Exhibit X, p.Y] in text AND include matching snippet_ids\n"
-            "  from the SNIPPET INDEX. Choose the specific block(s) whose content you actually used.\n"
-            "- Use exact numbers and names from the source materials\n"
-            "- Professional legal tone, 100% English (translate any non-English source text)\n"
-            "- Do NOT copy source text verbatim — ARGUE: state a legal point, then cite supporting evidence"
-        )
+    """Build per-standard Step 1 instructions from the strategy registry."""
+    strategy = get_writing_strategy(project_type, standard_key)
+    return strategy.step1_instruction_block
 
 
 async def _step1_generate_argument_body(
@@ -834,60 +749,10 @@ async def _step1_generate_argument_body(
     if len(subarg_ids) > 2:
         subarg_json_example += ",\n    ..."
 
-    if project_type == "NIW":
-        system_prompt = """You are a Senior Immigration Attorney drafting a National Interest Waiver (NIW) petition letter under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
-
-ARGUMENTATION METHOD — For each Dhanasar prong, build a COMPLETE argument chain:
-
-Prong 1 (Substantial Merit & National Importance):
-  1. ENDEAVOR: Define the proposed endeavor clearly and precisely
-  2. MERIT: Show substantial merit with concrete evidence (innovation, societal benefit)
-  3. NATIONAL SCOPE: Prove national importance beyond regional impact — cite statistics, policy relevance, or broad applicability
-
-Prong 2 (Well Positioned to Advance):
-  1. QUALIFICATIONS: Education, expertise, specialized training
-  2. TRACK RECORD: Publications, citations, prior achievements demonstrating ability
-  3. PROGRESS: What has already been accomplished toward the endeavor
-  4. PLAN: Concrete plans and resources to advance the endeavor further
-
-Prong 3 (Balance of Equities — Waiver Justification):
-  1. NATIONAL BENEFIT: How the US benefits from waiving labor certification
-  2. BEYOND EMPLOYER: Work transcends any single employer's interests
-  3. URGENCY: Time-sensitive need that labor certification would delay (if applicable)
-  4. SELF-DIRECTION: Applicant's work requires autonomy that employer-based sponsorship would constrain
-
-Not every evidence needs all layers, but the strongest arguments have most of them.
-
-ABSOLUTE RULES:
-1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
-2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
-3. Write in THIRD PERSON about "the Beneficiary".
-4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching
-   snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the
-   MOST RELEVANT block(s) — do NOT include all blocks on the page.
-5. Professional legal argumentative tone, 100% English."""
-    else:
-        system_prompt = """You are a Senior Immigration Attorney at a top-tier law firm drafting an EB-1A petition letter.
-
-ARGUMENTATION METHOD — For each piece of evidence, build a COMPLETE argument chain:
-1. FACT: State what the applicant did / what happened (cite Exhibit)
-2. AUTHORITY: Prove the organization/award/journal is prestigious — state WHO runs it, WHEN it was founded, and WHY it is recognized (cite Exhibit)
-3. RIGOR: Describe the evaluation/selection process — how are candidates nominated, who reviews, what criteria are used (cite Exhibit)
-4. SCALE/RARITY: Provide numbers — how many applied/competed, how few won, compute percentages when both numerator and denominator are available (cite Exhibit)
-5. PEER COMPARISON: Name specific co-recipients, fellow members, or past winners mentioned in the source materials to show the caliber of the peer group (cite Exhibit). Use ONLY names found in source materials.
-
-Not every evidence needs all 5 layers, but the strongest arguments have most of them.
-
-DEFENSIVE ARGUMENTATION: If any evidence could be perceived as a weakness (e.g., a lower prize tier, a regional rather than international scope), proactively address it by contextualizing — explain the award structure, the total number of tiers, and what percentage of candidates reach that tier. Do NOT ignore potential weaknesses; reframe them as strengths using facts from the source materials.
-
-ABSOLUTE RULES:
-1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
-2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
-3. Write in THIRD PERSON about "the Beneficiary".
-4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching
-   snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the
-   MOST RELEVANT block(s) — do NOT include all blocks on the page.
-5. Professional legal argumentative tone, 100% English."""
+    strategy = get_writing_strategy(project_type, standard.get("key", ""))
+    system_prompt = strategy.step1_base_system_prompt
+    if strategy.step1_argumentation_appendix:
+        system_prompt += "\n" + strategy.step1_argumentation_appendix
 
     user_prompt = f"""Draft the body paragraphs for this argument in a petition letter.
 
@@ -980,13 +845,13 @@ Return ONLY valid JSON, no markdown."""
     return validated_paragraphs
 
 
-async def _step2_polish_single_subarg_niw(
+async def _step2_polish_single_subarg(
     standard: Dict,
     subargument_bodies: List[Dict],
     provider: str = "deepseek"
 ) -> List[Dict]:
     """
-    Lightweight self-revision for a single NIW sub-argument.
+    Lightweight self-revision for a single sub-argument.
 
     Improves sentence flow and argumentative language without changing
     any citations or snippet_ids.
@@ -1003,7 +868,7 @@ async def _step2_polish_single_subarg_niw(
         f'  {i+1}. "{s["text"]}"' for i, s in enumerate(sentences)
     )
 
-    system_prompt = """You are a Senior Immigration Attorney revising a single paragraph in an NIW petition letter for argumentative strength and sentence flow."""
+    system_prompt = """You are a Senior Immigration Attorney revising a single paragraph in a petition letter for argumentative strength and sentence flow."""
 
     user_prompt = f"""Revise the following paragraph for the "{standard.get('name', '')}" section.
 
@@ -1033,7 +898,7 @@ CRITICAL: Return EXACTLY {len(sentences)} sentences. Return ONLY valid JSON."""
             system_prompt=system_prompt,
             json_schema={},
             temperature=0.3,
-            max_tokens=4096,
+            max_tokens=8000,
             provider=provider
         )
 
@@ -1042,7 +907,7 @@ CRITICAL: Return EXACTLY {len(sentences)} sentences. Return ONLY valid JSON."""
         # Validate: must have same number of sentences
         if len(polished_sents) != len(sentences):
             logger.warning(
-                f"NIW single-subarg polish returned {len(polished_sents)} sentences, "
+                f"Single-subarg polish returned {len(polished_sents)} sentences, "
                 f"expected {len(sentences)}. Using originals."
             )
             return subargument_bodies
@@ -1059,7 +924,7 @@ CRITICAL: Return EXACTLY {len(sentences)} sentences. Return ONLY valid JSON."""
         }]
 
     except Exception as e:
-        logger.warning(f"NIW single-subarg polish failed, using originals: {e}")
+        logger.warning(f"Single-subarg polish failed, using originals: {e}")
         return subargument_bodies
 
 
@@ -1082,12 +947,11 @@ async def _step2_polish_argument(
         润色后的 subargument_bodies（同结构）
     """
     if len(subargument_bodies) <= 1:
-        if project_type == "NIW":
-            # NIW: single sub-arg still gets a lightweight self-revision pass
-            return await _step2_polish_single_subarg_niw(
+        strategy = get_writing_strategy(project_type, standard.get("key", ""))
+        if strategy.polish_single_subarg:
+            return await _step2_polish_single_subarg(
                 standard, subargument_bodies, provider
             )
-        # EB-1A: single SubArgument, no polish needed
         return subargument_bodies
 
     # 构建输入文本（包含 snippet_ids 以便 LLM 知道它们）
@@ -1148,7 +1012,7 @@ Return ONLY valid JSON."""
             system_prompt=system_prompt,
             json_schema={},
             temperature=0.3,
-            max_tokens=8192,
+            max_tokens=8000,
             provider=provider
         )
 
@@ -1204,10 +1068,8 @@ async def _step3_generate_section_frame(
             summary_lines.append(f"    - {sa.get('title', '')}")
     summary_text = "\n".join(summary_lines)
 
-    if project_type == "NIW":
-        system_prompt = """You are a Senior Immigration Attorney writing an NIW petition letter under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016)."""
-    else:
-        system_prompt = """You are a Senior Immigration Attorney writing an EB-1A petition letter."""
+    strategy = get_writing_strategy(project_type, standard.get("key", ""))
+    system_prompt = strategy.frame_system_prompt
 
     user_prompt = f"""Write an opening sentence and a closing sentence for the "{standard.get('name', '')}" ({standard.get('legal_ref', '')}) section of a petition letter.
 
@@ -1806,15 +1668,21 @@ async def write_petition_section_v3(
         subargument_ids: 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
         additional_instructions: 可选，额外指令
     """
-    # 0. 加载上下文
-    context = load_subargument_context(project_id, standard_key, argument_ids, subargument_ids)
-
     # Detect project_type
     try:
         from .storage import get_project_type
         project_type = get_project_type(project_id)
     except Exception:
         project_type = "EB-1A"
+
+    # Resolve strategy once, pass down
+    strategy = get_writing_strategy(project_type, standard_key)
+
+    # 0. 加载上下文 (now with project_type for legal_ref resolution)
+    context = load_subargument_context(
+        project_id, standard_key, argument_ids, subargument_ids,
+        project_type=project_type
+    )
 
     if not context.get("arguments"):
         return {
@@ -1840,12 +1708,12 @@ async def write_petition_section_v3(
     per_argument_bodies: List[List[Dict]] = []  # [[{subargument_id, title, sentences}]]
     per_argument_refs: List[Dict] = []
 
-    # NIW Prong 3: build cross-prong context from Prong 1 & 2 outputs
+    # Cross-section context (e.g. NIW Prong 3 references Prong 1 & 2)
     cross_prong_context = None
-    if project_type == "NIW" and standard_key == "prong3_balance":
+    if strategy.cross_section_context:
         cross_prong_context = _build_cross_prong_summary(project_id, standard_key)
         if cross_prong_context:
-            logger.info("Step1: Loaded cross-prong context for Prong 3 waiver arguments")
+            logger.info("Step1: Loaded cross-section context for writing")
 
     for argument in all_arguments:
         arg_id = argument.get("id", "")
