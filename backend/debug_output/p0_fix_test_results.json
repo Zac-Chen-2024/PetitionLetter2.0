@@ -1,0 +1,101 @@
+[
+  {
+    "project": "dehuan_liu",
+    "standard": "awards",
+    "success": true,
+    "sentence_count": 21,
+    "word_count": 707,
+    "titled_names": 0,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 124.7
+  },
+  {
+    "project": "dehuan_liu",
+    "standard": "judging",
+    "success": true,
+    "sentence_count": 15,
+    "word_count": 531,
+    "titled_names": 2,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 90.0
+  },
+  {
+    "project": "dehuan_liu",
+    "standard": "scholarly_articles",
+    "success": true,
+    "sentence_count": 26,
+    "word_count": 811,
+    "titled_names": 1,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 145.3
+  },
+  {
+    "project": "dehuan_liu",
+    "standard": "leading_role",
+    "success": true,
+    "sentence_count": 46,
+    "word_count": 1888,
+    "titled_names": 1,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 315.5
+  },
+  {
+    "project": "dehuan_liu",
+    "standard": "high_salary",
+    "success": true,
+    "sentence_count": 12,
+    "word_count": 368,
+    "titled_names": 0,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 75.9
+  },
+  {
+    "project": "yaruo_qu",
+    "standard": "membership",
+    "success": true,
+    "sentence_count": 25,
+    "word_count": 934,
+    "titled_names": 5,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 131.3
+  },
+  {
+    "project": "yaruo_qu",
+    "standard": "published_material",
+    "success": true,
+    "sentence_count": 40,
+    "word_count": 1518,
+    "titled_names": 1,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 255.5
+  },
+  {
+    "project": "yaruo_qu",
+    "standard": "original_contribution",
+    "success": true,
+    "sentence_count": 23,
+    "word_count": 874,
+    "titled_names": 0,
+    "verbatim_quotes": 0,
+    "bio_sentences": 1,
+    "elapsed": 144.2
+  },
+  {
+    "project": "yaruo_qu",
+    "standard": "leading_role",
+    "success": true,
+    "sentence_count": 19,
+    "word_count": 724,
+    "titled_names": 0,
+    "verbatim_quotes": 0,
+    "bio_sentences": 0,
+    "elapsed": 127.2
+  }
+]
