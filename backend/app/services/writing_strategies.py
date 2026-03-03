@@ -5,7 +5,7 @@ Centralizes all project_type / standard_key branching into a single lookup layer
 petition_writer_v3.py consumes WritingStrategy objects instead of scattering
 if/else blocks throughout the code.
 
-Supports: EB-1A (10 criteria), NIW (3 Dhanasar prongs).
+Supports: EB-1A (10 criteria), NIW (3 Dhanasar prongs), L-1A (4 standards).
 Extensible to EB-2, O-1A, etc. by adding new strategy entries.
 """
 
@@ -690,6 +690,232 @@ _NIW_GENERIC = WritingStrategy(
 
 
 # ============================================================
+# L-1A base system prompts
+# ============================================================
+
+_L1A_BASE_SYSTEM_PROMPT = """\
+You are a Senior Immigration Attorney at a top-tier law firm drafting an L-1A intracompany transferee petition letter under INA §101(a)(15)(L) and 8 CFR §214.2(l).
+
+ARGUMENTATION METHOD — For each piece of evidence, build a COMPLETE argument chain:
+1. FACT: State the concrete fact (company formation date, ownership percentage, square footage, revenue figure) and cite [Exhibit X, p.Y]
+2. LEGAL NEXUS: Explain how this fact satisfies the specific regulatory requirement
+3. QUANTIFICATION: Provide exact numbers — dollar amounts, percentages, square feet, employee counts, revenue figures
+4. CORROBORATION: Cross-reference with other exhibits when the same fact appears in multiple sources
+5. CONCLUSION: Tie back to the legal standard being addressed
+
+L-1A petitions are fact-intensive. Every legal point must be supported by specific, verifiable data from the source materials.
+
+ABSOLUTE RULES:
+1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
+2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
+3. Write in THIRD PERSON about "the Beneficiary" and "the Petitioner".
+4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
+snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the \
+MOST RELEVANT block(s) — do NOT include all blocks on the page.
+5. Professional legal argumentative tone, 100% English."""
+
+_L1A_FRAME_SYSTEM_PROMPT = (
+    "You are a Senior Immigration Attorney writing an L-1A intracompany transferee "
+    "petition letter under INA §101(a)(15)(L) and 8 CFR §214.2(l)."
+)
+
+
+def _l1a_instruction(chain: str, sentence_range: Tuple[int, int]) -> str:
+    lo, hi = sentence_range
+    return (
+        f"INSTRUCTIONS:\n"
+        f"- Write one paragraph ({lo}-{hi} sentences) per Sub-Argument listed above\n"
+        f"- ARGUMENTATION CHAIN: {chain}\n"
+        f"- QUANTIFICATION (MANDATORY): Every paragraph must include at least one specific\n"
+        f"  number from the source materials — dollar amounts, percentages, square footage,\n"
+        f"  employee counts, revenue figures, dates. L-1A petitions require concrete data.\n"
+        f"- PERSON NAMING (MANDATORY): When the source materials name a person, use their\n"
+        f"  FULL NAME with a title prefix (Ms., Mr., etc.) and describe their role/position.\n"
+        f"- CORPORATE ENTITY NAMING: Always use the full legal name of each entity on first\n"
+        f"  reference, then the defined short form (e.g., '[Full Company Name, Inc.]\n"
+        f"  (hereinafter \"Petitioner\")') on subsequent references.\n"
+        f"{_INSTRUCTION_TAIL}"
+    )
+
+
+# ============================================================
+# L-1A per-standard argumentation appendices
+# ============================================================
+
+_L1A_APPENDICES: Dict[str, str] = {
+    "qualifying_relationship": (
+        "\nSTANDARD-SPECIFIC ARGUMENTATION — Qualifying Corporate Relationship "
+        "[INA §101(a)(15)(L); 8 CFR §214.2(l)(1)(ii)]:\n\n"
+        "STRUCTURE: Build a single comprehensive section covering ALL of the following:\n\n"
+        "PARAGRAPH 1 — U.S. ENTITY FORMATION:\n"
+        "  State the U.S. entity's full legal name, state of incorporation, date of formation,\n"
+        "  and FEIN. Cite the Certificate of Incorporation and FEIN Notice by exhibit number.\n\n"
+        "PARAGRAPH 2 — OWNERSHIP CHAIN AND CONTROL:\n"
+        "  Describe the ownership structure step by step: who holds what percentage of shares,\n"
+        "  any transfers or reorganizations, and on what date. State the resulting relationship\n"
+        "  (parent-subsidiary, branch, or affiliate). Cite meeting minutes, stock certificates,\n"
+        "  by-laws, or articles of association. Reference tax filings (e.g., IRS Schedule G)\n"
+        "  or corporate registration records that document the controlling entity.\n\n"
+        "PARAGRAPH 3 — PHYSICAL PREMISES:\n"
+        "  State the exact address, lease start date, lease term, and total square footage.\n"
+        "  Describe the nature of the space (office, warehouse, or both). Cite the commercial\n"
+        "  lease agreement and any office/warehouse photographs.\n\n"
+        "PARAGRAPH 4 — PARENT COMPANY INVESTMENT:\n"
+        "  State the exact amount invested (in USD), the date of transfer, and the purpose.\n"
+        "  Cite bank statements showing the wire transfer. Explain how this investment supports\n"
+        "  the U.S. entity's business operations and growth.\n\n"
+        "CLOSING: Tie back — the foregoing establishes a qualifying relationship between the\n"
+        "  foreign parent company and the U.S. petitioner as required under 8 CFR §214.2(l)."
+    ),
+    "doing_business": (
+        "\nSTANDARD-SPECIFIC ARGUMENTATION — Active Business Operations "
+        "[8 CFR §214.2(l)(1)(ii)(H)]:\n\n"
+        "STRUCTURE: Build a comprehensive section covering BOTH the U.S. and foreign entities:\n\n"
+        "PARAGRAPH 1 — U.S. ENTITY BUSINESS DESCRIPTION:\n"
+        "  Describe the U.S. entity's core business — products, services, target market.\n"
+        "  Include specific product categories or service lines from the source materials.\n\n"
+        "PARAGRAPH 2 — U.S. ENTITY FINANCIAL PERFORMANCE:\n"
+        "  State specific revenue figures with dates from the source materials.\n"
+        "  Cite tax returns, bank statements, or audit reports. Include projected\n"
+        "  revenue from the business plan if available.\n\n"
+        "PARAGRAPH 3 — U.S. ENTITY GROWTH AND HIRING:\n"
+        "  State current employee count and hiring plans. Describe planned departments and\n"
+        "  positions. Provide the timeline for expansion (e.g., '19 employees across five\n"
+        "  divisions within five years').\n\n"
+        "PARAGRAPH 4 — CUSTOMER AND PARTNER RELATIONSHIPS:\n"
+        "  Name specific customers, partners, or vendors from the source materials.\n"
+        "  Cite cooperation agreements, contracts, invoices, and transaction documents.\n\n"
+        "PARAGRAPH 5 — FOREIGN PARENT COMPANY OPERATIONS:\n"
+        "  State the parent company's incorporation date, location, number of employees,\n"
+        "  and revenue (in both local currency and USD). Describe its business scope and\n"
+        "  geographic reach. Cite the audit report and business documents.\n\n"
+        "CLOSING: Tie back — both entities are engaged in regular, systematic, continuous\n"
+        "  provision of goods and services as required under 8 CFR §214.2(l)(1)(ii)(H)."
+    ),
+    "executive_capacity": (
+        "\nSTANDARD-SPECIFIC ARGUMENTATION — Executive/Managerial Capacity "
+        "[INA §101(a)(44); 8 CFR §214.2(l)(1)(ii)(B)-(C)]:\n\n"
+        "STRUCTURE: Build a comprehensive section with the following components:\n\n"
+        "PARAGRAPH 1 — PROPOSED POSITION AND ORGANIZATIONAL OVERVIEW:\n"
+        "  State the Beneficiary's proposed title and the organizational hierarchy.\n"
+        "  Describe the number of current employees and planned growth.\n\n"
+        "PARAGRAPH 2-6 — EXECUTIVE DUTIES WITH TIME ALLOCATION (MANDATORY):\n"
+        "  Write one paragraph for EACH duty segment from the source materials.\n"
+        "  Each paragraph must state:\n"
+        "  (a) The duty category and percentage of working time\n"
+        "  (b) Specific first-year tasks and responsibilities\n"
+        "  Example structure: 'Approximately 25% of the Beneficiary's working time will be\n"
+        "  devoted to executive leadership and strategic direction. Specifically, she will...\n"
+        "  [list 3-4 specific duties from the source materials].'\n\n"
+        "PARAGRAPH 7 — DIRECT SUBORDINATES (MANDATORY — do NOT skip):\n"
+        "  Write a SEPARATE description for EACH direct subordinate named in the source materials.\n"
+        "  For each subordinate, state:\n"
+        "  (1) Full name with title (e.g., 'Vice President Mr. [Name]')\n"
+        "  (2) Their specific managerial duties (enumerate 3-5 duties)\n"
+        "  (3) How they alleviate the Beneficiary from daily operational tasks\n"
+        "  This is CRITICAL for establishing that the Beneficiary operates in a genuinely\n"
+        "  executive capacity — subordinate managers handle day-to-day operations.\n\n"
+        "CLOSING: Tie back — the organizational structure, specific executive duties, and\n"
+        "  qualified subordinate management team establish that the Beneficiary will serve in\n"
+        "  an executive capacity as defined under INA §101(a)(44)."
+    ),
+    "qualifying_employment": (
+        "\nSTANDARD-SPECIFIC ARGUMENTATION — Qualifying Employment Abroad "
+        "[8 CFR §214.2(l)(1)(ii)(A)]:\n\n"
+        "STRUCTURE: Build a comprehensive section covering the Beneficiary's qualifications:\n\n"
+        "PARAGRAPH 1 — EDUCATIONAL BACKGROUND:\n"
+        "  State the Beneficiary's degree(s), major, and how their education relates to\n"
+        "  the executive role. Cite degree certificates.\n\n"
+        "PARAGRAPH 2 — EMPLOYMENT HISTORY AND EXECUTIVE EXPERIENCE:\n"
+        "  State the Beneficiary's tenure at the foreign parent company — exact start date,\n"
+        "  title (highest level executive), and duration. Describe prior executive positions\n"
+        "  at other companies if applicable. Emphasize the continuous one-year requirement.\n\n"
+        "PARAGRAPH 3-4 — EXECUTIVE DUTIES AT FOREIGN ENTITY:\n"
+        "  Describe the Beneficiary's specific executive duties at the foreign entity with\n"
+        "  time allocation percentages. Mirror the U.S. duties structure to show continuity\n"
+        "  of executive function.\n\n"
+        "PARAGRAPH 5 — SUBORDINATE MANAGEMENT AT FOREIGN ENTITY:\n"
+        "  Name the departments and department managers supervised by the Beneficiary.\n"
+        "  State each manager's name, title, degree, and years of experience.\n\n"
+        "PARAGRAPH 6 — SPECIFIC ACHIEVEMENTS AND CONTRIBUTIONS:\n"
+        "  Describe concrete business achievements: contracts executed, partnerships\n"
+        "  established, revenue growth, market expansion. Use specific names, dollar\n"
+        "  amounts, and dates from the source materials.\n\n"
+        "CLOSING: Tie back — the Beneficiary has been employed in an executive capacity\n"
+        "  at the qualifying foreign entity for well over one continuous year within the\n"
+        "  three years preceding this petition, satisfying 8 CFR §214.2(l)(1)(ii)(A)."
+    ),
+}
+
+
+# ---------- L-1A strategies ----------
+
+def _build_l1a_strategy(
+    standard_key: str,
+    legal_ref: str,
+    chain: str,
+    sentence_range: Tuple[int, int],
+) -> WritingStrategy:
+    appendix = _L1A_APPENDICES.get(standard_key, "")
+    return WritingStrategy(
+        project_type="L-1A",
+        standard_key=standard_key,
+        legal_ref=legal_ref,
+        step1_base_system_prompt=_L1A_BASE_SYSTEM_PROMPT,
+        step1_argumentation_appendix=appendix,
+        step1_instruction_block=_l1a_instruction(chain, sentence_range),
+        sentence_range=sentence_range,
+        polish_single_subarg=False,
+        frame_system_prompt=_L1A_FRAME_SYSTEM_PROMPT,
+        cross_section_context=False,
+    )
+
+
+_L1A_STRATEGIES: Dict[str, WritingStrategy] = {
+    "qualifying_relationship": _build_l1a_strategy(
+        "qualifying_relationship",
+        "INA §101(a)(15)(L); 8 CFR §214.2(l)(1)(ii)",
+        "U.S. entity formation → ownership chain (shareholding with corporate records) → physical premises (address, sq ft, lease) → parent investment (amount, bank statement) → regulatory tie-back",
+        (6, 12),
+    ),
+    "doing_business": _build_l1a_strategy(
+        "doing_business",
+        "8 CFR §214.2(l)(1)(ii)(H)",
+        "U.S. business description → financial performance (revenue, tax return) → growth plan (hiring, departments) → customer/partner names → parent company operations (revenue, employees, scope) → regulatory tie-back",
+        (8, 15),
+    ),
+    "executive_capacity": _build_l1a_strategy(
+        "executive_capacity",
+        "INA §101(a)(44); 8 CFR §214.2(l)(1)(ii)(B)-(C)",
+        "proposed position + org overview → 5 duty segments with % time allocation → subordinate managers (names, titles, enumerated duties) → day-to-day delegation → regulatory tie-back",
+        (10, 20),
+    ),
+    "qualifying_employment": _build_l1a_strategy(
+        "qualifying_employment",
+        "8 CFR §214.2(l)(1)(ii)(A)",
+        "education + degrees → employment history (dates, titles, 1+ year continuous) → executive duties abroad (% time) → subordinate management abroad → specific achievements (contracts, revenue) → regulatory tie-back",
+        (8, 15),
+    ),
+}
+
+# Fallback generic L-1A strategy for unknown keys
+_L1A_GENERIC = WritingStrategy(
+    project_type="L-1A",
+    standard_key="_generic",
+    legal_ref="",
+    step1_base_system_prompt=_L1A_BASE_SYSTEM_PROMPT,
+    step1_argumentation_appendix="",
+    step1_instruction_block=_l1a_instruction(
+        "fact → legal nexus → quantification → corroboration → conclusion", (5, 10)
+    ),
+    sentence_range=(5, 10),
+    polish_single_subarg=False,
+    frame_system_prompt=_L1A_FRAME_SYSTEM_PROMPT,
+    cross_section_context=False,
+)
+
+
+# ============================================================
 # Public API
 # ============================================================
 
@@ -707,6 +933,12 @@ def get_writing_strategy(project_type: str, standard_key: str) -> WritingStrateg
         if strategy:
             return strategy
         return _NIW_GENERIC
+
+    if project_type == "L-1A":
+        strategy = _L1A_STRATEGIES.get(canonical)
+        if strategy:
+            return strategy
+        return _L1A_GENERIC
 
     # Default: EB-1A
     strategy = _EB1A_STRATEGIES.get(canonical)

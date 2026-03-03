@@ -375,7 +375,7 @@ export interface LetterSection {
 // LLM Provider Types
 // ============================================
 
-export type ProjectType = 'EB-1A' | 'NIW';
+export type ProjectType = 'EB-1A' | 'NIW' | 'L-1A';
 
 export type LLMProvider = 'deepseek' | 'openai';
 

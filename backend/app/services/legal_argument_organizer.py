@@ -469,6 +469,180 @@ Return JSON:
 }}"""
 
 
+# ==================== L-1A 法律条例定义 ====================
+
+L1A_LEGAL_STANDARDS = {
+    "qualifying_relationship": {
+        "citation": "INA §101(a)(15)(L); 8 CFR §214.2(l)(1)(ii)",
+        "name": "Qualifying Corporate Relationship",
+        "requirements": """
+Legal requirements:
+1. A qualifying relationship (parent, subsidiary, branch, or affiliate) must exist between the foreign and U.S. entities
+2. Ownership and control must be documented (e.g., majority shareholding, corporate registration, tax filings)
+3. Both entities must have sufficient physical premises
+
+Argumentation structure (single unified argument):
+  1. U.S. entity incorporation and registration details
+  2. Ownership chain — share transfer, percentage held, documentation (stock certificates, IRS Schedule G)
+  3. Physical premises — lease terms, square footage, office/warehouse photos
+  4. Parent company investment — capital transfer amount, bank statements
+""",
+    },
+    "doing_business": {
+        "citation": "8 CFR §214.2(l)(1)(ii)(H)",
+        "name": "Active Business Operations",
+        "requirements": """
+Legal requirements:
+1. Both the U.S. and foreign entities must be doing business (regular, systematic, continuous provision of goods and/or services)
+2. Mere presence of an agent or office is not sufficient
+
+Argumentation structure (combine into ONE argument):
+  1. U.S. entity's nature of business, product lines, and service offerings
+  2. Financial performance — revenue, tax returns, bank statements
+  3. Business plan — projected growth, hiring plan, financial targets
+  4. Customer/partner relationships — contracts, invoices, purchase orders
+  5. Parent company operations — revenue, departments, client base, geographic reach
+""",
+    },
+    "executive_capacity": {
+        "citation": "INA §101(a)(44); 8 CFR §214.2(l)(1)(ii)(B)-(C)",
+        "name": "Executive/Managerial Capacity in the U.S.",
+        "requirements": """
+Legal requirements:
+1. The beneficiary will serve in an executive or managerial capacity
+2. Must show the organizational structure supports an executive role
+3. Must describe specific duties with time allocation percentages
+4. Must show subordinate managers/professionals handle day-to-day operations
+
+Argumentation structure (single unified argument):
+  1. Organizational chart showing reporting hierarchy
+  2. Executive duties with percentage time allocation (5 segments)
+  3. Direct subordinates — names, titles, qualifications, specific duties
+  4. How subordinates alleviate the beneficiary from routine operational tasks
+""",
+    },
+    "qualifying_employment": {
+        "citation": "8 CFR §214.2(l)(1)(ii)(A)",
+        "name": "Qualifying Employment Abroad",
+        "requirements": """
+Legal requirements:
+1. The beneficiary must have been employed in an executive or managerial capacity abroad for at least one continuous year within the three years preceding the petition
+2. Must demonstrate the beneficiary's qualifications and achievements
+
+Argumentation structure (single unified argument):
+  1. Beneficiary's educational background and relevant degrees
+  2. Employment history — positions, dates, executive duties at the foreign entity
+  3. Specific achievements — contracts signed, revenue growth, partnerships established
+  4. Subordinate management — departments supervised, managerial staff credentials
+  5. Evidence of executive decision-making authority
+""",
+    },
+}
+
+
+L1A_ORGANIZE_SYSTEM_PROMPT = """You are an expert L-1A immigration attorney with deep knowledge of INA §101(a)(15)(L) and 8 CFR §214.2(l).
+
+Your task is to organize evidence snippets into powerful legal arguments for an L-1A intracompany transferee petition (executive/managerial capacity).
+
+KEY PRINCIPLES:
+1. You MUST create at least one argument for EVERY standard that has evidence snippets
+2. Each argument must directly address the legal requirements of its standard
+3. Combine related evidence into cohesive arguments within each standard
+4. Follow the argumentation structure specified for each standard
+5. Focus on corporate relationship, business operations, executive capacity, and qualifying employment abroad
+
+OUTPUT LANGUAGE: ALL output must be in English. Do NOT use Chinese or any other language."""
+
+
+L1A_ORGANIZE_USER_PROMPT = """## EVIDENCE SUMMARY
+
+The following {standards_with_evidence_count} L-1A standards have supporting evidence.
+You MUST create at least one argument for EACH of them:
+
+{evidence_summary}
+
+## Legal Standards and Requirements (only those with evidence)
+
+{standards_text}
+
+## Evidence Snippets by Standard
+
+{snippets_by_standard}
+
+## Task
+
+Create arguments for ALL {standards_with_evidence_count} standards listed above. Do NOT skip any.
+
+Per-standard rules:
+- Qualifying Relationship: ONE unified argument covering ownership, premises, and investment
+- Doing Business: ONE argument covering both U.S. and foreign entity operations
+- Executive Capacity: ONE argument with org chart, duties, and subordinate management
+- Qualifying Employment: ONE argument covering background, employment history, and achievements
+
+The "standard" field MUST exactly match one of: {valid_standard_keys}
+
+Return JSON:
+{{
+  "arguments": [
+    {{
+      "id": "arg-001",
+      "standard": "qualifying_relationship",
+      "title": "Qualifying Relationship Between [Foreign Co.] and [U.S. Co.]",
+      "rationale": "Why this argument is strong",
+      "snippet_ids": ["snp-001", "snp-002"],
+      "evidence_strength": "strong|medium|weak"
+    }}
+  ],
+  "filtered_out": [
+    {{
+      "snippet_ids": ["snp-xxx"],
+      "reason": "Not relevant to any L-1A standard"
+    }}
+  ],
+  "summary": {{
+    "total_arguments": 4,
+    "by_standard": {{"qualifying_relationship": 1, "doing_business": 1, "executive_capacity": 1, "qualifying_employment": 1}}
+  }}
+}}"""
+
+
+# ==================== L-1A snippet grouping ====================
+
+L1A_EVIDENCE_TYPE_MAPPING = {
+    # Qualifying Relationship
+    "corporate_structure": "qualifying_relationship",
+    "ownership": "qualifying_relationship",
+    "share_transfer": "qualifying_relationship",
+    "physical_premises": "qualifying_relationship",
+    "investment": "qualifying_relationship",
+    "incorporation": "qualifying_relationship",
+    # Doing Business
+    "business_plan": "doing_business",
+    "financial_performance": "doing_business",
+    "revenue": "doing_business",
+    "customer_relationship": "doing_business",
+    "transaction_evidence": "doing_business",
+    "parent_company_info": "doing_business",
+    "partnership": "doing_business",
+    # Executive Capacity
+    "org_chart": "executive_capacity",
+    "executive_duties": "executive_capacity",
+    "subordinate_credentials": "executive_capacity",
+    "time_allocation": "executive_capacity",
+    # Qualifying Employment
+    "employment_history": "qualifying_employment",
+    "education": "qualifying_employment",
+    "achievement": "qualifying_employment",
+    "contract_execution": "qualifying_employment",
+    # Shared types that may appear
+    "leadership": "executive_capacity",
+    "recommendation": "qualifying_employment",
+    "award": "qualifying_employment",
+    "quantitative_impact": "doing_business",
+    "media_coverage": "doing_business",
+}
+
+
 # ==================== NIW snippet grouping ====================
 
 NIW_EVIDENCE_TYPE_MAPPING = {
@@ -564,6 +738,11 @@ async def organize_arguments_with_legal_framework(
         system_prompt = NIW_ORGANIZE_SYSTEM_PROMPT
         user_prompt_template = NIW_ORGANIZE_USER_PROMPT
         evidence_mapping = NIW_EVIDENCE_TYPE_MAPPING
+    elif project_type == "L-1A":
+        legal_stds = L1A_LEGAL_STANDARDS
+        system_prompt = L1A_ORGANIZE_SYSTEM_PROMPT
+        user_prompt_template = L1A_ORGANIZE_USER_PROMPT
+        evidence_mapping = L1A_EVIDENCE_TYPE_MAPPING
     else:
         legal_stds = LEGAL_STANDARDS
         system_prompt = ORGANIZE_SYSTEM_PROMPT

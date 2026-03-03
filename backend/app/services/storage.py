@@ -38,6 +38,9 @@ def _visa_type_to_project_type(visa_type: str) -> str:
         "EB1A": "EB-1A",
         "NIW": "NIW",
         "niw": "NIW",
+        "L-1A": "L-1A",
+        "l1a": "L-1A",
+        "L1A": "L-1A",
     }
     return mapping.get(visa_type, "EB-1A")
 

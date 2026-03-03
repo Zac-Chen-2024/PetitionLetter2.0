@@ -108,6 +108,8 @@ export function Header() {
 
   const badgeColor = projectType === 'NIW'
     ? 'bg-emerald-100 text-emerald-700'
+    : projectType === 'L-1A'
+    ? 'bg-amber-100 text-amber-700'
     : 'bg-blue-100 text-blue-700';
 
   return (
@@ -172,6 +174,8 @@ export function Header() {
                     const isCurrent = p.id === projectId || p.name === projectId;
                     const pBadge = p.projectType === 'NIW'
                       ? 'bg-emerald-100 text-emerald-700'
+                      : p.projectType === 'L-1A'
+                      ? 'bg-amber-100 text-amber-700'
                       : 'bg-blue-100 text-blue-700';
                     return (
                       <button
@@ -239,6 +243,17 @@ export function Header() {
                           className="accent-blue-500"
                         />
                         NIW
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-slate-600 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="newProjectType"
+                          value="L-1A"
+                          checked={newType === 'L-1A'}
+                          onChange={() => setNewType('L-1A')}
+                          className="accent-blue-500"
+                        />
+                        L-1A
                       </label>
                       <div className="flex-1" />
                       <button

@@ -79,7 +79,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         }>(`/projects/${projectId}`);
 
         if (!cancelled) {
-          const pType = (project.projectType === 'NIW' ? 'NIW' : 'EB-1A') as ProjectType;
+          const validTypes: ProjectType[] = ['EB-1A', 'NIW', 'L-1A'];
+          const pType = validTypes.includes(project.projectType as ProjectType)
+            ? (project.projectType as ProjectType)
+            : 'EB-1A';
           setProjectType(pType);
           setProjectNumber(project.projectNumber || null);
         }

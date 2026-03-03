@@ -25,6 +25,11 @@ export const STANDARD_COLORS: Record<string, string> = {
   'std-prong1_merit': '#3B82F6',      // blue - Prong 1: Substantial Merit
   'std-prong2_positioned': '#10B981', // emerald - Prong 2: Well Positioned
   'std-prong3_balance': '#F59E0B',    // amber - Prong 3: Balance of Equities
+  // L-1A (Intracompany Transferee)
+  'std-qualifying_relationship': '#F59E0B', // amber - Qualifying Corporate Relationship
+  'std-doing_business': '#3B82F6',          // blue - Active Business Operations
+  'std-executive_capacity': '#10B981',      // emerald - Executive/Managerial Capacity
+  'std-qualifying_employment': '#8B5CF6',   // violet - Qualifying Employment Abroad
 } as const;
 
 // MaterialType to Standard ID mapping
@@ -75,6 +80,11 @@ export const STANDARD_KEY_TO_ID: Record<string, string> = {
   'prong1_merit': 'std-prong1_merit',
   'prong2_positioned': 'std-prong2_positioned',
   'prong3_balance': 'std-prong3_balance',
+  // L-1A (Intracompany Transferee)
+  'qualifying_relationship': 'std-qualifying_relationship',
+  'doing_business': 'std-doing_business',
+  'executive_capacity': 'std-executive_capacity',
+  'qualifying_employment': 'std-qualifying_employment',
 } as const;
 
 // Get color for a standardKey (from backend argument)

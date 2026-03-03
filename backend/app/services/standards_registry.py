@@ -1,14 +1,14 @@
 """
 Standards Registry - Single source of truth for all petition types and their legal standards.
 
-Supports EB-1A (10 criteria) and NIW (Dhanasar 3-prong test).
+Supports EB-1A (10 criteria), NIW (Dhanasar 3-prong test), and L-1A (4 standards).
 """
 
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional
 
 
-PROJECT_TYPES = ["EB-1A", "NIW"]
+PROJECT_TYPES = ["EB-1A", "NIW", "L-1A"]
 
 
 @dataclass
@@ -155,11 +155,51 @@ NIW_LEGAL_STANDARDS = [
 ]
 
 
+# ==================== L-1A Standards ====================
+# INA §101(a)(15)(L), 8 CFR §214.2(l) — Intracompany Transferee (Executive/Manager)
+
+L1A_LEGAL_STANDARDS = [
+    LegalStandardDef(
+        key="qualifying_relationship",
+        name="Qualifying Corporate Relationship",
+        short_name="Corp. Relationship",
+        description="Qualifying relationship between the foreign company and the U.S. petitioner (parent, subsidiary, branch, or affiliate)",
+        color="#F59E0B",
+        order=1,
+    ),
+    LegalStandardDef(
+        key="doing_business",
+        name="Active Business Operations",
+        short_name="Doing Business",
+        description="Both the U.S. and foreign entities are actively doing business (goods or services, not mere presence)",
+        color="#3B82F6",
+        order=2,
+    ),
+    LegalStandardDef(
+        key="executive_capacity",
+        name="Executive/Managerial Capacity",
+        short_name="Exec. Capacity",
+        description="The beneficiary will serve in an executive or managerial capacity in the U.S. entity",
+        color="#10B981",
+        order=3,
+    ),
+    LegalStandardDef(
+        key="qualifying_employment",
+        name="Qualifying Employment Abroad",
+        short_name="Employment Abroad",
+        description="The beneficiary was employed abroad in an executive or managerial capacity for at least one continuous year within the three years preceding the petition",
+        color="#8B5CF6",
+        order=4,
+    ),
+]
+
+
 # ==================== Registry ====================
 
 STANDARDS_BY_TYPE: Dict[str, List[LegalStandardDef]] = {
     "EB-1A": EB1A_LEGAL_STANDARDS,
     "NIW": NIW_LEGAL_STANDARDS,
+    "L-1A": L1A_LEGAL_STANDARDS,
 }
 
 

@@ -35,10 +35,14 @@ def scan_data_directory() -> List[Dict]:
     """
     扫描 data/ 目录获取所有可导入的数据
 
+    Searches both root level (data/{Name}) and type subdirectories
+    (data/eb1a/{Name}, data/niw/{Name}, data/l1/{Name}).
+
     Returns:
         List of {
             "name": 人名,
             "path": 目录路径,
+            "visa_type": 推断的签证类型,
             "exhibit_count": exhibit 数量,
             "page_count": 总页数
         }
@@ -48,28 +52,39 @@ def scan_data_directory() -> List[Dict]:
     if not DATA_DIR.exists():
         return results
 
+    # Type subdirectory → visa_type mapping
+    _SUBDIR_TO_TYPE = {"eb1a": "EB-1A", "niw": "NIW", "l1": "L-1A"}
+    _SKIP_DIRS = {"projects"}
+
+    def _scan_person_dir(person_dir: Path, visa_type: str):
+        """Scan a single person directory for exhibits."""
+        exhibit_dirs = _find_ocr_exhibit_dirs(person_dir)
+        if not exhibit_dirs:
+            return
+        page_count = sum(
+            len(list(ed.glob("page_*.json"))) for ed in exhibit_dirs
+        )
+        results.append({
+            "name": person_dir.name,
+            "path": str(person_dir),
+            "visa_type": visa_type,
+            "exhibit_count": len(exhibit_dirs),
+            "page_count": page_count,
+        })
+
     for item in DATA_DIR.iterdir():
-        # 跳过 projects 目录和非目录项
-        if item.name == "projects" or not item.is_dir():
+        if not item.is_dir() or item.name in _SKIP_DIRS:
             continue
 
-        # 统计 exhibit 和页面数量
-        exhibit_count = 0
-        page_count = 0
-
-        for exhibit_dir in item.iterdir():
-            if exhibit_dir.is_dir():
-                exhibit_count += 1
-                for f in exhibit_dir.glob("page_*.json"):
-                    page_count += 1
-
-        if exhibit_count > 0:
-            results.append({
-                "name": item.name,
-                "path": str(item),
-                "exhibit_count": exhibit_count,
-                "page_count": page_count
-            })
+        if item.name in _SUBDIR_TO_TYPE:
+            # Type subdirectory: scan each person inside
+            visa_type = _SUBDIR_TO_TYPE[item.name]
+            for person_dir in item.iterdir():
+                if person_dir.is_dir():
+                    _scan_person_dir(person_dir, visa_type)
+        else:
+            # Root-level person directory (legacy)
+            _scan_person_dir(item, "EB-1A")
 
     return results
 
@@ -293,12 +308,13 @@ def _find_ocr_exhibit_dirs(person_dir: Path) -> List[Path]:
     return candidates
 
 
-def import_person_data(person_name: str) -> Dict:
+def import_person_data(person_name: str, visa_type: str = "EB-1A") -> Dict:
     """
     导入指定人的完整数据
 
     Args:
         person_name: 人名（如 "Yaruo Qu"）
+        visa_type: 签证类型 ("EB-1A", "NIW", "L-1A")
 
     Returns:
         {
@@ -309,7 +325,20 @@ def import_person_data(person_name: str) -> Dict:
             "error": str (if any)
         }
     """
-    person_dir = DATA_DIR / person_name
+    # Search in type-specific subdirectory first, then root
+    _TYPE_SUBDIRS = {
+        "EB-1A": "eb1a",
+        "NIW": "niw",
+        "L-1A": "l1",
+    }
+    subdir = _TYPE_SUBDIRS.get(visa_type)
+    person_dir = None
+    if subdir:
+        candidate = DATA_DIR / subdir / person_name
+        if candidate.exists():
+            person_dir = candidate
+    if person_dir is None:
+        person_dir = DATA_DIR / person_name
 
     if not person_dir.exists():
         return {
@@ -355,7 +384,7 @@ def import_person_data(person_name: str) -> Dict:
     metadata = {
         "project_id": project_id,
         "person_name": person_name,
-        "visa_type": "EB-1A",  # 默认 EB-1A
+        "visa_type": visa_type,
         "pipeline_stage": "ocr_complete",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_path": str(person_dir),

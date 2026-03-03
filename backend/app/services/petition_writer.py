@@ -49,7 +49,8 @@ async def generate_petition_prose(
     section: str,
     snippet_registry: List[Dict] = None,
     snippet_links: List[Dict] = None,
-    provider: str = "deepseek"
+    provider: str = "deepseek",
+    project_type: str = "EB-1A"
 ) -> str:
     """
     Step 3a: 自由写作
@@ -82,11 +83,19 @@ async def generate_petition_prose(
     context = _build_structured_context(relevant_snippets, snippet_links)
 
     # 获取标准名称 (try registry first, then legacy dicts)
-    standard_name = get_standard_name("EB-1A", section)
+    standard_name = get_standard_name(project_type, section)
     if standard_name == section:
         standard_name = EB1A_STANDARDS.get(section) or L1_STANDARDS.get(section, section)
 
-    prompt = f"""You are a Senior Immigration Attorney writing an EB-1A petition.
+    # Dynamic role description based on project type
+    _PETITION_ROLES = {
+        "EB-1A": "an EB-1A extraordinary ability petition",
+        "NIW": "a National Interest Waiver (NIW) petition",
+        "L-1A": "an L-1A intracompany transferee petition",
+    }
+    role_desc = _PETITION_ROLES.get(project_type, "an immigration petition")
+
+    prompt = f"""You are a Senior Immigration Attorney writing {role_desc}.
 
 Write a persuasive, well-structured paragraph (200-400 words) for the "{standard_name}" criterion.
 
@@ -104,7 +113,12 @@ Requirements:
 - Do NOT include citation markers like [1] or [Exhibit A] - we will add those later
 """
 
-    system_prompt = """You are an experienced immigration attorney specializing in EB-1A extraordinary ability petitions.
+    _SYSTEM_PROMPTS = {
+        "EB-1A": "You are an experienced immigration attorney specializing in EB-1A extraordinary ability petitions.",
+        "NIW": "You are an experienced immigration attorney specializing in National Interest Waiver (NIW) petitions under Matter of Dhanasar.",
+        "L-1A": "You are an experienced immigration attorney specializing in L-1A intracompany transferee petitions.",
+    }
+    system_prompt = f"""{_SYSTEM_PROMPTS.get(project_type, _SYSTEM_PROMPTS["EB-1A"])}
 Your writing is precise, persuasive, and follows legal drafting conventions.
 You focus on demonstrating how the evidence meets USCIS requirements."""
 
