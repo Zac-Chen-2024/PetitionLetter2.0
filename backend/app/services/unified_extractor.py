@@ -14,6 +14,7 @@ Unified Extractor - 统一的 Snippets + Entities + Relations 提取服务
 """
 
 import json
+import re
 import uuid
 import asyncio
 from typing import List, Dict, Optional, Tuple
@@ -1128,6 +1129,25 @@ def _infer_evidence_layer(item: Dict) -> str:
     return "context"
 
 
+_COVER_PAGE_RE = re.compile(
+    r"^#?\s*exhibit\s+[a-z][-–]?\d+\s*$", re.IGNORECASE
+)
+
+
+def _is_cover_page(page_data: Dict) -> bool:
+    """Detect exhibit cover pages that contain only a label like 'Exhibit A-1'."""
+    md = page_data.get("markdown_text", "").strip()
+    if len(md) < 30 and _COVER_PAGE_RE.match(md):
+        return True
+    blocks = page_data.get("text_blocks", [])
+    if len(blocks) <= 1:
+        texts = [b.get("text_content", "").strip() for b in blocks]
+        combined = " ".join(texts).strip()
+        if len(combined) < 30 and _COVER_PAGE_RE.match(combined):
+            return True
+    return False
+
+
 def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
     """将所有页的 blocks 格式化为 LLM 输入格式
 
@@ -1141,6 +1161,11 @@ def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
 
     for page_data in pages:
         page_num = page_data.get("page_number", 0)
+
+        # Skip exhibit cover pages (e.g. pages containing only "Exhibit A-1")
+        if _is_cover_page(page_data):
+            continue
+
         blocks = page_data.get("text_blocks", [])
 
         for block in blocks:
@@ -1151,8 +1176,12 @@ def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
             if not text or len(text) < 5:
                 continue
 
-            # 复合 ID: p{页码}_{block_id}
-            composite_id = f"p{page_num}_{block_id}"
+            # Use block_id directly if it already encodes page info (e.g. "p2_b0"),
+            # otherwise prefix with page number to avoid collisions
+            if block_id and re.match(r"p\d+_", block_id):
+                composite_id = block_id
+            else:
+                composite_id = f"p{page_num}_{block_id}"
             block_map[composite_id] = (page_num, block)
             lines.append(f"[{composite_id}] {text}")
 
