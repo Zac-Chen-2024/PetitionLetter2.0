@@ -27,6 +27,17 @@ from .standards_registry import get_standard_name
 from .writing_strategies import get_writing_strategy
 import re
 
+# Labels that LLMs sometimes leak from the argumentation-method prompt
+_LEAKED_LABEL_RE = re.compile(
+    r"\s*(?:FACT|LEGAL NEXUS|QUANTIFICATION|CORROBORATION|CONCLUSION)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_leaked_labels(text: str) -> str:
+    """Remove analytical framework labels that the LLM leaked into prose."""
+    return _LEAKED_LABEL_RE.sub(" ", text).strip()
+
 logger = logging.getLogger(__name__)
 
 
@@ -1842,6 +1853,10 @@ async def write_petition_section_v3(
         "sentence_type": "closing"
     })
 
+    # Post-process: strip leaked analytical labels from all sentences
+    for sent in all_sentences:
+        sent["text"] = _strip_leaked_labels(sent.get("text", ""))
+
     # 溯源校验：重新校验 snippet_ids 合法性
     # Include all snippet IDs from referenced exhibits (not just subargument pointers)
     # since step1 now gives LLM a full snippet index for block-level citation
@@ -1948,6 +1963,8 @@ async def write_petition_section_v3(
 
     # 组装段落文本
     paragraph_text = " ".join(s["text"] for s in all_sentences)
+    # Final safety net: strip leaked labels from assembled paragraph
+    paragraph_text = _strip_leaked_labels(paragraph_text)
 
     # 统计
     total_sentences = len(all_sentences)
