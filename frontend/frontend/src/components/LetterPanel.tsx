@@ -207,9 +207,10 @@ interface LetterSectionComponentProps {
   onRewrite?: (standardId: string) => void;
   isRewriting?: boolean;
   onSentenceClick?: (sentence: SentenceWithProvenance, idx: number) => void;
-  onExhibitClick?: (exhibitId: string, page?: number, subargumentId?: string | null, snippetIds?: string[]) => void;
+  onExhibitClick?: (exhibitId: string, page?: number, subargumentId?: string | null, snippetIds?: string[], sectionId?: string, sentenceIdx?: number) => void;
   focusedSubArgumentId?: string | null;
   focusedArgumentId?: string | null;
+  exhibitFocusedKey?: string | null;
   paragraphRefs?: React.MutableRefObject<Map<string, HTMLParagraphElement>>;
 }
 
@@ -224,6 +225,7 @@ function LetterSectionComponent({
   onExhibitClick,
   focusedSubArgumentId,
   focusedArgumentId,
+  exhibitFocusedKey,
   paragraphRefs
 }: LetterSectionComponentProps) {
   const { t } = useTranslation();
@@ -237,7 +239,7 @@ function LetterSectionComponent({
 
   // Render text with clickable exhibit refs (blue, clickable)
   // Each exhibit ref inside [...] is independently clickable and points to its own snippet
-  const renderTextWithExhibitRefs = useCallback((text: string, sentence: SentenceWithProvenance) => {
+  const renderTextWithExhibitRefs = useCallback((text: string, sentence: SentenceWithProvenance, sentenceIdx: number) => {
     // Match the entire bracket: [Exhibit A1, p.2] or [Exhibit A1, p.2; Exhibit B3, p.4; ...]
     const bracketPattern = /\[([^\]]*Exhibit\s+[A-Z0-9-][^\]]*)\]/gi;
     // Individual exhibit within a bracket
@@ -274,7 +276,7 @@ function LetterSectionComponent({
             key={`ex-${keyIdx++}`}
             onClick={(e) => {
               e.stopPropagation();
-              onExhibitClick?.(ex.id, ex.page, sentence.subargument_id, sentence.snippet_ids);
+              onExhibitClick?.(ex.id, ex.page, sentence.subargument_id, sentence.snippet_ids, section.id, sentenceIdx);
             }}
             className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer font-medium"
             title={`Click to view Exhibit ${ex.id}${ex.page ? `, page ${ex.page}` : ''}`}
@@ -313,7 +315,15 @@ function LetterSectionComponent({
   }, []);
 
   // Check if a sentence is highlighted based on focus state
-  const isSentenceFocused = useCallback((sentence: SentenceWithProvenance): boolean => {
+  const isSentenceFocused = useCallback((sentence: SentenceWithProvenance, idx: number): boolean => {
+    // Exhibit-level focus: only highlight the exact sentence
+    if (exhibitFocusedKey === `${section.id}:${idx}`) {
+      return true;
+    }
+    // If exhibit focus is active but not this sentence, skip subargument-level highlight
+    if (exhibitFocusedKey) {
+      return false;
+    }
     if (focusedSubArgumentId && sentence.subargument_id === focusedSubArgumentId) {
       return true;
     }
@@ -321,7 +331,7 @@ function LetterSectionComponent({
       return true;
     }
     return false;
-  }, [focusedSubArgumentId, focusedArgumentId]);
+  }, [focusedSubArgumentId, focusedArgumentId, exhibitFocusedKey, section.id]);
 
   // No special styling for sentence types to avoid layout shifts
 
@@ -342,7 +352,7 @@ function LetterSectionComponent({
       const hasSubArgument = !!sentence.subargument_id;
       const isClickable = hasProvenance || hasSubArgument;
       const isHovered = hoveredSentenceIdx === idx;
-      const isFocused = isSentenceFocused(sentence);
+      const isFocused = isSentenceFocused(sentence, idx);
 
       return (
         <span
@@ -360,7 +370,7 @@ function LetterSectionComponent({
           `}
           title={isClickable ? 'Click to focus source • Right-click for details' : undefined}
         >
-          {renderTextWithExhibitRefs(sentence.text, sentence)}
+          {renderTextWithExhibitRefs(sentence.text, sentence, idx)}
           {/* Provenance indicators */}
           {(hasProvenance || hasSubArgument) && (
             <sup className="text-[10px] ml-0.5 select-none">
@@ -532,6 +542,7 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
 
   const [hoveredStandardId, setHoveredStandardId] = useState<string | undefined>(undefined);
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [exhibitFocusedKey, setExhibitFocusedKey] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const paragraphRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
@@ -613,6 +624,8 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
 
   // Handle sentence click - set focus to SubArgument or Argument
   const handleSentenceClick = useCallback((sentence: SentenceWithProvenance, _idx: number) => {
+    // Clear exhibit-level highlight, fall back to subargument-level
+    setExhibitFocusedKey(null);
     // Prefer SubArgument focus, fallback to Argument
     if (sentence.subargument_id) {
       setFocusState({
@@ -633,14 +646,21 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
     }
   }, [setFocusState]);
 
-  // Handle exhibit click - focus SubArgument first, then navigate to document with bbox highlight
+  // Handle exhibit click - highlight only the clicked sentence, then navigate to document
   const handleExhibitClick = useCallback((
     exhibitId: string,
     page?: number,
     subargumentId?: string | null,
-    sentenceSnippetIds?: string[]
+    sentenceSnippetIds?: string[],
+    sectionId?: string,
+    sentenceIdx?: number
   ) => {
-    // 1. Focus SubArgument first (so connection lines show correctly)
+    // 1. Set exhibit-level focus to highlight only this sentence (not entire subargument)
+    if (sectionId != null && sentenceIdx != null) {
+      setExhibitFocusedKey(`${sectionId}:${sentenceIdx}`);
+    }
+
+    // 2. Focus SubArgument so snippet panel shows connection lines
     if (subargumentId) {
       setFocusState({
         type: 'subargument',
@@ -648,7 +668,7 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
       });
     }
 
-    // 2. Set the document to view
+    // 3. Set the document to view
     const docId = `doc_${exhibitId}`;
     setSelectedDocumentId(docId);
 
@@ -823,6 +843,7 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
                     onExhibitClick={handleExhibitClick}
                     focusedSubArgumentId={focusedSubArgumentId}
                     focusedArgumentId={focusedArgumentId}
+                    exhibitFocusedKey={exhibitFocusedKey}
                     paragraphRefs={paragraphRefs}
                   />
                 </div>

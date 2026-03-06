@@ -1855,6 +1855,9 @@ export function ArgumentGraph() {
     const targetNode = standardNodes.find(n => n.id === standardId);
     if (!targetNode || !containerRef.current) return;
 
+    // Clear focus state so the full tree is visible
+    setFocusState({ type: 'none', id: null });
+
     const containerRect = containerRef.current.getBoundingClientRect();
     const targetScale = 0.7;
     setScale(targetScale);
@@ -1862,7 +1865,7 @@ export function ArgumentGraph() {
     const newOffsetX = (containerRect.width / 2) - (targetNode.position.x * targetScale);
     const newOffsetY = (containerRect.height / 2) - (targetNode.position.y * targetScale);
     setOffset({ x: newOffsetX, y: newOffsetY });
-  }, [standardNodes]);
+  }, [standardNodes, setFocusState]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
