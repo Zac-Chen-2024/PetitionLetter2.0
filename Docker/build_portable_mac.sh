@@ -52,8 +52,9 @@ cp -r "$ROOT/backend/data" "$DIST/backend/data"
 
 echo "[6/7] Copying data (PDFs + OCR)..."
 mkdir -p "$DIST/data"
-cp -r "$ROOT/data/Dehuan Liu" "$DIST/data/Dehuan Liu"
-cp -r "$ROOT/data/Yaruo Qu"   "$DIST/data/Yaruo Qu"
+cp -r "$ROOT/data/eb1a" "$DIST/data/eb1a"
+cp -r "$ROOT/data/niw"  "$DIST/data/niw"
+cp -r "$ROOT/data/l1"   "$DIST/data/l1"
 
 echo "[7/7] Assembling final package..."
 cp -r "$ROOT/frontend/frontend/dist" "$DIST/backend/frontend-dist"

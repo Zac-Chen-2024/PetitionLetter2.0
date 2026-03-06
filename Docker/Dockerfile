@@ -39,9 +39,10 @@ COPY Docker/serve.py ./serve.py
 # Copy project data (JSON: arguments, snippets, OCR results, etc.)
 COPY backend/data/ ./data/
 
-# Copy source PDFs + OCR (skip Test.zip via .dockerignore)
-COPY data/Dehuan\ Liu/ /app/data/Dehuan Liu/
-COPY data/Yaruo\ Qu/  /app/data/Yaruo Qu/
+# Copy source PDFs + OCR (all visa types)
+COPY data/eb1a/ /app/data/eb1a/
+COPY data/niw/  /app/data/niw/
+COPY data/l1/   /app/data/l1/
 
 EXPOSE 8008
 

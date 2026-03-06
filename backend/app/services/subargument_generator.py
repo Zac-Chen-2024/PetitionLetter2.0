@@ -76,6 +76,27 @@ STANDARD_SUBDIVISION_GUIDANCE = {
         "Split by INDIVIDUAL COMMERCIAL ACHIEVEMENT. Each sub-argument = one product or commercial metric. "
         "Within each: commercial data → industry benchmark → media recognition."
     ),
+    # L-1A standards
+    "qualifying_relationship": (
+        "Split by type of relationship documentation. Each sub-argument = one aspect: "
+        "corporate registration/incorporation, ownership structure/share transfer, "
+        "physical premises/lease, parent company investment/capitalization."
+    ),
+    "doing_business": (
+        "Split by entity or aspect. Each sub-argument = one entity (U.S. or foreign) or business operation: "
+        "U.S. entity operations/revenue/business plan, foreign parent operations/business model, "
+        "customer relationships/contracts, financial performance/tax returns."
+    ),
+    "executive_capacity": (
+        "Split by management aspect. Each sub-argument = one component: "
+        "organizational structure/hierarchy, executive duties/responsibilities, "
+        "subordinate management/staff credentials, decision-making authority/achievements."
+    ),
+    "qualifying_employment": (
+        "Split by employment aspect. Each sub-argument = one component: "
+        "education/background, employment history/positions abroad, achievements/contracts/growth, "
+        "subordinate management/team credentials."
+    ),
     # NIW prong guidance (fallback safety net — NIW v2 normally bypasses subdivide)
     "prong1_merit": (
         "Split by theme: endeavor description, merit evidence, national importance, "
@@ -284,6 +305,10 @@ def _create_single_subarg(argument_id: str, snippets: List[Dict], standard: str)
         "display": "Shows exhibition display",
         "high_salary": "Proves high remuneration",
         "commercial_success": "Demonstrates commercial success",
+        "qualifying_relationship": "Proves qualifying corporate relationship",
+        "doing_business": "Demonstrates active business operations",
+        "executive_capacity": "Shows executive/managerial capacity",
+        "qualifying_employment": "Proves qualifying employment abroad",
     }
     relationship = relationship_map.get(standard, "Supports argument")
 

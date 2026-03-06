@@ -251,9 +251,17 @@ function PDFViewer({
     };
   }, []);
 
-  // Auto-scroll to center snippet's bounding box within the container
+  // Auto-scroll to center snippet's bounding box — only on first selection
+  const lastScrolledSnippetId = useRef<string | null>(null);
   useEffect(() => {
-    if (selectedSnippetId && containerRef.current) {
+    if (!selectedSnippetId) {
+      lastScrolledSnippetId.current = null;
+      return;
+    }
+    if (selectedSnippetId === lastScrolledSnippetId.current) return;
+    lastScrolledSnippetId.current = selectedSnippetId;
+
+    if (containerRef.current) {
       const snippet = snippets.find(s => s.id === selectedSnippetId);
       if (snippet && snippet.boundingBox?.page) {
         const container = containerRef.current;
@@ -264,19 +272,10 @@ function PDFViewer({
           const containerRect = container.getBoundingClientRect();
           const pageRect = pageElement.getBoundingClientRect();
 
-          // 页面顶部相对于容器可视区域的位置
           const pageTopInContainer = pageRect.top - containerRect.top;
-
-          // 页面在滚动内容中的绝对位置
           const pageAbsoluteTop = container.scrollTop + pageTopInContainer;
-
-          // snippet 中心在页面内的比例 (0-1)
           const snippetCenterRatio = (snippet.boundingBox.y + snippet.boundingBox.height / 2) / 1000;
-
-          // snippet 中心的绝对 Y 位置
           const snippetAbsoluteY = pageAbsoluteTop + (pageRect.height * snippetCenterRatio);
-
-          // 目标滚动位置（使 snippet 居中）
           const targetScroll = snippetAbsoluteY - (containerRect.height / 2);
 
           container.scrollTo({

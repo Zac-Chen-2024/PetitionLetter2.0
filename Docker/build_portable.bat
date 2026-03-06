@@ -61,8 +61,9 @@ xcopy /E /I /Q "%ROOT%\backend\data" "%DIST%\backend\data" >nul
 copy /Y "%ROOT%\backend\.env" "%DIST%\backend\.env" >nul 2>nul
 
 echo [6/7] Copying data (PDFs + OCR)...
-xcopy /E /I /Q "%ROOT%\data\Dehuan Liu" "%DIST%\data\Dehuan Liu" >nul
-xcopy /E /I /Q "%ROOT%\data\Yaruo Qu"   "%DIST%\data\Yaruo Qu"  >nul
+xcopy /E /I /Q "%ROOT%\data\eb1a" "%DIST%\data\eb1a" >nul
+xcopy /E /I /Q "%ROOT%\data\niw"  "%DIST%\data\niw"  >nul
+xcopy /E /I /Q "%ROOT%\data\l1"   "%DIST%\data\l1"   >nul
 
 echo [7/7] Assembling final package...
 xcopy /E /I /Q "%ROOT%\frontend\frontend\dist" "%DIST%\backend\frontend-dist" >nul

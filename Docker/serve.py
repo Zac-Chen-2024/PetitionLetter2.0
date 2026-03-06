@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Fix source_path in project metadata
-# Local dev uses absolute Windows paths (e.g. F:\...\data\Dehuan Liu).
-# In Docker the PDFs live at /app/data/<PersonName>.
-# In portable mode they live at <script>/../data/<PersonName>.
+# Local dev uses absolute Windows paths (e.g. F:\...\data\eb1a\Dehuan Liu).
+# In Docker the PDFs live at /app/data/<category>/<PersonName>.
+# In portable mode they live at <script>/../data/<category>/<PersonName>.
 # Scan all projects at startup and rewrite source_path so PDF serving works.
 # ---------------------------------------------------------------------------
 _docker_data = Path("/app/data")
@@ -27,6 +27,21 @@ _portable_data = Path(__file__).resolve().parent.parent / "data"
 DATA_ROOT = _docker_data if _docker_data.is_dir() else _portable_data
 
 PROJECTS_DIR = Path(__file__).resolve().parent / "data" / "projects"
+
+
+def _find_person_dir(person_name: str) -> Path | None:
+    """Search DATA_ROOT for a directory matching person_name, one or two levels deep."""
+    # Direct child: data/<PersonName>
+    direct = DATA_ROOT / person_name
+    if direct.is_dir():
+        return direct
+    # One level deep: data/<category>/<PersonName>
+    for subdir in DATA_ROOT.iterdir():
+        if subdir.is_dir():
+            candidate = subdir / person_name
+            if candidate.is_dir():
+                return candidate
+    return None
 
 
 def _fix_source_paths():
@@ -40,14 +55,14 @@ def _fix_source_paths():
             if not old_path:
                 continue
             # Extract the person folder name from the original path
-            # e.g. "F:\...\data\Dehuan Liu" → "Dehuan Liu"
+            # e.g. "F:\...\data\eb1a\Dehuan Liu" → "Dehuan Liu"
             person_name = Path(old_path).name
-            new_path = str(DATA_ROOT / person_name)
-            if str(Path(old_path)) != str(Path(new_path)):
-                meta["source_path"] = new_path
+            found = _find_person_dir(person_name)
+            if found and str(Path(old_path)) != str(found):
+                meta["source_path"] = str(found)
                 with open(meta_file, "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
-                logger.info("Patched source_path: %s -> %s", old_path, new_path)
+                logger.info("Patched source_path: %s -> %s", old_path, found)
         except Exception as e:
             logger.warning("Failed to patch %s: %s", meta_file, e)
 
