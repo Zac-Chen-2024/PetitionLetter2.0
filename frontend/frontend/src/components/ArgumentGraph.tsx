@@ -1153,6 +1153,36 @@ function calculateTreeLayout(
 }
 
 // ============================================
+// Standard Minimap — quick navigation chips
+// ============================================
+
+function StandardMinimap({ standardNodes, onNavigate }: {
+  standardNodes: StandardNode[];
+  onNavigate: (id: string) => void;
+}) {
+  if (standardNodes.length === 0) return null;
+  return (
+    <div className="absolute bottom-3 right-3 z-50 flex flex-col gap-1 opacity-40 hover:opacity-100 transition-opacity">
+      {standardNodes.map(node => (
+        <button
+          key={node.id}
+          onClick={() => onNavigate(node.id)}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/90 backdrop-blur-sm border border-slate-200
+                     hover:bg-slate-50 transition-colors text-[10px] text-slate-600 shadow-sm"
+          title={node.data.name}
+        >
+          <span
+            className="w-2 h-2 rounded-full flex-shrink-0"
+            style={{ backgroundColor: node.data.color }}
+          />
+          <span className="truncate max-w-[80px]">{node.data.shortName}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ============================================
 // Main Component
 // ============================================
 
@@ -1820,6 +1850,20 @@ export function ArgumentGraph() {
     setOffset({ x: 0, y: newOffsetY });
   }, [focusState.type, focusState.id, subArgumentNodes]);
 
+  // Navigate to a standard node from the minimap
+  const handleNavigateToStandard = useCallback((standardId: string) => {
+    const targetNode = standardNodes.find(n => n.id === standardId);
+    if (!targetNode || !containerRef.current) return;
+
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const targetScale = 0.7;
+    setScale(targetScale);
+
+    const newOffsetX = (containerRect.width / 2) - (targetNode.position.x * targetScale);
+    const newOffsetY = (containerRect.height / 2) - (targetNode.position.y * targetScale);
+    setOffset({ x: newOffsetX, y: newOffsetY });
+  }, [standardNodes]);
+
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1928,6 +1972,7 @@ export function ArgumentGraph() {
           <button onClick={() => handleZoom(0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom In">
             <ZoomInIcon />
           </button>
+          <span className="text-[10px] text-slate-500 text-center select-none">{Math.round(scale * 100)}%</span>
           <button onClick={() => handleZoom(-0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom Out">
             <ZoomOutIcon />
           </button>
@@ -1955,10 +2000,11 @@ export function ArgumentGraph() {
           </button>
         </div>
 
-        {/* Scale indicator */}
-        <div className="absolute bottom-3 right-3 z-50 bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded border border-slate-200 text-xs text-slate-600">
-          {Math.round(scale * 100)}%
-        </div>
+        {/* Standard minimap */}
+        <StandardMinimap
+          standardNodes={standardNodes}
+          onNavigate={handleNavigateToStandard}
+        />
 
         {/* Legend */}
         <div className="absolute top-3 left-3 z-50 bg-white/90 backdrop-blur-sm p-2 rounded-lg border border-slate-200 text-[10px] space-y-1.5">
