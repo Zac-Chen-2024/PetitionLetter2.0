@@ -348,7 +348,7 @@ async def get_all_v3_sections(project_id: str):
 
         sections = []
         seen = set()
-        for key in standard_keys:
+        for key in sorted(standard_keys):
             result = load_latest_writing_v3(project_id, key)
             if result and key not in seen:
                 seen.add(key)

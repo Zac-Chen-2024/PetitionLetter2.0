@@ -19,6 +19,15 @@ function SectionNav({ sections, activeSection, onSectionClick, generatingStandar
   const navRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
+  // Auto-scroll nav to keep active tab visible
+  useEffect(() => {
+    if (!activeSection) return;
+    const tab = tabRefs.current.get(activeSection);
+    if (tab && navRef.current) {
+      tab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [activeSection]);
+
   // Auto-scroll to the latest stale section tab
   useEffect(() => {
     const lastStale = [...sections].reverse().find(s => s.isStale);
@@ -536,34 +545,30 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
     }
   }, []);
 
-  // Track active section with IntersectionObserver
+  // Track active section on scroll — pick the section closest to the top of the container
   useEffect(() => {
-    const observers: IntersectionObserver[] = [];
     const container = contentRef.current;
     if (!container) return;
 
-    sectionRefs.current.forEach((element, sectionId) => {
-      const observer = new IntersectionObserver(
-        (entries) => {
-          entries.forEach(entry => {
-            if (entry.isIntersecting && entry.intersectionRatio > 0.3) {
-              setActiveSection(sectionId);
-            }
-          });
-        },
-        {
-          root: container,
-          threshold: [0.3, 0.5, 0.7],
-          rootMargin: '-10% 0px -60% 0px'
-        }
-      );
-      observer.observe(element);
-      observers.push(observer);
-    });
+    const handleScroll = () => {
+      const containerTop = container.getBoundingClientRect().top;
+      let closest: { id: string; distance: number } | null = null;
 
-    return () => {
-      observers.forEach(obs => obs.disconnect());
+      sectionRefs.current.forEach((element, sectionId) => {
+        const rect = element.getBoundingClientRect();
+        const distance = Math.abs(rect.top - containerTop);
+        if (!closest || distance < closest.distance) {
+          closest = { id: sectionId, distance };
+        }
+      });
+
+      if (closest) {
+        setActiveSection(closest.id);
+      }
     };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
   }, [letterSections]);
 
   // Initialize active section
@@ -705,7 +710,12 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
       <div className="flex-shrink-0 px-4 py-2 border-b border-slate-200 bg-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-slate-800">{t('writing.petitionLetter')}</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">{t('writing.petitionLetter')}</h2>
+              <p className="text-xs text-slate-500">
+                {letterSections.filter(s => s.isGenerated).length}/{letterSections.length} sections
+              </p>
+            </div>
             <label className="flex items-center gap-1.5 cursor-pointer select-none">
               <div className={`relative w-7 h-4 rounded-full transition-colors ${
                 explorationWriting ? 'bg-emerald-500' : 'bg-slate-300'

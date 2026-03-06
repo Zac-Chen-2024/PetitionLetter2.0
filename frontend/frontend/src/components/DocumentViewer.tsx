@@ -221,7 +221,7 @@ function PDFViewer({
   const [containerWidth, setContainerWidth] = useState<number>(0);
 
   // Number of pages to render at once for continuous scrolling
-  const PAGES_TO_RENDER = 10;
+  const PAGES_TO_RENDER = 50;
 
   // Track container width for responsive PDF sizing using ResizeObserver
   useEffect(() => {
