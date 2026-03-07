@@ -1632,16 +1632,18 @@ export function ArgumentGraph() {
       setSelectedNodeId(result.newArgument.id);
       setFocusState({ type: 'argument', id: result.newArgument.id });
 
-      // Exit merge mode
+      // Exit merge mode & re-layout to avoid overlap
       setIsMergeMode(false);
       setMergeSelectedIds(new Set());
+      clearArgumentGraphPositions();
+      centerOnNode(result.newArgument.id);
       toast.success(`Merged ${mergeSelectedIds.size} sub-arguments`);
     } catch (error) {
       toast.error('Merge failed');
     } finally {
       setIsMerging(false);
     }
-  }, [mergeSubArguments, mergeSelectedIds, contextSubArguments, setFocusState]);
+  }, [mergeSubArguments, mergeSelectedIds, contextSubArguments, setFocusState, clearArgumentGraphPositions]);
 
   // Handle move: move selected sub-args to an existing argument
   const handleMoveConfirm = useCallback(async (targetArgumentId: string) => {
@@ -1655,6 +1657,7 @@ export function ArgumentGraph() {
       setIsMergeMode(false);
       setMergeSelectedIds(new Set());
       setIsMoveMode(false);
+      centerOnNode(targetArgumentId);
       toast.success(`Moved ${count} sub-argument${count > 1 ? 's' : ''}`);
     } catch (error) {
       toast.error('Move failed');
@@ -1675,6 +1678,7 @@ export function ArgumentGraph() {
       setIsMergeMode(false);
       setMergeSelectedIds(new Set());
       setIsConsolidateMode(false);
+      centerOnNode(result.newSubArgument.id);
       toast.success(`Consolidated ${count} sub-arguments`);
     } catch (error) {
       toast.error('Consolidation failed');
@@ -1698,21 +1702,11 @@ export function ArgumentGraph() {
     }
   }, [createArgument, setFocusState]);
 
-  // Compute valid move/consolidate targets (same standard)
+  // Compute valid move/consolidate targets (all arguments)
   const moveTargetArgumentIds = useMemo(() => {
     if ((!isMoveMode && !isConsolidateMode) || mergeSelectedIds.size === 0) return new Set<string>();
-    // Get the locked standard key
-    const firstId = mergeSelectedIds.values().next().value;
-    const sa = contextSubArguments.find(s => s.id === firstId);
-    if (!sa) return new Set<string>();
-    const parentArg = contextArguments.find(a => a.id === sa.argumentId);
-    const lockedStandard = parentArg?.standardKey;
-    if (!lockedStandard) return new Set<string>();
-    // All arguments with same standard are valid targets
-    return new Set(
-      contextArguments.filter(a => a.standardKey === lockedStandard).map(a => a.id)
-    );
-  }, [isMoveMode, isConsolidateMode, mergeSelectedIds, contextSubArguments, contextArguments]);
+    return new Set(contextArguments.map(a => a.id));
+  }, [isMoveMode, isConsolidateMode, mergeSelectedIds, contextArguments]);
 
   // Handle standard selection
   const handleStandardSelect = useCallback((standardId: string) => {
@@ -1866,6 +1860,30 @@ export function ArgumentGraph() {
     const newOffsetY = (containerRect.height / 2) - (targetNode.position.y * targetScale);
     setOffset({ x: newOffsetX, y: newOffsetY });
   }, [standardNodes, setFocusState]);
+
+  // Deferred center: set a pending node ID, effect will center once layout updates
+  const pendingCenterNodeId = useRef<string | null>(null);
+
+  const centerOnNode = useCallback((nodeId: string) => {
+    pendingCenterNodeId.current = nodeId;
+  }, []);
+
+  useEffect(() => {
+    const nodeId = pendingCenterNodeId.current;
+    if (!nodeId || !containerRef.current) return;
+    const target = argumentNodes.find(n => n.id === nodeId)
+      || subArgumentNodes.find(n => n.id === nodeId);
+    if (!target) return;
+
+    pendingCenterNodeId.current = null;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const targetScale = 0.7;
+    setScale(targetScale);
+    setOffset({
+      x: (containerRect.width / 2) - (target.position.x * targetScale),
+      y: (containerRect.height / 2) - (target.position.y * targetScale),
+    });
+  }, [argumentNodes, subArgumentNodes]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
