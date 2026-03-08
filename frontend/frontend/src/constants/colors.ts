@@ -21,6 +21,7 @@ export const STANDARD_COLORS: Record<string, string> = {
   'std-leading': '#EF4444',     // red - (viii) Leading/Critical Role
   'std-salary': '#84CC16',      // lime - (ix) High Salary
   'std-commercial': '#A78BFA',  // violet-400 - (x) Commercial Success
+  'std-overall_merits': '#6B7280', // gray-500 - Overall Merits (Kazarian Step 2)
   // NIW (Dhanasar)
   'std-prong1_merit': '#3B82F6',      // blue - Prong 1: Substantial Merit
   'std-prong2_positioned': '#10B981', // emerald - Prong 2: Well Positioned
@@ -76,6 +77,7 @@ export const STANDARD_KEY_TO_ID: Record<string, string> = {
   'published_material': 'std-published',
   'commercial_success': 'std-commercial',
   'commercial': 'std-commercial',
+  'overall_merits': 'std-overall_merits',
   // NIW (Dhanasar)
   'prong1_merit': 'std-prong1_merit',
   'prong2_positioned': 'std-prong2_positioned',
@@ -86,6 +88,13 @@ export const STANDARD_KEY_TO_ID: Record<string, string> = {
   'executive_capacity': 'std-executive_capacity',
   'qualifying_employment': 'std-qualifying_employment',
 } as const;
+
+// Reverse mapping: standard display ID → backend key (first match wins for aliases)
+export const STANDARD_ID_TO_KEY: Record<string, string> = Object.fromEntries(
+  Object.entries(STANDARD_KEY_TO_ID)
+    .reverse() // prefer canonical keys (first in STANDARD_KEY_TO_ID) over aliases
+    .map(([key, id]) => [id, key])
+);
 
 // Get color for a standardKey (from backend argument)
 export function getStandardKeyColor(standardKey: string): string {

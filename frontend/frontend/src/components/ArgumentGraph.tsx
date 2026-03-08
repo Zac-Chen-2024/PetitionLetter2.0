@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
 import { useLegalStandards } from '../hooks/useLegalStandards';
-import { STANDARD_KEY_TO_ID } from '../constants/colors';
+import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
 import toast from 'react-hot-toast';
 import { apiClient } from '../services/api';
 import StandardActionModal from './StandardActionModal';
@@ -108,6 +108,7 @@ function ArgumentNodeComponent({
   isMoveTarget,
   isMoveMode,
   onMoveTarget,
+  onContextMenu,
 }: DraggableNodeProps & {
   node: ArgumentNode;
   onPositionReport?: (id: string, rect: DOMRect) => void;
@@ -121,6 +122,7 @@ function ArgumentNodeComponent({
   isMoveTarget?: boolean;
   isMoveMode?: boolean;
   onMoveTarget?: (argumentId: string) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const dragStartPos = useRef<Position | null>(null);
@@ -221,6 +223,7 @@ function ArgumentNodeComponent({
         opacity: isMoveMode && !isMoveTarget ? 0.4 : 1,
       }}
       onMouseDown={handleNodeMouseDown}
+      onContextMenu={onContextMenu}
     >
       <div
         className={`
@@ -326,6 +329,7 @@ function ArgumentNodeComponent({
 function StandardNodeComponent({
   node, isSelected, onSelect, onDrag, scale, t,
   onRewrite, onRemove, onAddArgument, isRewriting, hasLetterContent,
+  onContextMenu,
 }: DraggableNodeProps & {
   node: StandardNode;
   t: (key: string, options?: Record<string, unknown>) => string;
@@ -334,6 +338,7 @@ function StandardNodeComponent({
   onAddArgument?: (standardKey: string) => void;
   isRewriting?: boolean;
   hasLetterContent?: boolean;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const dragStartPos = useRef<Position | null>(null);
@@ -387,6 +392,7 @@ function StandardNodeComponent({
         pointerEvents: 'auto',
       }}
       onMouseDown={handleMouseDown}
+      onContextMenu={onContextMenu}
     >
       <div
         className={`
@@ -499,6 +505,7 @@ function SubArgumentNodeComponent({
   mergeChecked,
   mergeDisabled,
   projectId,
+  onContextMenu,
 }: DraggableNodeProps & {
   node: SubArgumentNode;
   t: (key: string, options?: Record<string, unknown>) => string;
@@ -514,6 +521,7 @@ function SubArgumentNodeComponent({
   mergeChecked?: boolean;
   mergeDisabled?: boolean;
   projectId?: string;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -704,6 +712,7 @@ function SubArgumentNodeComponent({
         pointerEvents: 'auto',
       }}
       onMouseDown={handleMouseDown}
+      onContextMenu={onContextMenu}
     >
       <div
         className={`
@@ -944,7 +953,8 @@ function calculateTreeLayout(
   arguments_: Argument[],
   subArguments: SubArgument[],
   savedPositions: Map<string, Position>,
-  legalStandards: import('../types').LegalStandard[]
+  legalStandards: import('../types').LegalStandard[],
+  projectType?: string
 ): { argumentNodes: ArgumentNode[]; standardNodes: StandardNode[]; subArgumentNodes: SubArgumentNode[] } {
   // Position layout with sub-arguments on the left
   const SUBARG_X = 200;          // Base X for sub-arguments
@@ -999,11 +1009,18 @@ function calculateTreeLayout(
   };
 
   // Get standards that have arguments, sorted by argument count (descending)
+  // EB-1A: always include overall_merits (even when empty) as the last standard
   const standardsWithArgs = legalStandards
     .filter(s => {
+      if (projectType === 'EB-1A' && s.id === 'std-overall_merits') return true;
       return Array.from(argumentsByStandard.keys()).some(key => STANDARD_KEY_TO_ID[key] === s.id);
     })
-    .sort((a, b) => getArgumentCount(b.id) - getArgumentCount(a.id));
+    .sort((a, b) => {
+      // overall_merits always last
+      if (a.id === 'std-overall_merits') return 1;
+      if (b.id === 'std-overall_merits') return -1;
+      return getArgumentCount(b.id) - getArgumentCount(a.id);
+    });
 
   // Build nodes with aligned positions:
   // - Arguments for each standard are grouped together
@@ -1023,7 +1040,23 @@ function calculateTreeLayout(
       }
     });
 
-    if (standardArgs.length === 0) return;
+    if (standardArgs.length === 0) {
+      // Empty standard (e.g. overall_merits placeholder) — show as standalone node
+      const savedStandardPos = savedPositions.get(standard.id);
+      standardNodes.push({
+        id: standard.id,
+        type: 'standard' as const,
+        position: savedStandardPos || { x: STANDARD_X, y: currentY },
+        data: {
+          name: standard.name,
+          shortName: standard.shortName,
+          color: standard.color,
+          argumentCount: 0,
+        },
+      });
+      currentY += BETWEEN_GROUP_GAP;
+      return;
+    }
 
     // Calculate how far the first arg's sub-args extend above its center
     const firstArgTopExtent = getArgumentHeight(standardArgs[0].id) / 2;
@@ -1210,6 +1243,7 @@ export function ArgumentGraph() {
     createArgument,
     rewriteStandard,
     removeStandard,
+    moveToOverallMerits,
     removeArgument,
     updateArgument,
     letterSections,
@@ -1218,10 +1252,13 @@ export function ArgumentGraph() {
     setWritingTreePanelBounds,
     writingTreePanelBounds,
     workMode,
+    projectType,
   } = useApp();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.7);  // Start at 70% zoom
+  const scaleRef = useRef(0.7);
+  const offsetRef = useRef<Position>({ x: 0, y: 0 });
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -1246,11 +1283,29 @@ export function ArgumentGraph() {
   // Consolidate mode state (within merge mode)
   const [isConsolidateMode, setIsConsolidateMode] = useState(false);
   const [isConsolidating, setIsConsolidating] = useState(false);
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number; y: number;
+    nodeType: 'standard' | 'argument' | 'subargument';
+    nodeId: string;
+    standardKey?: string;
+  } | null>(null);
+  // Overall Merits move confirmation
+  const [omMoveConfirm, setOmMoveConfirm] = useState<{
+    level: 'standard' | 'argument' | 'subargument';
+    targetId: string;
+    label: string;
+  } | null>(null);
+  const [isMovingToOM, setIsMovingToOM] = useState(false);
   const panStartPos = useRef<Position | null>(null);
   const offsetStartPos = useRef<Position | null>(null);
 
   // Transform version - increments on scale/offset changes to trigger position updates
   const [transformVersion, setTransformVersion] = useState(0);
+
+  // Keep refs in sync with state
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
 
   // Update transformVersion when scale, offset, or workMode changes
   // workMode change causes layout shift — nodes need to re-report positions
@@ -1263,7 +1318,8 @@ export function ArgumentGraph() {
     contextArguments,
     contextSubArguments,
     argumentGraphPositions,
-    legalStandards
+    legalStandards,
+    projectType
   );
 
   // Which standards have generated letter content
@@ -1558,6 +1614,66 @@ export function ArgumentGraph() {
     }
   }, [removeModalStandardKey, removeStandard]);
 
+  // ==================== Context Menu & Overall Merits ====================
+
+  const handleContextMenu = useCallback((
+    e: React.MouseEvent,
+    nodeType: 'standard' | 'argument' | 'subargument',
+    nodeId: string,
+    standardKey?: string
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, nodeType, nodeId, standardKey });
+  }, []);
+
+  const handleContextMenuMoveToOM = useCallback(() => {
+    if (!contextMenu) return;
+    const { nodeType, nodeId, standardKey } = contextMenu;
+    let label = '';
+    if (nodeType === 'standard') {
+      label = `all arguments under "${(standardKey || nodeId).replace(/_/g, ' ')}"`;
+    } else if (nodeType === 'argument') {
+      const arg = contextArguments.find(a => a.id === nodeId);
+      label = `argument "${arg?.title || nodeId}"`;
+    } else {
+      const sa = contextSubArguments.find(s => s.id === nodeId);
+      label = `sub-argument "${sa?.title || nodeId}"`;
+    }
+    // For standard nodes, convert display ID (std-awards) to backend key (awards)
+    const rawTargetId = nodeType === 'standard'
+      ? (STANDARD_ID_TO_KEY[standardKey || nodeId] || standardKey || nodeId)
+      : nodeId;
+    setOmMoveConfirm({
+      level: nodeType,
+      targetId: rawTargetId,
+      label,
+    });
+    setContextMenu(null);
+  }, [contextMenu, contextArguments, contextSubArguments]);
+
+  const handleOmMoveConfirm = useCallback(async () => {
+    if (!omMoveConfirm) return;
+    setIsMovingToOM(true);
+    try {
+      await moveToOverallMerits(omMoveConfirm.level, omMoveConfirm.targetId);
+      toast.success(`Moved ${omMoveConfirm.label} to Overall Merits`);
+      setOmMoveConfirm(null);
+    } catch (err) {
+      toast.error('Failed to move to Overall Merits');
+    } finally {
+      setIsMovingToOM(false);
+    }
+  }, [omMoveConfirm, moveToOverallMerits]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [contextMenu]);
+
   // ==================== Merge Mode Logic ====================
 
   // Determine which standard_key the first selected sub-arg belongs to (for same-standard constraint)
@@ -1765,9 +1881,27 @@ export function ArgumentGraph() {
     };
   }, [isPanning]);
 
-  // Handle zoom
+  // Handle zoom (toolbar +/- buttons) — zoom toward container center
   const handleZoom = useCallback((delta: number) => {
-    setScale(prev => Math.max(0.5, Math.min(2, prev + delta)));
+    const container = containerRef.current;
+    const oldScale = scaleRef.current;
+    const oldOffset = offsetRef.current;
+    const newScale = Math.max(0.5, Math.min(2, oldScale + delta));
+    if (newScale === oldScale) return;
+
+    if (!container) {
+      setScale(newScale);
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const ratio = newScale / oldScale;
+    setScale(newScale);
+    setOffset({
+      x: cx - (cx - oldOffset.x) * ratio,
+      y: cy - (cy - oldOffset.y) * ratio,
+    });
   }, []);
 
   // Handle auto-arrange nodes
@@ -1777,11 +1911,28 @@ export function ArgumentGraph() {
     setOffset({ x: 0, y: 0 });
   }, [clearArgumentGraphPositions]);
 
-  // Handle mouse wheel zoom
+  // Handle mouse wheel zoom — zoom toward mouse cursor
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const oldScale = scaleRef.current;
+    const oldOffset = offsetRef.current;
     const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setScale(prev => Math.max(0.5, Math.min(2, prev + delta)));
+    const newScale = Math.max(0.5, Math.min(2, oldScale + delta));
+    if (newScale === oldScale) return;
+
+    const ratio = newScale / oldScale;
+    setScale(newScale);
+    setOffset({
+      x: mx - (mx - oldOffset.x) * ratio,
+      y: my - (my - oldOffset.y) * ratio,
+    });
   }, []);
 
   useEffect(() => {
@@ -2124,6 +2275,10 @@ export function ArgumentGraph() {
                   mergeChecked={isMergeChecked}
                   mergeDisabled={isMergeDisabled}
                   projectId={projectId}
+                  onContextMenu={(e) => {
+                    const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
+                    handleContextMenu(e, 'subargument', node.id, parentArg?.standardKey);
+                  }}
                 />
               );
             })}
@@ -2148,6 +2303,7 @@ export function ArgumentGraph() {
                 isMoveMode={isMoveMode || isConsolidateMode}
                 isMoveTarget={moveTargetArgumentIds.has(node.id)}
                 onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
+                onContextMenu={(e) => handleContextMenu(e, 'argument', node.id, node.data.standardKey)}
               />
             ))}
 
@@ -2166,6 +2322,7 @@ export function ArgumentGraph() {
                 onAddArgument={handleAddArgument}
                 isRewriting={rewritingStandardKey === node.id}
                 hasLetterContent={generatedStandardIds.has(node.id)}
+                onContextMenu={(e) => handleContextMenu(e, 'standard', node.id, node.id)}
               />
             ))}
           </div>
@@ -2410,6 +2567,84 @@ export function ArgumentGraph() {
                   className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
                 >
                   {t('graph.batchDelete.confirm', { defaultValue: 'Delete {{count}}', count: mergeSelectedIds.size })}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <Portal>
+          <div
+            className="fixed z-[9999] bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[200px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* "Move to Overall Merits" — only for EB-1A, and not for nodes already in OM */}
+            {projectType === 'EB-1A' && (STANDARD_ID_TO_KEY[contextMenu.standardKey || ''] || contextMenu.standardKey) !== 'overall_merits' && (
+              <>
+                <button
+                  onClick={handleContextMenuMoveToOM}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <span className="text-gray-500">&#x2192;</span>
+                  Move to Overall Merits
+                </button>
+                <div className="border-t border-slate-100 my-1" />
+              </>
+            )}
+            <button
+              onClick={() => {
+                if (contextMenu.nodeType === 'standard' && contextMenu.standardKey) {
+                  setRemoveModalStandardKey(contextMenu.standardKey);
+                } else if (contextMenu.nodeType === 'argument') {
+                  setDeleteArgModalId(contextMenu.nodeId);
+                } else if (contextMenu.nodeType === 'subargument') {
+                  setDeleteSubArgModalId(contextMenu.nodeId);
+                }
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+            >
+              <span>&#x1F5D1;</span>
+              Remove {contextMenu.nodeType === 'standard' ? 'Standard' : contextMenu.nodeType === 'argument' ? 'Argument' : 'Sub-argument'}
+            </button>
+          </div>
+        </Portal>
+      )}
+
+      {/* Overall Merits move confirmation modal */}
+      {omMoveConfirm && (
+        <Portal>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
+            <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md mx-4">
+              <h3 className="text-lg font-semibold text-slate-800 mb-2">
+                Move to Overall Merits
+              </h3>
+              <p className="text-sm text-slate-600 mb-4">
+                Move {omMoveConfirm.label} to the <span className="font-medium text-gray-700">Overall Merits</span> section
+                (Kazarian Step 2 — Final Merits Determination)?
+              </p>
+              <p className="text-xs text-slate-500 mb-4">
+                The content will be removed from its current criterion and appear under Overall Merits.
+                All evidence references (snippet_ids, exhibit_refs) will be preserved.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setOmMoveConfirm(null)}
+                  disabled={isMovingToOM}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleOmMoveConfirm}
+                  disabled={isMovingToOM}
+                  className="px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
+                >
+                  {isMovingToOM ? 'Moving...' : 'Move to Overall Merits'}
                 </button>
               </div>
             </div>

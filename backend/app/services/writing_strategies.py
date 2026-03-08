@@ -551,6 +551,35 @@ _EB1A_APPENDICES: Dict[str, str] = {
         "critical reception → sustained performance over time\n"
         "Evidence of commercial successes in the performing arts."
     ),
+    "overall_merits": (
+        "\nOVERALL MERITS — FINAL MERITS DETERMINATION (Kazarian Step 2):\n\n"
+        "LEGAL FRAMEWORK:\n"
+        "Under Kazarian v. USCIS, 596 F.3d 1115 (9th Cir. 2010), after the Beneficiary\n"
+        "has satisfied the initial evidentiary threshold (at least three of the ten criteria\n"
+        "under 8 C.F.R. §204.5(h)(3)), the adjudicator must conduct a final merits\n"
+        "determination to evaluate whether the TOTALITY of the evidence demonstrates\n"
+        "sustained national or international acclaim and that the Beneficiary is among\n"
+        "the small percentage at the very top of the field.\n\n"
+        "STRUCTURE (mandatory):\n"
+        "1. TOTALITY DECLARATION — Open with a statement summarizing ALL criteria already\n"
+        "   established in earlier sections. Reference each criterion by name and its key\n"
+        "   achievement (1-2 sentences per criterion).\n"
+        "2. SUPPLEMENTAL EVIDENCE BY THEME — For each piece of supplemental evidence moved\n"
+        "   into this section, argue how it REINFORCES the overall picture of acclaim.\n"
+        "   Cross-reference criteria where the same evidence supports multiple standards.\n"
+        "3. SYNTHESIS — Draw connections across criteria: how awards corroborate leadership,\n"
+        "   how publications validate original contributions, how judging roles confirm\n"
+        "   peer recognition, etc.\n"
+        "4. TOTALITY CONCLUSION — Conclude that, taken together, the evidence unmistakably\n"
+        "   places the Beneficiary among the small percentage at the very top of the field\n"
+        "   with sustained national/international acclaim.\n\n"
+        "CROSS-REFERENCE RULES:\n"
+        "- When referencing criteria established in earlier sections, if the SAME exhibit\n"
+        "  appears in your SNIPPET INDEX, cite it normally with [Exhibit X, p.Y].\n"
+        "- If the exhibit is NOT in your SNIPPET INDEX, restate the fact WITHOUT any\n"
+        "  exhibit citation — just write the sentence naturally.\n"
+        "- NEVER fabricate citation formats like [Cross-reference Section X] or [See above].\n"
+    ),
 }
 
 
@@ -662,6 +691,23 @@ _EB1A_STRATEGIES: Dict[str, WritingStrategy] = {
         "8 C.F.R. §204.5(h)(3)(x)",
         "revenue/sales → market benchmarks → critical reception → sustained performance",
         (3, 5),
+    ),
+    "overall_merits": WritingStrategy(
+        project_type="EB-1A",
+        standard_key="overall_merits",
+        legal_ref="8 C.F.R. §204.5(h)(2) & Kazarian v. USCIS, 596 F.3d 1115 (9th Cir. 2010)",
+        step1_base_system_prompt=_EB1A_BASE_SYSTEM_PROMPT,
+        step1_argumentation_appendix=_EB1A_APPENDICES.get("overall_merits", ""),
+        step1_instruction_block=_eb1a_instruction(
+            "totality declaration (list all established criteria) → supplemental evidence by theme → "
+            "cross-criteria synthesis (connect awards to leadership, publications to contributions, etc.) → "
+            "totality conclusion (small percentage at top of field + sustained acclaim)",
+            (4, 8),
+        ),
+        sentence_range=(4, 8),
+        polish_single_subarg=False,
+        frame_system_prompt=_EB1A_FRAME_SYSTEM_PROMPT,
+        cross_section_context=True,
     ),
 }
 

@@ -648,6 +648,130 @@ async def remove_standard_endpoint(
     return result
 
 
+class MoveToOverallMeritsRequest(BaseModel):
+    level: str  # "standard" | "argument" | "subargument"
+    target_id: str  # standard_key, argument_id, or subargument_id
+
+
+@router.post("/{project_id}/move-to-overall-merits")
+async def move_to_overall_merits(project_id: str, request: MoveToOverallMeritsRequest):
+    """
+    Move a Standard / Argument / SubArgument into the Overall Merits section.
+
+    - standard level: all arguments under that standard_key are moved
+    - argument level: single argument is moved
+    - subargument level: single sub-argument is moved (creates/joins an OM argument)
+    """
+    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
+    import uuid as _uuid
+
+    if request.level not in ("standard", "argument", "subargument"):
+        raise HTTPException(status_code=400, detail=f"Invalid level: {request.level}")
+
+    legal_args = load_legal_arguments(project_id)
+    arguments = legal_args.get("arguments", [])
+    sub_arguments = legal_args.get("sub_arguments", [])
+
+    moved_argument_ids = []
+    moved_subargument_ids = []
+
+    if request.level == "standard":
+        # Move all arguments under this standard_key
+        standard_key = request.target_id
+        if standard_key == "overall_merits":
+            raise HTTPException(status_code=400, detail="Cannot move overall_merits into itself")
+        for arg in arguments:
+            if arg.get("standard_key") == standard_key:
+                arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
+                arg["standard_key"] = "overall_merits"
+                if "standard" in arg:
+                    arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
+                    arg["standard"] = "overall_merits"
+                moved_argument_ids.append(arg["id"])
+
+    elif request.level == "argument":
+        # Move single argument
+        arg_id = request.target_id
+        for arg in arguments:
+            if arg.get("id") == arg_id:
+                if arg.get("standard_key") == "overall_merits":
+                    raise HTTPException(status_code=400, detail="Argument is already in Overall Merits")
+                arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
+                arg["standard_key"] = "overall_merits"
+                if "standard" in arg:
+                    arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
+                    arg["standard"] = "overall_merits"
+                moved_argument_ids.append(arg["id"])
+                break
+        else:
+            raise HTTPException(status_code=404, detail=f"Argument not found: {arg_id}")
+
+    elif request.level == "subargument":
+        # Move single sub-argument into an overall_merits argument
+        subarg_id = request.target_id
+        target_subarg = None
+        parent_arg = None
+        for sa in sub_arguments:
+            if sa.get("id") == subarg_id:
+                target_subarg = sa
+                break
+        if not target_subarg:
+            raise HTTPException(status_code=404, detail=f"SubArgument not found: {subarg_id}")
+
+        # Find parent argument
+        for arg in arguments:
+            if subarg_id in arg.get("sub_argument_ids", []):
+                parent_arg = arg
+                break
+
+        if parent_arg and parent_arg.get("standard_key") == "overall_merits":
+            raise HTTPException(status_code=400, detail="SubArgument is already in Overall Merits")
+
+        # Remove from parent argument's sub_argument_ids
+        if parent_arg:
+            parent_arg["sub_argument_ids"] = [
+                sid for sid in parent_arg.get("sub_argument_ids", [])
+                if sid != subarg_id
+            ]
+
+        # Find or create an overall_merits argument to house this sub-argument
+        om_arg = None
+        original_std = parent_arg.get("standard_key", "unknown") if parent_arg else "unknown"
+        for arg in arguments:
+            if arg.get("standard_key") == "overall_merits":
+                om_arg = arg
+                break
+
+        if not om_arg:
+            om_arg = {
+                "id": f"arg-om-{_uuid.uuid4().hex[:8]}",
+                "title": "Supplemental Evidence — Overall Merits",
+                "standard_key": "overall_merits",
+                "standard": "overall_merits",
+                "original_standard": "overall_merits",
+                "sub_argument_ids": [],
+                "snippet_ids": [],
+                "is_ai_generated": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            arguments.append(om_arg)
+
+        om_arg["sub_argument_ids"].append(subarg_id)
+        # Tag the sub-argument with its original standard for cross-reference
+        target_subarg["original_standard"] = original_std
+        moved_subargument_ids.append(subarg_id)
+
+    legal_args["arguments"] = arguments
+    legal_args["sub_arguments"] = sub_arguments
+    save_legal_arguments(project_id, legal_args)
+
+    return {
+        "success": True,
+        "moved_argument_ids": moved_argument_ids,
+        "moved_subargument_ids": moved_subargument_ids,
+    }
+
+
 @router.post("/{project_id}/infer-relationship")
 async def infer_subargument_relationship(
     project_id: str,

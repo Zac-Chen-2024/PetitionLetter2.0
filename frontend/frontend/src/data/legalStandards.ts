@@ -90,6 +90,14 @@ export const legalStandards: LegalStandard[] = [
     color: STANDARD_COLORS['std-commercial'] || '#A78BFA',  // violet-400
     order: 10,
   },
+  {
+    id: 'std-overall_merits',
+    name: 'Overall Merits — Final Merits Determination',
+    shortName: 'Overall Merits',
+    description: 'Totality of evidence demonstrating sustained national/international acclaim (Kazarian Step 2)',
+    color: STANDARD_COLORS['std-overall_merits'] || '#6B7280',  // gray-500
+    order: 11,
+  },
 ];
 
 // Helper to get standard by ID

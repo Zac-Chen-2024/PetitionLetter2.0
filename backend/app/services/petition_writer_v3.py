@@ -281,17 +281,103 @@ def _get_standard_display_name(standard_key: str) -> str:
     return standard_key
 
 
-def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[str]:
+def _build_criteria_summary(project_id: str) -> Optional[str]:
     """
-    Build cross-prong context for Prong 3 waiver arguments.
+    Build cross-criteria context for Overall Merits (Kazarian Step 2).
 
-    Only activates for prong3_balance. Loads prong1/prong2 writing outputs
-    and extracts representative sentences so the LLM can cross-reference
-    accomplishments when arguing the waiver.
+    Reads all completed criterion writing outputs and extracts 1-2 key
+    achievement sentences per criterion as bullet points for the LLM.
 
     Returns:
-        Formatted summary string, or None if no prior prong data available.
+        Formatted summary string, or None if no criteria writing available.
     """
+    from .standards_registry import EB1A_LEGAL_STANDARDS
+
+    criteria_summaries = []
+
+    for std_def in EB1A_LEGAL_STANDARDS:
+        if std_def.key == "overall_merits":
+            continue
+
+        writing = load_latest_writing_v3(project_id, std_def.key)
+        if writing and writing.get("sentences"):
+            body_sents = [
+                s for s in writing["sentences"]
+                if s.get("sentence_type") == "body" and s.get("text")
+            ]
+            if body_sents:
+                # Extract first 2 sentences of each sub-argument (max 6 per criterion)
+                seen_subargs: Dict[str, int] = {}
+                representative = []
+                for s in body_sents:
+                    sa_id = s.get("subargument_id", "")
+                    count = seen_subargs.get(sa_id, 0)
+                    if count < 2:
+                        seen_subargs[sa_id] = count + 1
+                        representative.append(s["text"])
+                    if len(representative) >= 6:
+                        break
+                criteria_summaries.append(
+                    f"  {std_def.name} [{std_def.key}]:\n" +
+                    "\n".join(f"    - {sent}" for sent in representative)
+                )
+                continue
+
+        # Fallback: argument/sub-argument titles
+        legal_args = load_legal_arguments(project_id)
+        if legal_args:
+            arguments = legal_args.get("arguments", [])
+            sub_arguments = legal_args.get("sub_arguments", [])
+            std_args = [
+                a for a in arguments
+                if a.get("standard_key") == std_def.key or a.get("standard") == std_def.key
+            ]
+            if std_args:
+                lines = []
+                for arg in std_args:
+                    lines.append(f"    Argument: {arg.get('title', '')}")
+                    arg_subargs = [
+                        sa for sa in sub_arguments
+                        if sa.get("argument_id") == arg.get("id")
+                    ]
+                    for sa in arg_subargs:
+                        lines.append(f"      - {sa.get('title', '')}")
+                criteria_summaries.append(
+                    f"  {std_def.name} [{std_def.key}] (titles only — writing not yet generated):\n" +
+                    "\n".join(lines)
+                )
+
+    if not criteria_summaries:
+        return None
+
+    return (
+        "=== CROSS-CRITERIA CONTEXT (criteria already established in the petition) ===\n"
+        "Reference these accomplishments when arguing the TOTALITY of evidence.\n\n"
+        + "\n\n".join(criteria_summaries) +
+        "\n\n"
+        "CROSS-REFERENCE RULES:\n"
+        "- When referencing criteria accomplishments, if the SAME exhibit appears in your\n"
+        "  SNIPPET INDEX above, cite it normally with [Exhibit X, p.Y] and snippet_ids.\n"
+        "- If the exhibit is NOT in your SNIPPET INDEX, restate the fact WITHOUT any\n"
+        "  exhibit citation — just write the sentence naturally.\n"
+        "- NEVER fabricate citation formats like [Cross-reference Section X] or [See above].\n"
+        "=== END CROSS-CRITERIA CONTEXT ==="
+    )
+
+
+def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[str]:
+    """
+    Build cross-section context for standards that need it.
+
+    - prong3_balance: references prong1/prong2 writing
+    - overall_merits: references all EB-1A criteria writing
+
+    Returns:
+        Formatted summary string, or None if no prior data available.
+    """
+    if standard_key == "overall_merits":
+        return _build_criteria_summary(project_id)
+
     if standard_key != "prong3_balance":
         return None
 
@@ -367,10 +453,17 @@ def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[s
     )
 
 
-def _load_cross_prong_exhibits(project_id: str) -> Dict[str, str]:
+def _load_cross_prong_exhibits(
+    project_id: str,
+    standard_key: str = "prong3_balance"
+) -> Dict[str, str]:
     """
-    Load exhibit OCR text referenced by prong1/prong2 arguments.
-    Used to give prong3 writing access to full source materials from earlier prongs.
+    Load exhibit OCR text referenced by other sections' arguments.
+
+    - prong3_balance: loads exhibits from prong1/prong2
+    - overall_merits: loads exhibits from all non-overall_merits EB-1A criteria
+
+    Used to give the writing section access to full source materials from prior sections.
     """
     legal_args = load_legal_arguments(project_id)
     if not legal_args:
@@ -379,11 +472,23 @@ def _load_cross_prong_exhibits(project_id: str) -> Dict[str, str]:
     arguments = legal_args.get("arguments", [])
     sub_arguments = legal_args.get("sub_arguments", [])
 
-    # Collect exhibit + page refs from prong1/prong2
+    # Determine which standards to collect exhibits from
+    if standard_key == "overall_merits":
+        include_standards = None  # include all non-overall_merits
+    else:
+        include_standards = {"prong1_merit", "prong2_positioned"}
+
+    # Collect exhibit + page refs
     exhibit_pages: Dict[str, set] = defaultdict(set)
     for arg in arguments:
-        if arg.get("standard") not in ("prong1_merit", "prong2_positioned"):
-            continue
+        arg_std = arg.get("standard_key") or arg.get("standard", "")
+        if include_standards is not None:
+            if arg_std not in include_standards:
+                continue
+        else:
+            # overall_merits mode: skip the section itself
+            if arg_std == "overall_merits":
+                continue
         arg_subs = [sa for sa in sub_arguments if sa.get("argument_id") == arg["id"]]
         for sa in arg_subs:
             for snip in sa.get("snippets", []):
@@ -1859,7 +1964,7 @@ async def write_petition_section_v3(
     cross_prong_exhibit_texts: Dict[str, str] = {}
     if strategy.cross_section_context:
         cross_prong_context = _build_cross_prong_summary(project_id, standard_key)
-        cross_prong_exhibit_texts = _load_cross_prong_exhibits(project_id)
+        cross_prong_exhibit_texts = _load_cross_prong_exhibits(project_id, standard_key)
         if cross_prong_context:
             logger.info(
                 f"Step1: Loaded cross-section context + "

@@ -97,6 +97,12 @@ STANDARD_SUBDIVISION_GUIDANCE = {
         "education/background, employment history/positions abroad, achievements/contracts/growth, "
         "subordinate management/team credentials."
     ),
+    # EB-1A overall merits (Kazarian Step 2)
+    "overall_merits": (
+        "Split by EVIDENCE THEME. Each sub-argument = one type of supplemental evidence: "
+        "awards/recognition, speaking engagements, editorial roles, commercial endorsements, "
+        "expert testimonials, international engagements. Group related evidence together."
+    ),
     # NIW prong guidance (fallback safety net — NIW v2 normally bypasses subdivide)
     "prong1_merit": (
         "Split by theme: endeavor description, merit evidence, national importance, "
@@ -310,6 +316,7 @@ def _create_single_subarg(argument_id: str, snippets: List[Dict], standard: str)
         "display": "Shows exhibition display",
         "high_salary": "Proves high remuneration",
         "commercial_success": "Demonstrates commercial success",
+        "overall_merits": "Supports overall merits determination",
         "qualifying_relationship": "Proves qualifying corporate relationship",
         "doing_business": "Demonstrates active business operations",
         "executive_capacity": "Shows executive/managerial capacity",

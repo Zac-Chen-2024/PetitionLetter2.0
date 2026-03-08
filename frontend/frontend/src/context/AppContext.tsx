@@ -191,6 +191,14 @@ export function useApp() {
     return args.createArgument(standardKey, project.projectId);
   }, [args.createArgument, project.projectId]);
 
+  // moveToOverallMerits: facade binds projectId
+  const moveToOverallMerits = useCallback(async (
+    level: 'standard' | 'argument' | 'subargument',
+    targetId: string
+  ) => {
+    return args.moveToOverallMerits(level, targetId, project.projectId);
+  }, [args.moveToOverallMerits, project.projectId]);
+
   // Exploration writing: sync new snippet_ids discovered during writing back to subarguments
   const handleSubArgSnippetsUpdated = useCallback((updates: Record<string, string[]>) => {
     for (const [subArgId, snippetIds] of Object.entries(updates)) {
@@ -318,6 +326,7 @@ export function useApp() {
     moveSubArguments,
     consolidateSubArguments,
     createArgument,
+    moveToOverallMerits,
     isGeneratingArguments: args.isGeneratingArguments,
     generateArguments,
     generatedMainSubject: args.generatedMainSubject,
@@ -404,7 +413,7 @@ export function useApp() {
     extractionProgress: writing.extractionProgress,
   }), [
     project, snippets, args, ui, writing,
-    generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument,
+    generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits,
     rewriteStandard, removeStandard,
     removeArgument, commitChanges, extractSnippets, confirmAllMappings, generatePetition,
     reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges,

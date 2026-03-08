@@ -121,6 +121,14 @@ EB1A_LEGAL_STANDARDS = [
         color="#A78BFA",
         order=10,
     ),
+    LegalStandardDef(
+        key="overall_merits",
+        name="Overall Merits — Final Merits Determination",
+        short_name="Overall Merits",
+        description="Totality of evidence demonstrating sustained national/international acclaim (Kazarian Step 2)",
+        color="#6B7280",
+        order=11,
+    ),
 ]
 
 

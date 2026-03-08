@@ -201,6 +201,22 @@ Argumentation structure:
 - Media or industry recognition of commercial success
 """,
     },
+    "overall_merits": {
+        "citation": "8 C.F.R. §204.5(h)(2) & Kazarian v. USCIS, 596 F.3d 1115 (9th Cir. 2010)",
+        "name": "Final Merits Determination — Overall Merits",
+        "requirements": """
+Legal framework (Kazarian Step 2):
+After demonstrating eligibility under at least three of the ten criteria,
+the totality of evidence must demonstrate sustained national or international acclaim
+and that the beneficiary is among the small percentage at the very top of the field.
+
+Argumentation structure:
+- Totality declaration referencing all established criteria
+- Cross-criteria synthesis of supplemental evidence by theme
+- Expert testimonials and recognition spanning multiple criteria
+- Comprehensive conclusion tying all evidence to sustained acclaim
+""",
+    },
 }
 
 

@@ -302,8 +302,9 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       'awards', 'membership', 'published_material', 'judging',
       'original_contribution', 'scholarly_articles', 'leading_role', 'exhibitions'
     ];
+    // overall_merits is excluded from batch generation — it's manually triggered from canvas
     const standardsToGenerate = arguments_?.length
-      ? [...new Set(arguments_.filter(a => a.standardKey).map(a => a.standardKey!))]
+      ? [...new Set(arguments_.filter(a => a.standardKey && a.standardKey !== 'overall_merits').map(a => a.standardKey!))]
           .sort((a, b) => allStandards.indexOf(a) - allStandards.indexOf(b))
       : allStandards;
 

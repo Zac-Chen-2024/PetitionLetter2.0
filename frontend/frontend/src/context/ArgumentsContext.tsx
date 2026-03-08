@@ -98,6 +98,7 @@ export interface ArgumentsContextType {
   moveSubArguments: (subArgumentIds: string[], targetArgumentId: string, projectId: string) => Promise<void>;
   consolidateSubArguments: (subArgumentIds: string[], targetArgumentId: string, projectId: string, llmProvider: string) => Promise<{ newSubArgument: SubArgument; deletedSubArgumentIds: string[] }>;
   createArgument: (standardKey: string, projectId: string) => Promise<Argument>;
+  moveToOverallMerits: (level: 'standard' | 'argument' | 'subargument', targetId: string, projectId: string) => Promise<void>;
   removeStandard: (standardKey: string, projectId: string) => Promise<void>;
   isGeneratingArguments: boolean;
   generateArguments: (projectId: string, llmProvider: string, forceReanalyze?: boolean, applicantName?: string) => Promise<void>;
@@ -537,6 +538,49 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     return newArg;
   }, []);
 
+  // Move to Overall Merits
+  const moveToOverallMerits = useCallback(async (
+    level: 'standard' | 'argument' | 'subargument',
+    targetId: string,
+    projectId: string
+  ) => {
+    const response = await apiClient.post<{
+      success: boolean;
+      moved_argument_ids: string[];
+      moved_subargument_ids: string[];
+    }>(`/arguments/${projectId}/move-to-overall-merits`, {
+      level,
+      target_id: targetId,
+    });
+
+    if (!response.success) {
+      throw new Error('Failed to move to Overall Merits');
+    }
+
+    // Optimistic update: change standardKey for moved arguments
+    if (response.moved_argument_ids.length > 0) {
+      setArguments(prev => prev.map(arg =>
+        response.moved_argument_ids.includes(arg.id)
+          ? { ...arg, standardKey: 'overall_merits' }
+          : arg
+      ));
+    }
+
+    // For subargument-level moves, re-fetch to get accurate state
+    if (response.moved_subargument_ids.length > 0) {
+      try {
+        const freshData = await apiClient.get<{
+          arguments: BackendArgument[];
+          sub_arguments: BackendSubArgument[];
+        }>(`/arguments/${projectId}`);
+        setArguments(convertBackendArguments(freshData.arguments || []));
+        setSubArguments(convertBackendSubArguments(freshData.sub_arguments || []));
+      } catch {
+        // Optimistic fallback — at least the backend is correct
+      }
+    }
+  }, []);
+
   // AI Argument Generation
   const generateArguments = useCallback(async (
     projectId: string,
@@ -643,10 +687,11 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     moveSubArguments,
     consolidateSubArguments,
     createArgument,
+    moveToOverallMerits,
     isGeneratingArguments,
     generateArguments,
     generatedMainSubject,
-  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, generateArguments]);
+  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits, generateArguments]);
 
   return <ArgumentsContext.Provider value={value}>{children}</ArgumentsContext.Provider>;
 }
