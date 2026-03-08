@@ -15,7 +15,16 @@ from typing import List, Dict, Optional, Tuple
 from difflib import SequenceMatcher
 
 from .snippet_registry import load_registry, get_snippet_by_id
+from .unified_extractor import load_combined_extraction
 from .petition_writer import load_constrained_writing, load_all_constrained_writing
+
+
+def _load_snippet_data(project_id: str):
+    """优先从 combined_extraction 加载 snippet，fallback 到 registry。"""
+    combined = load_combined_extraction(project_id)
+    if combined and combined.get("snippets"):
+        return combined["snippets"]
+    return load_registry(project_id)
 
 
 def resolve_provenance(
@@ -76,9 +85,9 @@ def resolve_provenance(
     sentence_text = sentence.get("text", "")
     explicit_ids = sentence.get("snippet_ids", [])
 
-    # 加载 snippet 注册表
-    snippet_registry = load_registry(project_id)
-    snippet_map = {s["snippet_id"]: s for s in snippet_registry}
+    # 加载 snippet 数据（优先 combined_extraction）
+    snippet_list = _load_snippet_data(project_id)
+    snippet_map = {s["snippet_id"]: s for s in snippet_list}
 
     results = []
 
@@ -103,7 +112,7 @@ def resolve_provenance(
         if len(results) < 2:
             semantic_matches = _semantic_match(
                 sentence_text,
-                snippet_registry,
+                snippet_list,
                 exclude_ids=set(explicit_ids),
                 top_k=5 - len(results)
             )
@@ -231,8 +240,8 @@ def get_bbox_for_snippets(
             }
         ]
     """
-    snippet_registry = load_registry(project_id)
-    snippet_map = {s["snippet_id"]: s for s in snippet_registry}
+    snippet_list = _load_snippet_data(project_id)
+    snippet_map = {s["snippet_id"]: s for s in snippet_list}
 
     results = []
     for sid in snippet_ids:

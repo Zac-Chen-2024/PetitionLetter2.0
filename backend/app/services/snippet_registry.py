@@ -285,3 +285,53 @@ def get_registry_stats(project_id: str) -> Dict:
         "with_bbox": with_bbox,
         "bbox_coverage": round(with_bbox / len(snippets) * 100, 1) if snippets else 0
     }
+
+
+def build_registry_from_combined_extraction(project_id: str) -> List[Dict]:
+    """从 combined_extraction.json 同步 snippet 到 registry.json
+
+    确保 provenance_engine 和 petition_writer 读同一份数据。
+    snippet_id 保持不变（已在 unified_extractor 中确定性生成）。
+    """
+    extraction_dir = PROJECTS_DIR / project_id / "extraction"
+    combined_file = extraction_dir / "combined_extraction.json"
+
+    if not combined_file.exists():
+        return []
+
+    with open(combined_file, 'r', encoding='utf-8') as f:
+        combined = json.load(f)
+
+    raw_snippets = combined.get("snippets", [])
+    if not raw_snippets:
+        return []
+
+    # 转为 registry 格式（保留 snippet_id，补齐 registry 字段）
+    registry_snippets = []
+    seen_ids = set()
+
+    for s in raw_snippets:
+        sid = s.get("snippet_id", "")
+        if not sid or sid in seen_ids:
+            continue
+        seen_ids.add(sid)
+
+        # 标准化 bbox
+        bbox = s.get("bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            bbox = {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]}
+
+        registry_snippets.append({
+            "snippet_id": sid,
+            "document_id": s.get("document_id", ""),
+            "exhibit_id": s.get("exhibit_id", ""),
+            "material_id": s.get("material_id", ""),
+            "text": s.get("text", ""),
+            "page": s.get("page", 0),
+            "bbox": bbox,
+            "standard_key": s.get("evidence_type", ""),
+            "source_block_ids": [s.get("block_id", "")] if s.get("block_id") else []
+        })
+
+    save_registry(project_id, registry_snippets)
+    return registry_snippets

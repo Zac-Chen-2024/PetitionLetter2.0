@@ -1367,15 +1367,15 @@ async def full_legal_pipeline(
     projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
     project_dir = projects_dir / project_id
 
-    enriched_file = project_dir / "enriched" / "enriched_snippets.json"
     combined_file = project_dir / "extraction" / "combined_extraction.json"
-    if enriched_file.exists():
-        with open(enriched_file, 'r', encoding='utf-8') as f:
+    enriched_file = project_dir / "enriched" / "enriched_snippets.json"
+    if combined_file.exists():
+        # Prefer combined extraction (same source as frontend API, consistent IDs)
+        with open(combined_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         snippets = data.get('snippets', [])
-    elif combined_file.exists():
-        # Use combined extraction (same source as frontend API)
-        with open(combined_file, 'r', encoding='utf-8') as f:
+    elif enriched_file.exists():
+        with open(enriched_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         snippets = data.get('snippets', [])
     else:
@@ -1495,14 +1495,14 @@ async def regenerate_standard_pipeline(
     projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
     project_dir = projects_dir / project_id
 
-    enriched_file = project_dir / "enriched" / "enriched_snippets.json"
     combined_file = project_dir / "extraction" / "combined_extraction.json"
-    if enriched_file.exists():
-        with open(enriched_file, 'r', encoding='utf-8') as f:
+    enriched_file = project_dir / "enriched" / "enriched_snippets.json"
+    if combined_file.exists():
+        with open(combined_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         snippets = data.get('snippets', [])
-    elif combined_file.exists():
-        with open(combined_file, 'r', encoding='utf-8') as f:
+    elif enriched_file.exists():
+        with open(enriched_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         snippets = data.get('snippets', [])
     else:
@@ -1530,6 +1530,9 @@ async def regenerate_standard_pipeline(
     if project_type == "NIW":
         legal_stds = NIW_LEGAL_STANDARDS
         evidence_mapping = NIW_EVIDENCE_TYPE_MAPPING
+    elif project_type == "L-1A":
+        legal_stds = L1A_LEGAL_STANDARDS
+        evidence_mapping = L1A_EVIDENCE_TYPE_MAPPING
     else:
         legal_stds = LEGAL_STANDARDS
         evidence_mapping = None

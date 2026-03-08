@@ -16,13 +16,15 @@ Unified Extractor - 统一的 Snippets + Entities + Relations 提取服务
 import json
 import re
 import uuid
+import hashlib
 import asyncio
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 
-from .llm_client import call_llm
+from .llm_client import call_llm, call_llm_text
+from .snippet_registry import build_registry_from_combined_extraction
 from ..core.config import settings
 
 # 数据目录
@@ -1085,10 +1087,12 @@ General: other"""
 
 # ==================== Helper Functions ====================
 
-def generate_snippet_id(exhibit_id: str, block_id: str) -> str:
-    """生成唯一 snippet ID"""
-    unique_suffix = uuid.uuid4().hex[:8]
-    return f"snp_{exhibit_id}_{block_id}_{unique_suffix}"
+def generate_snippet_id(exhibit_id: str, page: int, text: str) -> str:
+    """确定性 snippet ID: 同 exhibit + page + text → 同 ID"""
+    normalized = text.strip().lower()[:100]
+    content = f"{exhibit_id}:{page}:{normalized}"
+    hash_str = hashlib.md5(content.encode('utf-8')).hexdigest()[:8]
+    return f"snp_{exhibit_id}_{hash_str}"
 
 
 def generate_entity_id(exhibit_id: str, index: int) -> str:
@@ -1146,6 +1150,96 @@ def _is_cover_page(page_data: Dict) -> bool:
         if len(combined) < 30 and _COVER_PAGE_RE.match(combined):
             return True
     return False
+
+
+async def _llm_match_blocks(
+    unmatched_snippets: List[Dict],
+    block_map: Dict,
+    exhibit_id: str,
+    provider: str = "deepseek",
+) -> Dict[int, str]:
+    """Layer 3: 用 LLM 为无法文本匹配的 snippet 找到正确的 block_id。
+
+    Args:
+        unmatched_snippets: [{"idx": int, "text": str}, ...]
+        block_map: {composite_id: (page_num, block)}
+        exhibit_id: exhibit ID
+        provider: LLM provider
+
+    Returns:
+        {snippet_idx: matched_composite_id}
+    """
+    if not unmatched_snippets or not block_map:
+        return {}
+
+    # 构建 block 列表（只保留有实际内容的 block，截断过长的 block text）
+    block_list = []
+    for cid, (pn, blk) in block_map.items():
+        text = blk.get("text_content", "").strip()
+        if not text:
+            continue
+        preview = text[:300] + ("..." if len(text) > 300 else "")
+        block_list.append(f"[{cid}] (page {pn}, {len(text)} chars) {preview}")
+
+    blocks_text = "\n".join(block_list)
+
+    # 构建 snippet 列表
+    snippet_entries = []
+    for item in unmatched_snippets:
+        idx = item["idx"]
+        text = item["text"][:200] + ("..." if len(item["text"]) > 200 else "")
+        snippet_entries.append(f"SNIPPET_{idx}: \"{text}\"")
+
+    snippets_text = "\n".join(snippet_entries)
+
+    prompt = f"""You are matching extracted text snippets to their source blocks in a document.
+
+Each snippet was extracted from one of the blocks below, but the block_id was lost.
+For each snippet, find the block that BEST CONTAINS or MATCHES the snippet text.
+
+## Available Blocks (Exhibit {exhibit_id})
+{blocks_text}
+
+## Snippets to Match
+{snippets_text}
+
+## Instructions
+For each snippet, output the block_id of the block that most likely contains that text.
+Look for keyword overlap, topic similarity, or partial text matches.
+
+Return JSON:
+{{
+  "matches": [
+    {{"snippet": "SNIPPET_0", "block_id": "p3_b2", "confidence": 0.9}},
+    ...
+  ]
+}}"""
+
+    try:
+        result = await call_llm(
+            prompt=prompt,
+            provider=provider,
+            system_prompt="You match text snippets to source document blocks. Return only valid JSON.",
+            temperature=0.1,
+            max_tokens=2000,
+        )
+        matches_raw = result.get("matches", [])
+        matched = {}
+        for m in matches_raw:
+            snip_key = m.get("snippet", "")
+            block_id = m.get("block_id", "")
+            # 解析 SNIPPET_{idx}
+            if snip_key.startswith("SNIPPET_") and block_id in block_map:
+                try:
+                    idx = int(snip_key.split("_")[1])
+                    matched[idx] = block_id
+                except (ValueError, IndexError):
+                    pass
+        print(f"[BlockVerify] {exhibit_id}: LLM matched {len(matched)}/{len(unmatched_snippets)} snippets")
+        return matched
+    except Exception as e:
+        print(f"[BlockVerify] {exhibit_id}: LLM matching failed: {e}")
+        return {}
 
 
 def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
@@ -1344,6 +1438,39 @@ async def extract_exhibit_unified(
     DEFAULT_THRESHOLD = 0.35
 
     processed_snippets = []
+    seen_snippet_ids = set()  # 确定性 ID 去重
+    pending_llm_match = []  # Layer 3: 收集需要 LLM 匹配的 snippet
+
+    def _build_snippet_dict(item, composite_id, page_block):
+        """从 raw item + 匹配到的 block 构建 processed snippet dict。
+        Returns None if duplicate snippet_id (deterministic dedup)."""
+        page_num, block = page_block
+        original_block_id = block.get("block_id", "")
+        snippet_id = generate_snippet_id(exhibit_id, page_num, item.get("text", ""))
+        if snippet_id in seen_snippet_ids:
+            return None
+        seen_snippet_ids.add(snippet_id)
+        return {
+            "snippet_id": snippet_id,
+            "exhibit_id": exhibit_id,
+            "document_id": f"doc_{exhibit_id}",
+            "text": item.get("text", ""),
+            "page": page_num,
+            "bbox": block.get("bbox"),
+            "block_id": original_block_id,
+            "subject": item.get("subject", applicant_name),
+            "subject_role": item.get("subject_role", "applicant"),
+            "recommender_name": item.get("recommender_name"),
+            "is_applicant_achievement": item.get("is_applicant_achievement", True),
+            "evidence_type": item.get("evidence_type", "other"),
+            "evidence_purpose": item.get("evidence_purpose", "direct_proof"),
+            "evidence_layer": item.get("evidence_layer", _infer_evidence_layer(item)),
+            "confidence": item.get("confidence", 0.5),
+            "reasoning": item.get("reasoning", ""),
+            "is_ai_suggested": True,
+            "is_confirmed": False
+        }
+
     for item in raw_snippets:
         evidence_type = item.get("evidence_type", "other")
         threshold = CONFIDENCE_THRESHOLDS.get(evidence_type, DEFAULT_THRESHOLD)
@@ -1357,6 +1484,7 @@ async def extract_exhibit_unified(
             continue
 
         composite_id = item.get("block_id", "")
+        snippet_text = item.get("text", "")
 
         # 处理合并的 block_id (如 "p2_p2_b1-p2_p2_b2")
         # 取第一个 block_id
@@ -1367,57 +1495,90 @@ async def extract_exhibit_unified(
 
         # 如果找不到，尝试模糊匹配
         if not page_block and composite_id:
-            # 尝试去掉第一个 p{n}_ 前缀
             for key in block_map.keys():
                 if key.endswith(composite_id.split("_")[-1]) or composite_id in key:
                     page_block = block_map[key]
                     composite_id = key
                     break
 
-        # 如果 block_id 为空或找不到，创建一个占位 snippet（保留内容）
+        # ── 三层 block_id 校验 ──────────────────────────────────
+        # Layer 1: 验证 — 即使 block_id 找到了，也检查 snippet 文本是否真的在那个 block 里
+        if page_block and snippet_text:
+            _, found_block = page_block
+            block_text = found_block.get("text_content", "")
+            snippet_norm_check = re.sub(r'\s+', ' ', snippet_text.lower().strip())
+            block_norm_check = re.sub(r'\s+', ' ', block_text.lower().strip())
+            # Check 1: 如果 snippet 远长于 block（2x），说明 block_id 分配错误
+            length_mismatch = len(snippet_text) > len(block_text) * 2 and len(snippet_text) > 20
+            # Check 2: 如果 snippet 前 50 字符不在 block 中且 block 前 50 字符不在 snippet 中，说明内容不匹配
+            content_mismatch = (
+                len(snippet_norm_check) > 20 and len(block_norm_check) > 20
+                and snippet_norm_check[:50] not in block_norm_check
+                and block_norm_check[:50] not in snippet_norm_check
+            )
+            if length_mismatch or content_mismatch:
+                reason = "length" if length_mismatch else "content"
+                print(f"[BlockVerify] {exhibit_id}: snippet text ({len(snippet_text)} chars) vs block {composite_id} ({len(block_text)} chars) {reason} mismatch, searching correct block...")
+                page_block = None  # 触发 Layer 2
+
+        # Layer 2: 文本匹配 — 在所有 block 中搜索包含 snippet 文本的 block
+        if not page_block and snippet_text and len(snippet_text) > 10:
+            snippet_norm = re.sub(r'\s+', ' ', snippet_text.lower().strip())
+            best_match = None
+            best_score = 0
+            for cid, (pn, blk) in block_map.items():
+                blk_text = blk.get("text_content", "")
+                blk_norm = re.sub(r'\s+', ' ', blk_text.lower().strip())
+                if not blk_norm:
+                    continue
+                # 完整子串匹配
+                if snippet_norm in blk_norm:
+                    score = len(snippet_norm) / max(len(blk_norm), 1)
+                    if score > best_score:
+                        best_match = cid
+                        best_score = score
+            # 如果完整匹配没找到，尝试前 80 字符部分匹配
+            if not best_match and len(snippet_norm) > 80:
+                probe = snippet_norm[:80]
+                for cid, (pn, blk) in block_map.items():
+                    blk_norm = re.sub(r'\s+', ' ', blk.get("text_content", "").lower().strip())
+                    if probe in blk_norm:
+                        best_match = cid
+                        break
+            if best_match:
+                page_block = block_map[best_match]
+                composite_id = best_match
+                print(f"[BlockVerify] {exhibit_id}: text-matched to {best_match}")
+
+        # Layer 3: 收集无法文本匹配的 snippet，等待批量 LLM 匹配
         if not page_block:
-            if composite_id:
-                print(f"[Warning] Block '{composite_id}' not found in {exhibit_id}, using fallback")
-            # 使用第一个 block 作为 fallback
-            first_block_key = list(block_map.keys())[0] if block_map else None
-            if first_block_key:
-                page_block = block_map[first_block_key]
-                composite_id = first_block_key
+            pending_llm_match.append({
+                "idx": len(pending_llm_match),
+                "text": snippet_text,
+                "item": item,  # 保留完整的 raw item 用于后续构建 snippet
+            })
+            continue
+
+        built = _build_snippet_dict(item, composite_id, page_block)
+        if built:
+            processed_snippets.append(built)
+
+    # ── Layer 3: 批量 LLM 匹配 ──────────────────────────────────
+    if pending_llm_match:
+        print(f"[BlockVerify] {exhibit_id}: {len(pending_llm_match)} snippets need LLM matching...")
+        llm_results = await _llm_match_blocks(
+            pending_llm_match, block_map, exhibit_id, provider
+        )
+        for pending in pending_llm_match:
+            idx = pending["idx"]
+            matched_cid = llm_results.get(idx)
+            if matched_cid and matched_cid in block_map:
+                page_block = block_map[matched_cid]
+                built = _build_snippet_dict(pending["item"], matched_cid, page_block)
+                if built:
+                    processed_snippets.append(built)
             else:
-                print(f"[Warning] No blocks in {exhibit_id}, skipping snippet")
-                continue
-
-        page_num, block = page_block
-        original_block_id = block.get("block_id", "")
-
-        snippet_id = generate_snippet_id(exhibit_id, composite_id)
-
-        processed_snippets.append({
-            "snippet_id": snippet_id,
-            "exhibit_id": exhibit_id,
-            "document_id": f"doc_{exhibit_id}",
-            "text": item.get("text", ""),
-            "page": page_num,
-            "bbox": block.get("bbox"),
-            "block_id": original_block_id,
-
-            # Subject Attribution
-            "subject": item.get("subject", applicant_name),
-            "subject_role": item.get("subject_role", "applicant"),
-            "recommender_name": item.get("recommender_name"),  # 新增：推荐人名称
-            "is_applicant_achievement": item.get("is_applicant_achievement", True),
-
-            # Evidence Classification
-            "evidence_type": item.get("evidence_type", "other"),
-            "evidence_purpose": item.get("evidence_purpose", "direct_proof"),  # 证据目的
-            "evidence_layer": item.get("evidence_layer", _infer_evidence_layer(item)),  # 证据层级
-            "confidence": item.get("confidence", 0.5),
-            "reasoning": item.get("reasoning", ""),
-
-            # Metadata
-            "is_ai_suggested": True,
-            "is_confirmed": False
-        })
+                print(f"[BlockVerify] {exhibit_id}: LLM could not match snippet (text: '{pending['text'][:60]}...'), skipping")
 
     # 7. 处理 entities - 添加 ID
     processed_entities = []
@@ -1603,6 +1764,9 @@ async def extract_all_unified(
     combined_file = extraction_dir / "combined_extraction.json"
     with open(combined_file, 'w', encoding='utf-8') as f:
         json.dump(combined_result, f, ensure_ascii=False, indent=2)
+
+    # 同步到 snippet registry（provenance_engine 等读取）
+    build_registry_from_combined_extraction(project_id)
 
     # 同时保存到 snippets 目录（兼容现有代码）
     snippets_dir = PROJECTS_DIR / project_id / "snippets"

@@ -25,6 +25,7 @@ from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
 from .writing_strategies import get_writing_strategy
+from .provenance_engine import _text_similarity
 import re
 
 # Labels that LLMs sometimes leak from the argumentation-method prompt
@@ -47,42 +48,51 @@ logger = logging.getLogger(__name__)
 
 def _parse_old_snippet_id(old_id: str) -> Optional[Dict]:
     """
-    解析旧格式 snippet ID
+    解析 snippet ID（支持新旧两种格式）
 
-    旧格式: snp_C2_p2_p2_b5_eadb0715
-    解析为: {exhibit_id: "C2", page: 2, block: "b5", block_full: "p2_b5", hash: "eadb0715"}
+    旧格式: snp_C2_p2_p2_b5_eadb0715 (6+ parts)
+    → {exhibit_id: "C2", page: 2, block_full: "p2_b5", hash: "eadb0715", format: "old"}
+
+    新格式: snp_C2_a3f5b1c2 (3 parts)
+    → {exhibit_id: "C2", hash: "a3f5b1c2", format: "new"}
     """
     if not old_id or not old_id.startswith("snp_"):
         return None
 
-    # 格式: snp_{exhibit}_{pX}_{pY}_{bZ}_{hash}
-    # 例如: snp_C2_p2_p2_b5_eadb0715
     parts = old_id.split("_")
-    if len(parts) < 6:
-        return None
 
-    try:
-        exhibit_id = parts[1]  # C2
-        page_part1 = parts[2]  # p2
-        page_part2 = parts[3]  # p2
-        block_part = parts[4]  # b5
-        hash_part = parts[5]   # eadb0715
-
-        # 提取页码数字
-        page = int(page_part1[1:]) if page_part1.startswith("p") else 0
-
-        # 构建完整的 block_id (格式: p2_b5)
-        block_full = f"{page_part2}_{block_part}"
-
+    # 新格式: snp_{exhibit}_{hash8} → 3 parts
+    if len(parts) == 3:
         return {
-            "exhibit_id": exhibit_id,
-            "page": page,
-            "block": block_part,
-            "block_full": block_full,
-            "hash": hash_part
+            "exhibit_id": parts[1],
+            "hash": parts[2],
+            "format": "new"
         }
-    except (IndexError, ValueError):
-        return None
+
+    # 旧格式: snp_{exhibit}_{pX}_{pY}_{bZ}_{hash} → 6+ parts
+    if len(parts) >= 6:
+        try:
+            exhibit_id = parts[1]
+            page_part1 = parts[2]
+            page_part2 = parts[3]
+            block_part = parts[4]
+            hash_part = parts[5]
+
+            page = int(page_part1[1:]) if page_part1.startswith("p") else 0
+            block_full = f"{page_part2}_{block_part}"
+
+            return {
+                "exhibit_id": exhibit_id,
+                "page": page,
+                "block": block_part,
+                "block_full": block_full,
+                "hash": hash_part,
+                "format": "old"
+            }
+        except (IndexError, ValueError):
+            return None
+
+    return None
 
 
 def _map_old_snippet_id_to_new(
@@ -90,35 +100,42 @@ def _map_old_snippet_id_to_new(
     snippet_registry: List[Dict]
 ) -> Optional[Dict]:
     """
-    将旧格式 snippet ID 映射到新的 registry snippet
+    将 snippet ID 映射到 registry snippet（支持新旧格式）
 
-    Args:
-        old_id: 旧格式 ID (如 "snp_C2_p2_p2_b5_eadb0715")
-        snippet_registry: 注册表中的 snippets 列表
-
-    Returns:
-        匹配的 registry snippet dict，或 None
+    新格式 (snp_{exhibit}_{hash8}): 直接按 snippet_id 查找
+    旧格式 (snp_{exhibit}_{pX}_{pY}_{bZ}_{hash}): 按 exhibit + block_full 匹配
+    snip_ 格式: 直接按 snippet_id 查找
     """
-    # 如果已经是新格式，直接查找
+    # snip_ 格式（snippet_registry 自身的格式）
     if old_id.startswith("snip_"):
         for snip in snippet_registry:
             if snip.get("snippet_id") == old_id:
                 return snip
         return None
 
-    # 解析旧格式
     parsed = _parse_old_snippet_id(old_id)
     if not parsed:
         return None
 
-    # 在 registry 中查找匹配
-    # 匹配条件: exhibit_id 相同 且 source_block_ids 包含 block_full
+    # 新格式: 直接按 snippet_id 查找
+    if parsed.get("format") == "new":
+        for snip in snippet_registry:
+            if snip.get("snippet_id") == old_id:
+                return snip
+        return None
+
+    # 旧格式: 按 exhibit_id + source_block_ids/block_id 匹配
     for snip in snippet_registry:
         if snip.get("exhibit_id") != parsed["exhibit_id"]:
             continue
 
+        # Check source_block_ids first
         source_blocks = snip.get("source_block_ids", [])
-        if parsed["block_full"] in source_blocks:
+        if parsed.get("block_full") and parsed["block_full"] in source_blocks:
+            return snip
+
+        # Fallback: check block_id field directly
+        if parsed.get("block_full") and snip.get("block_id") == parsed["block_full"]:
             return snip
 
     return None
@@ -176,10 +193,88 @@ def _load_snippet_source(project_id: str) -> List[Dict]:
     return load_registry(project_id)
 
 
+def _recover_snippet_ids_by_text(
+    removed_ids: List[str],
+    snippet_registry: List[Dict],
+    valid_snippet_ids: set,
+    threshold: float = 0.6
+) -> List[str]:
+    """
+    对被校验删除的 snippet_ids，尝试通过文本相似度在 registry 中找到匹配。
+    只匹配 valid_snippet_ids 范围内的 snippet。
+    """
+    registry_by_id = {s["snippet_id"]: s for s in snippet_registry}
+    valid_snippets = [s for s in snippet_registry if s["snippet_id"] in valid_snippet_ids]
+
+    recovered = []
+    for old_id in removed_ids:
+        old_snip = registry_by_id.get(old_id)
+        if not old_snip:
+            continue
+        old_text = old_snip.get("text", "")
+        if not old_text:
+            continue
+
+        best_match, best_score = None, 0.0
+        for candidate in valid_snippets:
+            score = _text_similarity(old_text[:200], candidate.get("text", "")[:200])
+            if score > best_score:
+                best_score = score
+                best_match = candidate
+
+        if best_match and best_score >= threshold:
+            recovered.append(best_match["snippet_id"])
+
+    return recovered
+
+
+async def _recover_snippet_ids_by_llm(
+    sentence_text: str,
+    candidate_snippets: List[Dict],
+    provider: str = "deepseek"
+) -> List[str]:
+    """
+    用 LLM 将句子与候选 snippet 匹配。
+    给 LLM 句子文本 + 候选 snippet 列表，让它返回最相关的 snippet_ids。
+    """
+    if not candidate_snippets:
+        return []
+
+    # Limit to 20 candidates to control token usage
+    candidates = candidate_snippets[:20]
+    candidates_text = "\n".join(
+        f'[{s["snippet_id"]}] "{s.get("text", "")[:150]}"'
+        for s in candidates
+    )
+
+    prompt = f"""Match this sentence to the most relevant evidence snippets.
+
+SENTENCE: "{sentence_text}"
+
+CANDIDATE SNIPPETS:
+{candidates_text}
+
+Return JSON: {{"snippet_ids": ["id1", "id2"]}}
+Only include snippets that this sentence DIRECTLY references or paraphrases. Return empty if none match."""
+
+    try:
+        result = await call_llm(
+            prompt,
+            system_prompt="You match sentences to evidence snippets. Return valid JSON only.",
+            temperature=0.0,
+            max_tokens=2000,
+            provider=provider
+        )
+        valid_candidate_ids = {s["snippet_id"] for s in candidates}
+        return [sid for sid in result.get("snippet_ids", []) if sid in valid_candidate_ids]
+    except Exception as e:
+        logger.warning(f"LLM snippet recovery failed: {e}")
+        return []
+
 
 def _get_standard_display_name(standard_key: str) -> str:
     """Get display name for a standard key via standards registry."""
-    for ptype in ("EB-1A", "NIW"):
+    for ptype in ("EB-1A", "NIW", "L-1A"):
         name = get_standard_name(ptype, standard_key)
         if name != standard_key:
             return name
@@ -1876,12 +1971,48 @@ async def write_petition_section_v3(
     for sent in all_sentences:
         original_ids = sent.get("snippet_ids", [])
         valid_ids = [sid for sid in original_ids if sid in valid_snippet_ids]
-        if len(valid_ids) != len(original_ids):
-            all_warnings.append(f"Removed invalid snippet_ids from sentence")
+        removed_ids = [sid for sid in original_ids if sid not in valid_snippet_ids]
+        if removed_ids:
+            sent["_removed_ids"] = removed_ids
+            all_warnings.append(f"Removed {len(removed_ids)} invalid snippet_ids from sentence")
         sent["snippet_ids"] = valid_ids
 
-    # 溯源回填：对 snippet_ids 为空的句子，从文本中解析 exhibit 引用反查 snippet
+    # Layer 2: 文本匹配恢复 — 被校验删除的 snippet_ids，尝试通过文本相似度找到有效替代
     snippet_registry = _load_snippet_source(project_id)
+    text_recovered_count = 0
+    for sent in all_sentences:
+        if sent.get("snippet_ids"):
+            continue  # 已有有效 ID，跳过
+        removed_ids = sent.get("_removed_ids", [])
+        if removed_ids:
+            recovered = _recover_snippet_ids_by_text(removed_ids, snippet_registry, valid_snippet_ids)
+            if recovered:
+                sent["snippet_ids"] = recovered
+                text_recovered_count += len(recovered)
+    if text_recovered_count:
+        logger.info(f"Layer 2 text-match: recovered {text_recovered_count} snippet_ids")
+
+    # Layer 3: LLM 匹配恢复 — 仍然为空的证据性句子，调用 LLM 将句子与候选 snippet 配对
+    llm_recovered_count = 0
+    for sent in all_sentences:
+        if sent.get("snippet_ids") or sent.get("sentence_type") in ("opening", "closing"):
+            continue
+        # Get candidate snippets from referenced exhibits
+        exhibit_snippets = [s for s in snippet_registry if s.get("exhibit_id") in referenced_exhibits]
+        if not exhibit_snippets:
+            continue
+        recovered = await _recover_snippet_ids_by_llm(sent["text"], exhibit_snippets, provider)
+        if recovered:
+            sent["snippet_ids"] = recovered
+            llm_recovered_count += len(recovered)
+    if llm_recovered_count:
+        logger.info(f"Layer 3 LLM-match: recovered {llm_recovered_count} snippet_ids")
+
+    # Clean up temporary _removed_ids
+    for sent in all_sentences:
+        sent.pop("_removed_ids", None)
+
+    # 溯源回填：对 snippet_ids 为空的句子，从文本中解析 exhibit 引用反查 snippet
 
     # Build allowed snippet set per subargument (exploration OFF → restrict backfill)
     allowed_snippet_ids_by_subarg = None
