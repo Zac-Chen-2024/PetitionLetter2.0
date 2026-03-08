@@ -1072,6 +1072,55 @@ async def niw_organize_per_prong(
 
     snippets_text = "\n".join(lines)
 
+    # Prong 3 with very few snippets: generate template sub-arguments
+    # by legal component (policy argument, not evidence-grouping)
+    all_real_ids = list(id_mapping.values())
+    if prong_key == "prong3_balance" and len(prong_snippets) <= 3:
+        arg_id = f"arg-{uuid.uuid4().hex[:8]}"
+        template_components = [
+            ("Impracticality of Labor Certification",
+             "Why the PERM process is unsuitable for this beneficiary's work",
+             "Demonstrates PERM impracticality"),
+            ("National Benefit Analysis",
+             "Concrete national benefits from the beneficiary's contributions",
+             "Establishes national interest"),
+            ("Benefits Beyond Single Employer",
+             "Work transcends any single employer's interests",
+             "Proves cross-employer impact"),
+            ("Explicit Balancing — Waiver Justification",
+             "Weighing national interest against labor market protection",
+             "Concludes waiver justification"),
+        ]
+        sub_arguments = []
+        for title, purpose, relationship in template_components:
+            sa_dict = {
+                "id": f"subarg-{uuid.uuid4().hex[:8]}",
+                "argument_id": arg_id,
+                "title": title,
+                "purpose": purpose,
+                "relationship": relationship,
+                "snippet_ids": all_real_ids,  # all snippets shared
+                "is_ai_generated": True,
+                "status": "draft",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            sub_arguments.append(sa_dict)
+
+        argument = LegalArgument(
+            id=arg_id,
+            standard=prong_key,
+            title=f"{applicant_name}'s {prong_name}",
+            rationale=f"Template-based: {len(template_components)} legal components, "
+                      f"{len(prong_snippets)} snippets shared across all",
+            snippet_ids=all_real_ids,
+            evidence_strength="medium",
+            sub_argument_ids=[sa["id"] for sa in sub_arguments],
+            subject=applicant_name,
+        )
+        print(f"[NIW-v2] Prong3 template: {len(sub_arguments)} sub-args "
+              f"(snippet count {len(prong_snippets)} <= 3, using legal components)")
+        return argument, sub_arguments
+
     # Determine target sub-argument count
     n = len(prong_snippets)
     if n <= 10:

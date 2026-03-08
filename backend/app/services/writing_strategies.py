@@ -138,14 +138,75 @@ def _eb1a_instruction(chain: str, sentence_range: Tuple[int, int]) -> str:
     )
 
 
-def _niw_instruction(chain: str, sentence_range: Tuple[int, int]) -> str:
+def _niw_instruction(chain: str, sentence_range: Tuple[int, int], standard_key: str = "") -> str:
     lo, hi = sentence_range
+    prong3_rules = ""
+    if standard_key == "prong3_balance":
+        prong3_rules = (
+            "- CROSS-PRONG REFRAMING (MANDATORY): Reference at least 3 specific\n"
+            "  accomplishments from Prongs 1 and 2 in your waiver argument. REFRAME each\n"
+            "  as evidence for why labor certification is impractical or contrary to\n"
+            "  national interest — do NOT simply restate them.\n"
+            "- POLICY ARGUMENT STRUCTURE: Each paragraph must make a legal CONCLUSION\n"
+            "  about why waiver is justified, then support it with facts. Do NOT write\n"
+            "  a narrative of accomplishments.\n"
+            "- BALANCING LANGUAGE (MANDATORY): Include explicit legal balancing phrases:\n"
+            "  'on balance', 'the national interest outweighs', etc.\n"
+        )
     return (
         f"INSTRUCTIONS:\n"
         f"{chain}\n"
         f"- Write one paragraph ({lo}-{hi} sentences) per Sub-Argument listed above\n"
+        f"{prong3_rules}"
         f"{_INSTRUCTION_TAIL}"
     )
+
+
+# ============================================================
+# NIW per-prong argumentation appendices
+# ============================================================
+
+_NIW_APPENDICES: Dict[str, str] = {
+    "prong3_balance": (
+        "\nPRONG 3 — WAIVER JUSTIFICATION [Matter of Dhanasar, Prong 3]:\n\n"
+        "STRUCTURE: Build a comprehensive waiver argument with ALL of the following components:\n\n"
+        "COMPONENT A — IMPRACTICALITY OF LABOR CERTIFICATION (MANDATORY):\n"
+        "  Explain why the PERM labor certification process is unsuitable for this\n"
+        "  beneficiary's proposed endeavor. Focus on: (1) the nature of the work requires\n"
+        "  flexibility, multi-institutional collaboration, or self-direction that an\n"
+        "  employer-specific PERM would constrain; (2) the PERM process's employer-tied\n"
+        "  structure conflicts with the cross-cutting nature of the work; (3) specific\n"
+        "  time delays from PERM would meaningfully hinder progress on the endeavor.\n"
+        "  Use facts from the SOURCE MATERIALS about the beneficiary's planned work.\n\n"
+        "COMPONENT B — NATIONAL BENEFIT ANALYSIS (MANDATORY):\n"
+        "  Articulate concrete national benefits from the beneficiary's specific\n"
+        "  contributions — do NOT make generic field-level claims. Connect to specific\n"
+        "  government priorities, strategic initiatives, or policy goals mentioned in\n"
+        "  the source materials. Where available, cite quantitative impact: jobs created,\n"
+        "  revenue generated, efficiency improvements, or populations served. Argue that\n"
+        "  these benefits exist even if other qualified U.S. workers are available.\n\n"
+        "COMPONENT C — BEYOND SINGLE EMPLOYER (MANDATORY):\n"
+        "  Demonstrate that the beneficiary's work transcends any single employer's\n"
+        "  interests. Evidence: multi-institutional collaborations, standards-setting,\n"
+        "  open research/publications, industry-wide impact, consulting across orgs.\n"
+        "  If CROSS-PRONG CONTEXT shows such activities, reference them here WITHOUT\n"
+        "  fabricating exhibit citations.\n\n"
+        "COMPONENT D — URGENCY / TIME-SENSITIVITY (IF APPLICABLE):\n"
+        "  If source materials mention specific timelines, appointments, grant deadlines,\n"
+        "  or competitive landscapes, argue that delays from labor certification would\n"
+        "  create meaningful disadvantage. Omit if no time-sensitive evidence exists.\n\n"
+        "COMPONENT E — EXPLICIT BALANCING (MANDATORY — must be FINAL component):\n"
+        "  Explicitly weigh national interest against labor market protection. Use legal\n"
+        "  balancing language: 'on balance', 'the national interest in [X] outweighs the\n"
+        "  purpose of the labor certification requirement'. Connect back to Prong 1 and 2\n"
+        "  accomplishments. Conclude with clear waiver justification.\n\n"
+        "CROSS-PRONG REFRAMING TECHNIQUE:\n"
+        "  Prong 3 is a POLICY argument, not merely an evidence-listing exercise. REFRAME\n"
+        "  accomplishments from Prongs 1 and 2 through a waiver justification lens. Do not\n"
+        "  simply restate them — explain WHY each accomplishment makes labor certification\n"
+        "  impractical or contrary to the national interest."
+    ),
+}
 
 
 # ============================================================
@@ -530,8 +591,8 @@ def _build_niw_strategy(
         standard_key=standard_key,
         legal_ref=legal_ref,
         step1_base_system_prompt=_NIW_BASE_SYSTEM_PROMPT,
-        step1_argumentation_appendix="",  # NIW chains are in instruction block
-        step1_instruction_block=_niw_instruction(chain, sentence_range),
+        step1_argumentation_appendix=_NIW_APPENDICES.get(standard_key, ""),
+        step1_instruction_block=_niw_instruction(chain, sentence_range, standard_key=standard_key),
         sentence_range=sentence_range,
         polish_single_subarg=True,
         frame_system_prompt=_NIW_FRAME_SYSTEM_PROMPT,
@@ -633,10 +694,10 @@ _NIW_STRATEGIES: Dict[str, WritingStrategy] = {
         "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016), Prong 3",
         (
             "ARGUMENTATION CHAIN for Prong 3 (Balance of Equities — Waiver Justification):\n"
-            "  national interest served → benefits beyond any single employer → "
-            "urgency / time-sensitivity → impracticality of labor certification"
+            "  impracticality of labor certification → national benefit analysis → "
+            "benefits beyond any single employer → urgency (if applicable) → explicit balancing"
         ),
-        (8, 12),
+        (4, 8),
         cross_section_context=True,
     ),
 }

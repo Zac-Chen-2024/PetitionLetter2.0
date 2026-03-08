@@ -309,15 +309,16 @@ def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[s
                 if s.get("sentence_type") == "body" and s.get("text")
             ]
             if body_sents:
-                # Extract first sentence of each sub-argument group (max 8)
-                seen_subargs = set()
+                # Extract first 2 sentences of each sub-argument group (max 20 total)
+                seen_subargs: Dict[str, int] = {}
                 representative = []
                 for s in body_sents:
                     sa_id = s.get("subargument_id", "")
-                    if sa_id not in seen_subargs:
-                        seen_subargs.add(sa_id)
+                    count = seen_subargs.get(sa_id, 0)
+                    if count < 2:
+                        seen_subargs[sa_id] = count + 1
                         representative.append(s["text"])
-                    if len(representative) >= 8:
+                    if len(representative) >= 20:
                         break
                 prong_summaries.append(
                     f"  {prong_label}:\n" +
@@ -364,6 +365,44 @@ def _build_cross_prong_summary(project_id: str, standard_key: str) -> Optional[s
         "- NEVER fabricate citation formats like [Cross-reference Prong X] or [See above].\n"
         "=== END CROSS-PRONG CONTEXT ==="
     )
+
+
+def _load_cross_prong_exhibits(project_id: str) -> Dict[str, str]:
+    """
+    Load exhibit OCR text referenced by prong1/prong2 arguments.
+    Used to give prong3 writing access to full source materials from earlier prongs.
+    """
+    legal_args = load_legal_arguments(project_id)
+    if not legal_args:
+        return {}
+
+    arguments = legal_args.get("arguments", [])
+    sub_arguments = legal_args.get("sub_arguments", [])
+
+    # Collect exhibit + page refs from prong1/prong2
+    exhibit_pages: Dict[str, set] = defaultdict(set)
+    for arg in arguments:
+        if arg.get("standard") not in ("prong1_merit", "prong2_positioned"):
+            continue
+        arg_subs = [sa for sa in sub_arguments if sa.get("argument_id") == arg["id"]]
+        for sa in arg_subs:
+            for snip in sa.get("snippets", []):
+                exhibit_id = snip.get("exhibit_id", "") or snip.get("exhibit", "")
+                page = snip.get("page", 0)
+                if exhibit_id and page > 0:
+                    exhibit_pages[exhibit_id].add(page)
+
+    # Load OCR for each exhibit
+    exhibit_texts = {}
+    for exhibit_id, pages in exhibit_pages.items():
+        exhibit_data = _load_exhibit_json(project_id, exhibit_id)
+        if not exhibit_data:
+            continue
+        text = _extract_page_text(exhibit_data, pages)
+        if text:
+            exhibit_texts[exhibit_id] = text
+
+    return exhibit_texts
 
 
 # ============================================
@@ -826,7 +865,8 @@ async def _step1_generate_argument_body(
 
     # Build snippet index: all snippet blocks on referenced exhibits
     # so the LLM can cite specific block-level snippet_ids
-    referenced_exhibits = set()
+    # Include all exhibits in exhibit_texts (covers cross-prong exhibits too)
+    referenced_exhibits = set(exhibit_texts.keys())
     for subarg in sub_arguments:
         for snip in subarg.get("snippets", []):
             referenced_exhibits.add(snip.get("exhibit", ""))
@@ -1816,10 +1856,15 @@ async def write_petition_section_v3(
 
     # Cross-section context (e.g. NIW Prong 3 references Prong 1 & 2)
     cross_prong_context = None
+    cross_prong_exhibit_texts: Dict[str, str] = {}
     if strategy.cross_section_context:
         cross_prong_context = _build_cross_prong_summary(project_id, standard_key)
+        cross_prong_exhibit_texts = _load_cross_prong_exhibits(project_id)
         if cross_prong_context:
-            logger.info("Step1: Loaded cross-section context for writing")
+            logger.info(
+                f"Step1: Loaded cross-section context + "
+                f"{len(cross_prong_exhibit_texts)} cross-prong exhibits"
+            )
 
     for argument in all_arguments:
         arg_id = argument.get("id", "")
@@ -1831,6 +1876,10 @@ async def write_petition_section_v3(
 
         # Load OCR pages for all exhibits referenced by this argument
         exhibit_texts = load_exhibit_pages_for_argument(project_id, argument, snippet_map)
+        # Merge cross-prong exhibits (don't overwrite prong3's own)
+        for eid, text in cross_prong_exhibit_texts.items():
+            if eid not in exhibit_texts:
+                exhibit_texts[eid] = text
         logger.info(
             f"Step1: Generating body for argument {arg_id} "
             f"({len(sub_arguments)} subargs, {len(exhibit_texts)} exhibits loaded)"
