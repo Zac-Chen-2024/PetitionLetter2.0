@@ -15,13 +15,6 @@ from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Optional
 from pydantic import BaseModel
 
-from ..services.argument_generator import (
-    ArgumentGenerator,
-)
-from ..services.argument_qualifier import (
-    qualify_all_arguments,
-    get_qualification_summary
-)
 from ..services.legal_argument_organizer import (
     full_legal_pipeline,
     regenerate_standard_pipeline,
@@ -142,13 +135,9 @@ async def regenerate_standard(project_id: str, request: RegenerateStandardReques
 # ============================================
 
 @router.get("/{project_id}")
-async def get_arguments(project_id: str, include_qualification: bool = False):
+async def get_arguments(project_id: str):
     """
     获取生成的论据列表
-
-    Args:
-        project_id: 项目 ID
-        include_qualification: 是否包含资格检查结果
 
     Returns:
         - arguments: 论据列表 (LLM + 法律条例生成的精华子论点)
@@ -158,17 +147,10 @@ async def get_arguments(project_id: str, include_qualification: bool = False):
         - stats: 统计信息
         - filtered: 过滤掉的弱证据
     """
-    # 优先读取新的 legal_arguments.json (使用文件锁)
     from ..services.snippet_recommender import load_legal_arguments
     legal_data = load_legal_arguments(project_id)
-    result = legal_data if legal_data.get("arguments") else None
 
-    # Fallback: 读取旧格式
-    if not result:
-        generator = ArgumentGenerator(project_id)
-        result = generator.load_generated_arguments()
-
-    if not result:
+    if not legal_data.get("arguments"):
         return {
             "project_id": project_id,
             "arguments": [],
@@ -177,28 +159,14 @@ async def get_arguments(project_id: str, include_qualification: bool = False):
             "generated_at": None
         }
 
-    arguments = result.get("arguments", [])
-    sub_arguments = result.get("sub_arguments", [])
-    filtered = result.get("filtered", [])
-
-    # 如果需要包含资格检查
-    if include_qualification:
-        generator = ArgumentGenerator(project_id)
-        snippets = generator.load_snippets()
-        arguments = qualify_all_arguments(arguments, snippets)
-        qual_summary = get_qualification_summary(arguments)
-    else:
-        qual_summary = None
-
     return {
         "project_id": project_id,
-        "arguments": arguments,
-        "sub_arguments": sub_arguments,
-        "main_subject": result.get("main_subject"),
-        "generated_at": result.get("generated_at"),
-        "stats": result.get("stats", {}),
-        "filtered": filtered,
-        "qualification_summary": qual_summary
+        "arguments": legal_data.get("arguments", []),
+        "sub_arguments": legal_data.get("sub_arguments", []),
+        "main_subject": legal_data.get("main_subject"),
+        "generated_at": legal_data.get("generated_at"),
+        "stats": legal_data.get("stats", {}),
+        "filtered": legal_data.get("filtered", []),
     }
 
 
