@@ -732,7 +732,8 @@ async def organize_arguments_with_legal_framework(
     snippets: List[Dict],
     applicant_name: str = "the applicant",
     provider: str = "deepseek",
-    project_type: str = "EB-1A"
+    project_type: str = "EB-1A",
+    project_id: str = None
 ) -> Tuple[List[LegalArgument], List[Dict]]:
     """
     使用 LLM + 法律条例组织子论点
@@ -742,6 +743,7 @@ async def organize_arguments_with_legal_framework(
         applicant_name: 申请人姓名
         provider: LLM provider
         project_type: "EB-1A" or "NIW"
+        project_id: 项目 ID（用于保存 top-down pickup 中间结果）
 
     Returns:
         (arguments, filtered_snippets)
@@ -766,7 +768,12 @@ async def organize_arguments_with_legal_framework(
         evidence_mapping = None  # uses default _group_snippets_by_standard
 
     # 按 standard 分组 snippets
-    snippets_by_std = _group_snippets_by_standard(snippets, legal_stds, evidence_mapping)
+    if project_type == "EB-1A":
+        snippets_by_std = await _group_snippets_by_standard_topdown(
+            snippets, legal_stds, provider, project_id=project_id
+        )
+    else:
+        snippets_by_std = _group_snippets_by_standard(snippets, legal_stds, evidence_mapping)
 
     # 构建 prompt — only include standards that have evidence
     standards_with_evidence = {k: v for k, v in snippets_by_std.items() if v}
@@ -869,8 +876,7 @@ async def organize_arguments_with_legal_framework(
 
     except Exception as e:
         print(f"[LegalOrganizer] Error: {e}")
-        # Fallback: 简单分组
-        return _fallback_organize(snippets, applicant_name, legal_stds), []
+        raise
 
 
 # Default EB-1A evidence type mapping
@@ -918,6 +924,411 @@ _EB1A_EVIDENCE_TYPE_MAPPING = {
     "box_office": "commercial_success",
     "sales": "commercial_success",
 }
+
+
+# Per-standard pickup criteria for top-down evidence selection
+_TOPDOWN_PICKUP_CRITERIA = {
+    "awards": {
+        "include_direct": [
+            "Snippets where subject IS the applicant AND describes a specific award/prize received",
+            "Award name, year, and the applicant's specific honor",
+        ],
+        "include_supporting": [
+            "Awarding body's background, authority, and reputation",
+            "Selection process details: jury, methodology, acceptance rate",
+            "Other distinguished recipients of the SAME award (peer comparison)",
+        ],
+        "exclude": [
+            "Certifications earned by passing an exam — the regulation requires 'prizes or awards for excellence', not test-based credentials",
+            "Awards received by other people for DIFFERENT awards (only same-award recipients are relevant as peer comparison)",
+        ],
+        "subject_rule": "Subject must be the applicant OR the awarding organization OR a peer comparison recipient of the SAME award",
+    },
+    "membership": {
+        "include_direct": [
+            "Snippets about the applicant's membership or election into an association",
+            "Applicant's membership application, admission, or election records",
+        ],
+        "include_supporting": [
+            "Association's founding, history, mission, and distinguished reputation",
+            "Membership criteria: what outstanding achievements are required for admission",
+            "Admission/review process rigor (judged by recognized experts)",
+            "Other notable members of the SAME association (peer comparison)",
+        ],
+        "exclude": [
+            "Membership/certification where admission does NOT require outstanding achievements as judged by recognized experts",
+            "Members of OTHER associations not relevant to applicant's membership",
+        ],
+        "subject_rule": "Subject must be the applicant, the qualifying association, or a distinguished member of the SAME association",
+    },
+    "published_material": {
+        "include_direct": [
+            "Articles/reports ABOUT the applicant and the applicant's work",
+            "Interview or feature content where applicant is the subject of coverage",
+        ],
+        "include_supporting": [
+            "Media outlet's credibility: circulation, history, awards, editorial standards",
+            "Media outlet's ownership group or parent company reputation",
+            "Publication date, title, author of the article about the applicant",
+        ],
+        "exclude": [
+            "Articles written BY the applicant -- belongs to standard (vi) scholarly_articles",
+            "Media coverage about other people (unless the applicant is also featured)",
+            "Social media posts or non-professional publications",
+        ],
+        "subject_rule": "Subject must be the applicant (for coverage) OR the media outlet (for credibility linked to coverage about the applicant)",
+    },
+    "judging": {
+        "include_direct": [
+            "Snippets about the applicant serving as judge, reviewer, evaluator, or examiner",
+            "Invitation or appointment letters for judging roles",
+        ],
+        "include_supporting": [
+            "The organization/event where applicant judged: prestige, scale, authority",
+            "Scope of judging: number of submissions, jury size, review rounds",
+            "Other distinguished co-judges or panelists (peer comparison)",
+        ],
+        "exclude": [
+            "Teaching or training activities -- being a trainer is NOT judging",
+            "Mentoring students -- unless formally judging/examining their work",
+            "The applicant being judged by others",
+        ],
+        "subject_rule": "Subject must be the applicant (as judge) OR the judging organization/event OR co-judges for peer comparison",
+    },
+    "original_contribution": {
+        "include_direct": [
+            "Description of the applicant's original contribution (methodology, system, product)",
+            "Evidence of originality: what is new/novel about the contribution",
+            "Evidence of major significance: widespread adoption, industry change",
+        ],
+        "include_supporting": [
+            "Quantified impact data: adoption rate, user count, revenue, citations",
+            "Independent expert recommendation letters praising the specific contribution",
+            "Institutional or industry adoption of the applicant's work",
+        ],
+        "exclude": [
+            "General professional experience not tied to an original contribution",
+            "Routine business operations without innovation element",
+            "Other people's contributions or inventions",
+        ],
+        "subject_rule": "Subject must be the applicant OR an expert/institution commenting on the applicant's contribution",
+    },
+    "scholarly_articles": {
+        "include_direct": [
+            "Articles, books, papers, or educational content authored BY the applicant",
+            "Publication details: title, year, venue, authorship role",
+        ],
+        "include_supporting": [
+            "Publication venue's prestige: impact factor, ranking, editorial standards",
+            "Citation data and impact metrics of the applicant's publications",
+        ],
+        "exclude": [
+            "Articles written ABOUT the applicant -- belongs to standard (iii)",
+            "Content created by others",
+        ],
+        "subject_rule": "Subject must be the applicant (as author) OR the publication venue",
+    },
+    "display": {
+        "include_direct": [
+            "The applicant's work being displayed, exhibited, demonstrated, or showcased",
+            "Event details: name, date, location, type of display",
+        ],
+        "include_supporting": [
+            "Exhibition/showcase's prestige, scale, and professional standing",
+            "Audience reach, attendance figures, industry recognition of the event",
+        ],
+        "exclude": [
+            "Attending an event as a visitor (not displaying work)",
+            "Sponsoring or funding an event without displaying work",
+        ],
+        "subject_rule": "Subject must be the applicant (as exhibitor) OR the exhibition/event",
+    },
+    "leading_role": {
+        "include_direct": [
+            "The applicant's title, position, and role within an organization",
+            "Evidence of decision-making authority, management scope, responsibilities",
+        ],
+        "include_supporting": [
+            "Organization's distinguished reputation: history, scale, rankings",
+            "Organization's notable achievements, partnerships, or awards",
+            "Testimonials about the applicant's leadership impact",
+        ],
+        "exclude": [
+            "Roles at organizations without distinguished reputation",
+            "Entry-level or routine positions without leadership function",
+            "Other people's roles at different organizations",
+        ],
+        "subject_rule": "Subject must be the applicant (in leadership role) OR the organization where applicant serves",
+    },
+    "high_salary": {
+        "include_direct": [
+            "The applicant's salary, compensation, contract amounts, consulting fees",
+            "Employment contracts, pay stubs, tax records showing remuneration",
+        ],
+        "include_supporting": [
+            "Industry salary benchmarks from authoritative sources",
+            "Comparison data showing applicant earns significantly above average",
+        ],
+        "exclude": [
+            "Company revenue not tied to applicant's personal remuneration",
+            "Other people's salaries (unless used as industry comparison)",
+            "Projected/future earnings without current documentation",
+        ],
+        "subject_rule": "Subject must be the applicant (for compensation) OR an industry benchmark source",
+    },
+    "commercial_success": {
+        "include_direct": [
+            "Sales data, revenue figures, attendance for applicant's work",
+            "Business metrics directly tied to applicant's professional output",
+        ],
+        "include_supporting": [
+            "Industry benchmarks for commercial performance comparison",
+            "Media or industry recognition of commercial success",
+        ],
+        "exclude": [
+            "General company financials not tied to applicant's specific work",
+            "Other people's commercial achievements",
+        ],
+        "subject_rule": "Subject must be the applicant OR the applicant's business/venture",
+    },
+    "overall_merits": {
+        "include_direct": [
+            "Cross-criteria evidence demonstrating overall extraordinary ability",
+            "Expert testimonials spanning multiple criteria",
+        ],
+        "include_supporting": [
+            "Industry-wide recognition not fitting neatly into other categories",
+        ],
+        "exclude": [
+            "Evidence that clearly belongs to a specific standard (i)-(x)",
+        ],
+        "subject_rule": "Subject must be the applicant",
+    },
+}
+
+
+async def _topdown_pickup_for_standard(
+    standard_key: str,
+    standard_info: Dict,
+    all_snippets: List[Dict],
+    provider: str = "deepseek"
+) -> List[Dict]:
+    """
+    Top-down: LLM 从全量 applicant snippet 中为一个 standard 挑选相关证据。
+    返回被选中的 snippet 列表，每个附加 _topdown_chain 字段。
+    """
+    # 压缩 snippet 表示，减少 token 用量
+    compact_lines = []
+    snippet_lookup = {}
+    for snp in all_snippets:
+        sid = snp.get('snippet_id', snp.get('id', ''))
+        snippet_lookup[sid] = snp
+        exhibit_id = snp.get('exhibit_id', '')
+        evidence_type = snp.get('evidence_type', '')
+        subject = snp.get('subject', '')
+        text = snp.get('text', '')[:150]
+        compact_lines.append(
+            f"[{sid}] exhibit={exhibit_id} type={evidence_type} subject={subject} text={text}"
+        )
+
+    snippets_text = "\n".join(compact_lines)
+
+    # Per-standard pickup criteria
+    pickup_criteria = _TOPDOWN_PICKUP_CRITERIA.get(standard_key, {})
+    include_direct = pickup_criteria.get("include_direct", [])
+    include_supporting = pickup_criteria.get("include_supporting", [])
+    exclude_rules = pickup_criteria.get("exclude", [])
+    subject_rule = pickup_criteria.get("subject_rule", "Subject must be the applicant")
+
+    include_text = ""
+    if include_direct:
+        include_text += "DIRECT evidence (must include):\n"
+        for item in include_direct:
+            include_text += f"  - {item}\n"
+    if include_supporting:
+        include_text += "Valid SUPPORTING evidence:\n"
+        for item in include_supporting:
+            include_text += f"  - {item}\n"
+
+    exclude_text = ""
+    if exclude_rules:
+        exclude_text = "EXCLUDE (do NOT select):\n"
+        for item in exclude_rules:
+            exclude_text += f"  - {item}\n"
+
+    system_prompt = f"""You are an immigration law expert specializing in EB-1A petitions.
+Your task: select snippets relevant to a specific EB-1A evidentiary standard.
+
+SELECTION RULES:
+{include_text}
+{exclude_text}
+SUBJECT RULE: {subject_rule}
+
+Group selected snippets into "chains" — a chain is a group of snippets about the same
+media outlet, award, organization, event, or publication.
+
+Return COMPACT JSON (to avoid output truncation):
+{{
+  "chains": {{
+    "chain label": ["snippet_id_1", "snippet_id_2", ...]
+  }}
+}}
+
+If no snippets are relevant, return {{"chains": {{}}}}.
+"""
+
+    user_prompt = f"""## Standard: {standard_info.get('name', standard_key)}
+**Citation**: {standard_info.get('citation', '')}
+**Legal Requirements**:
+{standard_info.get('requirements', '')}
+
+## All Available Snippets ({len(all_snippets)} total)
+{snippets_text}
+
+Select snippets relevant to "{standard_info.get('name', standard_key)}" following the selection rules above.
+"""
+
+    try:
+        result = await call_llm(
+            prompt=user_prompt,
+            provider=provider,
+            system_prompt=system_prompt,
+            temperature=0.1,
+            max_tokens=8192
+        )
+
+        # Parse new compact format: {chains: {chain_label: [snippet_ids]}}
+        chains_data = result.get('chains', {})
+
+        # Fallback: old format {selected: [{snippet_id, chain, ...}]}
+        if not chains_data and result.get('selected'):
+            for item in result['selected']:
+                chain = item.get('chain', 'uncategorized')
+                sid = item.get('snippet_id', '')
+                chains_data.setdefault(chain, []).append(sid)
+
+        # Fallback: if extract_json failed (truncated response), try to recover
+        if not chains_data and 'content' in result and isinstance(result['content'], str):
+            raw = result['content']
+            try:
+                import re
+                # Try to find "chain_label": ["id1", "id2", ...] patterns
+                for match in re.finditer(r'"([^"]+)"\s*:\s*\[([^\]]*)\]', raw):
+                    chain_label = match.group(1)
+                    if chain_label == 'chains':
+                        continue
+                    ids_str = match.group(2)
+                    ids = re.findall(r'"(snp_[^"]+)"', ids_str)
+                    if ids:
+                        chains_data[chain_label] = ids
+                if chains_data:
+                    print(f"[TopDown] {standard_key}: recovered {len(chains_data)} chains from truncated response")
+            except Exception as recover_err:
+                print(f"[TopDown] {standard_key}: recovery failed: {recover_err}")
+
+        selected_snippets = []
+        for chain_label, snippet_ids in chains_data.items():
+            for sid in snippet_ids:
+                if sid in snippet_lookup:
+                    snp_copy = dict(snippet_lookup[sid])
+                    snp_copy['_topdown_chain'] = chain_label
+                    snp_copy['_topdown_relevance'] = 'direct'
+                    selected_snippets.append(snp_copy)
+
+        print(f"[TopDown] {standard_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+              f"{len(chains_data)} chains")
+        return selected_snippets
+
+    except Exception as e:
+        print(f"[TopDown] Error for {standard_key}: {e}, falling back to bottom-up mapping")
+        return []  # caller handles fallback
+
+
+async def _group_snippets_by_standard_topdown(
+    snippets: List[Dict],
+    legal_stds: Dict,
+    provider: str = "deepseek",
+    project_id: str = None
+) -> Dict[str, List[Dict]]:
+    """
+    Top-down snippet grouping: per-standard LLM 从全量 snippet 中挑选。
+    并行调用所有 standard，失败时直接抛出异常。
+    输出格式与 _group_snippets_by_standard() 相同。
+
+    如果 project_id 提供，保存中间 pickup 结果到 arguments/topdown_pickup.json。
+    """
+    # 只用 applicant snippet
+    applicant_snippets = [
+        snp for snp in snippets
+        if snp.get('is_applicant_achievement', True)
+    ]
+    print(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
+          f"with {len(applicant_snippets)} applicant snippets (parallel)")
+
+    # 并行调用所有 standard
+    tasks = []
+    std_keys = []
+    for std_key, std_info in legal_stds.items():
+        std_keys.append(std_key)
+        tasks.append(
+            _topdown_pickup_for_standard(std_key, std_info, applicant_snippets, provider)
+        )
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 组装结果，异常时直接报错（不再 fallback 到 bottom-up）
+    grouped = {std: [] for std in legal_stds.keys()}
+
+    for std_key, result in zip(std_keys, results):
+        if isinstance(result, Exception):
+            print(f"[TopDown] {std_key} FAILED: {result}")
+            raise RuntimeError(f"Top-down pickup failed for {std_key}: {result}")
+        grouped[std_key] = result
+
+    # Summary + save intermediate results
+    pickup_report = {}
+    for std_key, snps in grouped.items():
+        if snps:
+            chains = set(s.get('_topdown_chain', '') for s in snps)
+            chains.discard('')
+            chain_info = f", chains: {chains}" if chains else ""
+            print(f"[TopDown] {std_key}: {len(snps)} snippets{chain_info}")
+            pickup_report[std_key] = {
+                "count": len(snps),
+                "chains": sorted(chains),
+                "snippet_ids": [s.get('snippet_id', s.get('id', '')) for s in snps],
+                "details": [
+                    {
+                        "snippet_id": s.get('snippet_id', s.get('id', '')),
+                        "exhibit_id": s.get('exhibit_id', ''),
+                        "evidence_type": s.get('evidence_type', ''),
+                        "chain": s.get('_topdown_chain', ''),
+                        "relevance": s.get('_topdown_relevance', ''),
+                        "text": s.get('text', '')[:150],
+                    }
+                    for s in snps
+                ],
+            }
+
+    # Save intermediate pickup results for evaluation
+    if project_id:
+        try:
+            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
+            args_dir = projects_dir / project_id / "arguments"
+            args_dir.mkdir(parents=True, exist_ok=True)
+            pickup_file = args_dir / "topdown_pickup.json"
+            with open(pickup_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "total_applicant_snippets": len(applicant_snippets),
+                    "standards_count": len(legal_stds),
+                    "pickup_by_standard": pickup_report,
+                }, f, ensure_ascii=False, indent=2)
+            print(f"[TopDown] Saved pickup results to {pickup_file}")
+        except Exception as e:
+            print(f"[TopDown] Warning: could not save pickup results: {e}")
+
+    return grouped
 
 
 def _group_snippets_by_standard(
@@ -975,7 +1386,9 @@ def _format_snippets_by_standard(grouped: Dict[str, List[Dict]], applicant_name:
             text = snp.get('text', '')[:200]
             exhibit = snp.get('exhibit_id', '')
             subject = snp.get('subject', '')
-            lines.append(f"[{sid}] (Exhibit {exhibit}, subject: {subject}) {text}...")
+            chain_label = snp.get('_topdown_chain', '')
+            chain_str = f" [chain: {chain_label}]" if chain_label else ""
+            lines.append(f"[{sid}] (Exhibit {exhibit}{chain_str}, subject: {subject}) {text}...")
 
         if len(snps) > 30:
             lines.append(f"... and {len(snps) - 30} more snippets")
@@ -1378,33 +1791,6 @@ async def niw_organize_arguments_v2(
     return arguments, all_sub_arguments, filtered_out
 
 
-def _fallback_organize(snippets: List[Dict], applicant_name: str, legal_stds: Dict = None) -> List[LegalArgument]:
-    """Fallback: 简单分组"""
-    if legal_stds is None:
-        legal_stds = LEGAL_STANDARDS
-    grouped = _group_snippets_by_standard(snippets, legal_stds)
-    arguments = []
-
-    for std_key, snps in grouped.items():
-        if not snps:
-            continue
-
-        std_info = legal_stds.get(std_key, {})
-        snippet_ids = [s.get('snippet_id', s.get('id', '')) for s in snps]
-
-        arg = LegalArgument(
-            id=f"arg-{uuid.uuid4().hex[:8]}",
-            standard=std_key,
-            title=f"{applicant_name}'s {std_info.get('name', std_key)}",
-            rationale="Fallback grouping",
-            snippet_ids=snippet_ids,
-            evidence_strength="medium",
-            subject=applicant_name,
-        )
-        arguments.append(arg)
-
-    return arguments
-
 
 async def full_legal_pipeline(
     project_id: str,
@@ -1477,7 +1863,7 @@ async def full_legal_pipeline(
         # Step 1: 组织子论点
         print(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
         arguments, filtered = await organize_arguments_with_legal_framework(
-            snippets, applicant_name, provider, project_type
+            snippets, applicant_name, provider, project_type, project_id=project_id
         )
 
         print(f"[Step 1] Generated {len(arguments)} arguments")
@@ -1610,8 +1996,17 @@ async def regenerate_standard_pipeline(
         }
 
     # --- 按 standard 分组，只取目标 standard ---
-    snippets_by_std = _group_snippets_by_standard(snippets, legal_stds, evidence_mapping)
-    target_snippets = snippets_by_std.get(standard_key, [])
+    if project_type == "EB-1A":
+        # EB-1A: top-down pickup（单个 standard）
+        std_info = legal_stds[standard_key]
+        applicant_snippets = [s for s in snippets if s.get('is_applicant_achievement', True)]
+        target_snippets = await _topdown_pickup_for_standard(
+            standard_key, std_info, applicant_snippets, provider
+        )
+    else:
+        # NIW / L-1A: bottom-up 映射
+        snippets_by_std = _group_snippets_by_standard(snippets, legal_stds, evidence_mapping)
+        target_snippets = snippets_by_std.get(standard_key, [])
 
     if not target_snippets:
         return {

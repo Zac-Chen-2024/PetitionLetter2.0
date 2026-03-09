@@ -47,12 +47,17 @@ DEFENSIVE ARGUMENTATION: If any evidence could be perceived as a weakness (e.g.,
 
 ABSOLUTE RULES:
 1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
-2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
-3. Write in THIRD PERSON about "the Beneficiary".
-4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
+2. NEVER infer or fabricate information not explicitly stated in the source materials. \
+If a publication name, organization name, founding year, circulation number, or any \
+other factual detail does not appear in the OCR text or snippet content, do NOT guess \
+or fill it in from your general knowledge. Only state facts that have a specific \
+citation to an Exhibit page.
+3. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
+4. Write in THIRD PERSON about "the Beneficiary".
+5. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
 snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the \
 MOST RELEVANT block(s) — do NOT include all blocks on the page.
-5. Professional legal argumentative tone, 100% English."""
+6. Professional legal argumentative tone, 100% English."""
 
 _NIW_BASE_SYSTEM_PROMPT = """\
 You are a Senior Immigration Attorney drafting a National Interest Waiver (NIW) petition letter under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
@@ -80,12 +85,17 @@ Not every evidence needs all layers, but the strongest arguments have most of th
 
 ABSOLUTE RULES:
 1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
-2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
-3. Write in THIRD PERSON about "the Beneficiary".
-4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
+2. NEVER infer or fabricate information not explicitly stated in the source materials. \
+If a publication name, organization name, founding year, circulation number, or any \
+other factual detail does not appear in the OCR text or snippet content, do NOT guess \
+or fill it in from your general knowledge. Only state facts that have a specific \
+citation to an Exhibit page.
+3. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
+4. Write in THIRD PERSON about "the Beneficiary".
+5. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
 snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the \
 MOST RELEVANT block(s) — do NOT include all blocks on the page.
-5. Professional legal argumentative tone, 100% English."""
+6. Professional legal argumentative tone, 100% English."""
 
 
 # ============================================================
@@ -819,12 +829,17 @@ L-1A petitions are fact-intensive. Every legal point must be supported by specif
 
 ABSOLUTE RULES:
 1. Every fact MUST come from the SOURCE MATERIALS below. NEVER invent facts.
-2. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
-3. Write in THIRD PERSON about "the Beneficiary" and "the Petitioner".
-4. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
+2. NEVER infer or fabricate information not explicitly stated in the source materials. \
+If a publication name, organization name, founding year, circulation number, or any \
+other factual detail does not appear in the OCR text or snippet content, do NOT guess \
+or fill it in from your general knowledge. Only state facts that have a specific \
+citation to an Exhibit page.
+3. Extract ALL relevant numbers, dates, names, and statistics from the source materials.
+4. Write in THIRD PERSON about "the Beneficiary" and "the Petitioner".
+5. Each sentence must cite [Exhibit X, p.Y] in the text AND include the matching \
 snippet_id(s) from the SNIPPET INDEX in the JSON snippet_ids array. Pick the \
 MOST RELEVANT block(s) — do NOT include all blocks on the page.
-5. Professional legal argumentative tone, 100% English."""
+6. Professional legal argumentative tone, 100% English."""
 
 _L1A_FRAME_SYSTEM_PROMPT = (
     "You are a Senior Immigration Attorney writing an L-1A intracompany transferee "
