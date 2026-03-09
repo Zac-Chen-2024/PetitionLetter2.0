@@ -1045,20 +1045,26 @@ _TOPDOWN_PICKUP_CRITERIA = {
     },
     "leading_role": {
         "include_direct": [
-            "The applicant's title, position, and role within an organization",
-            "Evidence of decision-making authority, management scope, responsibilities",
+            # Prong 1: Leading/Critical Role
+            "The applicant's title, position, founding role, ownership, or executive authority within an organization",
+            "Evidence of decision-making authority, management scope, and day-to-day leadership responsibilities",
+            "Company letters or testimonials confirming the applicant's critical role and leadership impact",
         ],
         "include_supporting": [
-            "Organization's distinguished reputation: history, scale, rankings",
-            "Organization's notable achievements, partnerships, or awards",
-            "Testimonials about the applicant's leadership impact",
+            # Prong 2: Distinguished Reputation of the Organization
+            "Organization's founding, history, scale, industry standing, and notable achievements",
+            "Government or national authority endorsements, approval letters, or official replies directed at the organization",
+            "The organization's charter, articles of incorporation, or official registration demonstrating formal standing",
+            "Press releases or media coverage about the organization's events, competitions, or milestones (attendance figures, participant counts, geographic reach)",
+            "Partnerships with nationally/internationally recognized bodies (e.g., national sports associations, government agencies, industry federations)",
+            "Third-party listings, profiles, or websites describing the organization as a recognized entity or business partner",
+            "Recommendation letters that describe BOTH the applicant's leadership AND the organization's significance",
         ],
         "exclude": [
-            "Roles at organizations without distinguished reputation",
             "Entry-level or routine positions without leadership function",
-            "Other people's roles at different organizations",
+            "Other people's roles at unrelated organizations",
         ],
-        "subject_rule": "Subject must be the applicant (in leadership role) OR the organization where applicant serves",
+        "subject_rule": "Subject may be: (1) the applicant in a leadership capacity, (2) the organization where the applicant serves, (3) a government/industry authority that endorses or partners with the organization, or (4) third-party sources documenting the organization's reputation. NOTE: evidence about the organization's distinguished reputation is equally important as evidence about the applicant's role — do NOT skip it.",
     },
     "high_salary": {
         "include_direct": [
@@ -1257,21 +1263,27 @@ async def _group_snippets_by_standard_topdown(
 
     如果 project_id 提供，保存中间 pickup 结果到 arguments/topdown_pickup.json。
     """
-    # 只用 applicant snippet
+    # 默认只用 applicant snippet
     applicant_snippets = [
         snp for snp in snippets
         if snp.get('is_applicant_achievement', True)
     ]
+    # leading_role / display 需要第三方对组织的描述（is_applicant_achievement=False），
+    # 使用全量 snippet
+    _STANDARDS_NEED_ALL_SNIPPETS = {"leading_role", "display"}
+
     print(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
-          f"with {len(applicant_snippets)} applicant snippets (parallel)")
+          f"with {len(applicant_snippets)} applicant snippets "
+          f"(+{len(snippets) - len(applicant_snippets)} non-applicant for org-reputation standards)")
 
     # 并行调用所有 standard
     tasks = []
     std_keys = []
     for std_key, std_info in legal_stds.items():
         std_keys.append(std_key)
+        pool = snippets if std_key in _STANDARDS_NEED_ALL_SNIPPETS else applicant_snippets
         tasks.append(
-            _topdown_pickup_for_standard(std_key, std_info, applicant_snippets, provider)
+            _topdown_pickup_for_standard(std_key, std_info, pool, provider)
         )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1999,9 +2011,13 @@ async def regenerate_standard_pipeline(
     if project_type == "EB-1A":
         # EB-1A: top-down pickup（单个 standard）
         std_info = legal_stds[standard_key]
-        applicant_snippets = [s for s in snippets if s.get('is_applicant_achievement', True)]
+        # leading_role/display 需要全量 snippet（含第三方对组织的描述）
+        if standard_key in ("leading_role", "display"):
+            pool = snippets
+        else:
+            pool = [s for s in snippets if s.get('is_applicant_achievement', True)]
         target_snippets = await _topdown_pickup_for_standard(
-            standard_key, std_info, applicant_snippets, provider
+            standard_key, std_info, pool, provider
         )
     else:
         # NIW / L-1A: bottom-up 映射
