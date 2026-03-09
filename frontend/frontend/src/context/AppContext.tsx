@@ -236,8 +236,8 @@ export function useApp() {
   }, [writing.confirmAllMappings, project.projectId, project.setPipelineState]);
 
   const generatePetition = useCallback(async () => {
-    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated);
-  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated]);
+    return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards);
+  }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards]);
 
   const reloadSnippets = useCallback(async () => {
     return writing.reloadSnippets(project.projectId, snippets.setSnippets);

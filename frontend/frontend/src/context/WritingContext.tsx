@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react';
-import type { WritingEdge, LetterSection, Position, Snippet, Argument, SubArgument, PipelineState, MergeSuggestion } from '../types';
+import type { WritingEdge, LetterSection, Position, Snippet, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard } from '../types';
 import { apiClient } from '../services/api';
+import { STANDARD_ID_TO_KEY } from '../constants/colors';
 
 // ============================================
 // WritingContext
@@ -95,7 +96,7 @@ export interface WritingContextType {
   // Pipeline operations take projectId & llmProvider as parameters
   extractSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
   confirmAllMappings: (projectId: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
-  generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[], onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void) => Promise<void>;
+  generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[], onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void, legalStandards?: LegalStandard[]) => Promise<void>;
   reloadSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>) => Promise<void>;
   // Unified extraction
   unifiedExtract: (projectId: string, llmProvider: string, applicantName: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
@@ -295,18 +296,25 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     llmProvider: string,
     setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>,
     arguments_?: Argument[],
-    onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void
+    onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void,
+    legalStandards?: LegalStandard[]
   ) => {
-    // Determine which standards to generate based on actual arguments
-    const allStandards = [
-      'awards', 'membership', 'published_material', 'judging',
-      'original_contribution', 'scholarly_articles', 'leading_role', 'exhibitions'
-    ];
+    // No arguments → nothing to generate
+    if (!arguments_?.length) return;
+
+    // Build order map from legalStandards (dynamic, supports all project types)
+    const orderMap = new Map<string, number>();
+    legalStandards?.forEach(std => {
+      const key = STANDARD_ID_TO_KEY[std.id];
+      if (key) orderMap.set(key, std.order);
+    });
+
     // overall_merits is excluded from batch generation — it's manually triggered from canvas
-    const standardsToGenerate = arguments_?.length
-      ? [...new Set(arguments_.filter(a => a.standardKey && a.standardKey !== 'overall_merits').map(a => a.standardKey!))]
-          .sort((a, b) => allStandards.indexOf(a) - allStandards.indexOf(b))
-      : allStandards;
+    const standardsToGenerate = [...new Set(
+      arguments_.filter(a => a.standardKey && a.standardKey !== 'overall_merits').map(a => a.standardKey!)
+    )].sort((a, b) => (orderMap.get(a) ?? 99) - (orderMap.get(b) ?? 99));
+
+    if (standardsToGenerate.length === 0) return;
 
     const total = standardsToGenerate.length;
     setPipelineState(prev => ({
