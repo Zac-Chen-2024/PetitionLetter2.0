@@ -167,6 +167,17 @@ def _niw_instruction(chain: str, sentence_range: Tuple[int, int], standard_key: 
         f"INSTRUCTIONS:\n"
         f"{chain}\n"
         f"- Write one paragraph ({lo}-{hi} sentences) per Sub-Argument listed above\n"
+        f"- PERSON NAMING (MANDATORY): When the source materials name a person, you MUST use\n"
+        f"  their FULL NAME with a title prefix (Dr., Prof., Mr., Ms., Director, Chairman,\n"
+        f"  Vice President, etc.) and write 2-3 sentences about their credentials, title, and\n"
+        f"  affiliation. NEVER replace a named person with a generic label like 'an expert'\n"
+        f"  or 'a researcher'. Example: 'Mr. Fusheng Sun, a Solution Architect at NOKIA with\n"
+        f"  over 15 years of experience in telecommunications infrastructure, attests that...'\n"
+        f"- VERBATIM QUOTING (MANDATORY): When source materials contain charter text, bylaw\n"
+        f"  provisions, official criteria, expert recommendation assessments, or institutional\n"
+        f"  descriptions, QUOTE the exact words using quotation marks. Example: Mr. Sun states:\n"
+        f"  \"the Beneficiary's innovations in autonomous network management have directly\n"
+        f"  influenced industry-wide standards.\"\n"
         f"{prong3_rules}"
         f"{_INSTRUCTION_TAIL}"
     )
@@ -177,6 +188,44 @@ def _niw_instruction(chain: str, sentence_range: Tuple[int, int], standard_key: 
 # ============================================================
 
 _NIW_APPENDICES: Dict[str, str] = {
+    "prong1_merit": (
+        "\nPRONG 1 — SUBSTANTIAL MERIT & NATIONAL IMPORTANCE [Matter of Dhanasar, Prong 1]:\n\n"
+        "STRUCTURE: Build a two-part argument with BOTH of the following sections:\n\n"
+        "SECTION A — SUBSTANTIAL MERIT (MANDATORY):\n"
+        "  Define the beneficiary's proposed endeavor precisely. Then demonstrate its\n"
+        "  substantial merit with concrete evidence: technical innovation, societal benefit,\n"
+        "  industry recognition, or solved problems. Use specific metrics, outcomes, and\n"
+        "  expert assessments from the source materials. If recommendation letters discuss\n"
+        "  the endeavor's value, QUOTE the recommender by full name and title.\n\n"
+        "SECTION B — NATIONAL IMPORTANCE (MANDATORY):\n"
+        "  Prove the endeavor's importance extends beyond the beneficiary's personal interests\n"
+        "  to a national scale. Evidence includes: government policy alignment (executive orders,\n"
+        "  legislation, agency priorities), economic impact data (market size, job creation,\n"
+        "  GDP contribution), broad applicability across sectors or populations, and strategic\n"
+        "  necessity (national security, infrastructure, public health). Cite specific statistics\n"
+        "  and policy documents from the source materials.\n"
+    ),
+    "prong2_positioned": (
+        "\nPRONG 2 — WELL POSITIONED TO ADVANCE [Matter of Dhanasar, Prong 2]:\n\n"
+        "STRUCTURE: Build a multi-dimensional argument covering as many of the following as\n"
+        "evidence supports (minimum 3 sections):\n\n"
+        "SECTION A — EDUCATION & EXPERTISE (if evidence exists):\n"
+        "  Advanced degrees, specialized training, credential evaluations, institutional prestige.\n\n"
+        "SECTION B — PROFESSIONAL TRACK RECORD (if evidence exists):\n"
+        "  Key positions held, leadership roles, business impact, quantified achievements.\n\n"
+        "SECTION C — AWARDS & RECOGNITION (if evidence exists):\n"
+        "  Industry awards, honors, competitive selections — with granting body context.\n\n"
+        "SECTION D — RESEARCH & PUBLICATIONS (if evidence exists):\n"
+        "  Publications, patents, citations, white papers, standards contributions.\n\n"
+        "SECTION E — EXPERT ENDORSEMENTS (if evidence exists):\n"
+        "  Recommendation letters from named experts. For EACH recommender: state their\n"
+        "  full name, title, affiliation, and credentials (2-3 sentences), then QUOTE their\n"
+        "  assessment of the beneficiary VERBATIM using quotation marks.\n\n"
+        "SECTION F — CONCRETE FUTURE PLANS (if evidence exists):\n"
+        "  Specific plans to advance the endeavor in the U.S. — target organizations,\n"
+        "  collaborations, timelines, resources already secured.\n\n"
+        "NOTE: Omit sections without supporting evidence. Do NOT fabricate content.\n"
+    ),
     "prong3_balance": (
         "\nPRONG 3 — WAIVER JUSTIFICATION [Matter of Dhanasar, Prong 3]:\n\n"
         "STRUCTURE: Build a comprehensive waiver argument with ALL of the following components:\n\n"
@@ -733,7 +782,7 @@ _NIW_STRATEGIES: Dict[str, WritingStrategy] = {
             "  endeavor definition → substantive value with concrete evidence → "
             "national-level importance (statistics, policy relevance, broad applicability)"
         ),
-        (3, 6),
+        (5, 10),
     ),
     "prong2_positioned": _build_niw_strategy(
         "prong2_positioned",
@@ -743,7 +792,7 @@ _NIW_STRATEGIES: Dict[str, WritingStrategy] = {
             "  qualifications & expertise → track record of achievements → "
             "progress already made → concrete future plans"
         ),
-        (3, 5),
+        (5, 10),
     ),
     "prong3_balance": _build_niw_strategy(
         "prong3_balance",
@@ -753,7 +802,7 @@ _NIW_STRATEGIES: Dict[str, WritingStrategy] = {
             "  impracticality of labor certification → national benefit analysis → "
             "benefits beyond any single employer → urgency (if applicable) → explicit balancing"
         ),
-        (4, 8),
+        (6, 12),
         cross_section_context=True,
     ),
 }

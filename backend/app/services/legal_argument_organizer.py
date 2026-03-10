@@ -226,42 +226,92 @@ Argumentation structure:
 
 NIW_LEGAL_STANDARDS = {
     "prong1_merit": {
-        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, Prong 1",
+        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 889-890 (AAO 2016), Prong 1",
         "name": "Substantial Merit & National Importance",
         "requirements": """
-The proposed endeavor must have both substantial merit and national importance.
+Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 889-890):
 
-论证结构：
-1. 描述申请人提出的 endeavor（研究方向、商业计划等）
-2. 证明其具有实质性价值（substantial merit）
-3. 证明其具有全国性重要意义（national importance）
-4. 引用推荐信和客观证据佐证
+"The first prong, substantial merit and national importance, focuses on the specific
+endeavor that the foreign national proposes to undertake. The term 'endeavor' is more
+specific than the general occupation... [W]e focus on what the person proposes to work
+on rather than the general occupation."
+
+"The endeavor's merit may be demonstrated in a range of areas such as business,
+entrepreneurialism, science, technology, culture, health, or education. The merit of
+a proposed endeavor may be demonstrated by, among other things, showing potential
+prospective impact of the endeavor."
+
+National importance — geographic scope:
+"We understand 'national importance' more broadly... [The term] does not require that
+the endeavor have national or global reach. We look instead at whether the endeavor
+has 'national' ramifications — i.e., the potential to substantially impact or influence
+work or activity extending well beyond a particular locality."
+
+Argumentation structure:
+1. Define the proposed endeavor specifically (research direction, methodology, product, business plan)
+2. Substantial merit: the endeavor's value (advances the field, solves an important problem, creates economic value)
+3. National importance: ramifications beyond a particular locality (policy alignment, field-wide adoption potential, societal benefit)
+4. Supporting evidence: expert recommendations confirming significance, quantitative impact data, policy/industry alignment
 """,
     },
     "prong2_positioned": {
-        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, Prong 2",
+        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 890 (AAO 2016), Prong 2",
         "name": "Well Positioned to Advance the Endeavor",
         "requirements": """
-The foreign national must be well positioned to advance the proposed endeavor.
+Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 890):
 
-论证结构：
-1. 教育背景和专业资质
-2. 相关领域的工作经验和成就记录
-3. 已取得的进展和未来计划
-4. 独特技能或知识使申请人特别适合推进此事业
+"Under the second prong, petitioners must demonstrate that the foreign nationals are
+well positioned to advance their proposed endeavor. In determining whether petitioners
+have met this prong, we consider factors including, but not limited to: the individual's
+education, skills, knowledge and record of success in related or similar efforts; a model
+or plan for future activities; any progress towards achieving the proposed endeavor; and
+the interest of potential customers, users, investors, or other relevant entities or
+individuals."
+
+Key factors (non-exhaustive):
+- Education, skills, knowledge
+- Record of success in related or similar efforts
+- A model or plan for future activities
+- Progress towards achieving the proposed endeavor
+- Interest of potential customers, users, investors, or other relevant entities
+
+Argumentation structure:
+1. Education and professional qualifications (degrees, certifications, specialized training)
+2. Track record of success: publications, citations, awards, industry recognition, quantified achievements
+3. Expert endorsements: recommendation letters from authorities confirming qualifications
+4. Concrete plan and progress: current position, ongoing projects, measurable milestones
+5. External validation: customer adoption, investor interest, institutional partnerships
 """,
     },
     "prong3_balance": {
-        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, Prong 3",
+        "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 890-891 (AAO 2016), Prong 3",
         "name": "Balance of Equities Favors Waiver",
         "requirements": """
-On balance, it would be beneficial to the United States to waive the requirements of a job offer.
+Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 890-891):
 
-论证结构：
-1. 申请人的贡献对美国利益的重要性
-2. 劳工证要求对此类人才的不适用性
-3. 申请人的工作成果已超越特定雇主的利益
-4. 国家利益优于保护美国工人的考量
+"The third prong requires the petitioner to demonstrate that, on balance, it would be
+beneficial to the United States to waive the requirements of a job offer, and thus of
+a labor certification."
+
+"In performing this analysis, USCIS may evaluate factors such as: whether, in light of
+the nature of the foreign national's qualifications or proposed endeavor, it would be
+impractical either for the foreign national to secure a job offer or for the petitioner
+to obtain a labor certification; whether, even assuming that other qualified U.S. workers
+are available, the United States would still benefit from the foreign national's
+contributions; and whether the national interest in the foreign national's contributions
+is sufficiently urgent to warrant forgoing the labor certification process."
+
+"In evaluating the third prong, including whether the waiver would be in the national
+interest, USCIS may consider, as one factor among others, the degree to which other
+evidence of record — including evidence submitted to meet other prongs — supports the
+finding that the foreign national's entry will serve the national interest."
+
+Argumentation structure:
+1. Impracticality of labor certification: work transcends conventional employer-employee relationships
+2. National benefit despite available U.S. workers: unique qualifications, irreplaceable expertise
+3. Benefits beyond a single employer: field-wide impact, public interest, multi-sector applications
+4. Urgency: time-sensitive national priorities, policy alignment, critical workforce shortages
+5. Explicit balancing: totality of evidence from all three prongs supports waiver
 """,
     },
 }
@@ -1113,6 +1163,74 @@ _TOPDOWN_PICKUP_CRITERIA = {
 }
 
 
+# ==================== NIW Top-Down Pickup Criteria ====================
+
+_NIW_TOPDOWN_PICKUP_CRITERIA = {
+    "prong1_merit": {
+        "include_direct": [
+            "Description of the applicant's proposed endeavor: specific research direction, methodology, technology, product, or business plan",
+            "Evidence of substantial merit: the endeavor's value to its field (advances knowledge, solves important problems, creates economic value)",
+            "Evidence of national importance: the endeavor's potential impact beyond a particular locality (policy alignment, field-wide adoption, societal benefit)",
+            "Field-level context: the significance of the problem the endeavor addresses, industry trends, market need",
+        ],
+        "include_supporting": [
+            "Expert recommendation letters that describe and endorse the significance of the ENDEAVOR (not just the person)",
+            "Quantitative impact data demonstrating the endeavor's reach or potential (adoption metrics, revenue, citations, users)",
+            "Government policy documents, industry reports, or news articles showing alignment between the endeavor and national priorities",
+            "Media coverage or published material about the applicant's work and its field-level importance",
+        ],
+        "exclude": [
+            "Personal biographical details with NO connection to the proposed endeavor (e.g., hobbies, unrelated work history)",
+            "Purely administrative documents (visa stamps, passport pages, address records)",
+            "Evidence that ONLY describes the applicant's qualifications without linking them to the endeavor's merit or importance — belongs in Prong 2",
+        ],
+        "subject_rule": "Subject may be: the applicant's proposed endeavor, the field/industry the endeavor impacts, experts endorsing the endeavor's significance, or policy/market context supporting national importance. Focus is on WHAT the applicant proposes to do, not WHO the applicant is.",
+    },
+    "prong2_positioned": {
+        "include_direct": [
+            "Education: degrees, universities, specialized training, certifications",
+            "Skills and knowledge: domain expertise, technical competencies, language abilities",
+            "Record of success: publications, patents, awards, honors, citation metrics, industry recognition",
+            "Track record in related or similar efforts: prior projects, previous positions, measurable achievements",
+        ],
+        "include_supporting": [
+            "Expert recommendation letters that attest to the applicant's qualifications, expertise, and track record",
+            "A model or plan for future activities: research proposals, business plans, collaboration agreements",
+            "Progress towards achieving the proposed endeavor: current position, ongoing projects, milestones reached",
+            "Interest of potential customers, users, investors, or relevant entities: adoption data, letters of intent, partnerships",
+            "Recommender credentials that establish authority to evaluate the applicant (credibility proof)",
+        ],
+        "exclude": [
+            "Evidence about the endeavor's merit/importance without connection to the applicant's ability to advance it — belongs in Prong 1",
+            "Purely administrative documents (visa stamps, passport pages, address records)",
+        ],
+        "subject_rule": "Subject may be: the applicant (education, skills, achievements), experts evaluating the applicant's qualifications, institutions where the applicant has worked or studied, or entities showing interest in the applicant's work. Focus is on WHO the applicant is and WHY they can succeed.",
+    },
+    "prong3_balance": {
+        "include_direct": [
+            "Evidence that labor certification is impractical: self-directed research, entrepreneurial ventures, multi-institutional collaborations, work that cannot be captured in a PERM job description",
+            "Evidence that the U.S. would benefit even if qualified U.S. workers are available: unique expertise, irreplaceable contributions, specialized knowledge that others lack",
+            "Evidence that benefits extend beyond a single employer: field-wide impact, public interest, multi-sector applications, open-source or publicly available work",
+            "Evidence of urgency: time-sensitive national priorities, critical workforce shortages, government policy alignment",
+        ],
+        "include_supporting": [
+            "Government policy initiatives aligned with the applicant's work (executive orders, legislation, federal funding programs)",
+            "Industry demand data or workforce shortage reports in the applicant's field",
+            "Expert statements that EXPLICITLY address why the applicant's contributions serve the NATIONAL INTEREST or why waiver is justified",
+            "Evidence of the applicant's work benefiting MULTIPLE institutions, organizations, or the public (not just one employer)",
+        ],
+        "exclude": [
+            "Generic statements about immigration benefits without specific connection to this applicant",
+            "Evidence that only shows the applicant is qualified (Prong 2) without linking to why waiver serves national interest",
+            "General biographical details, routine education records, or employment history that do not speak to waiver justification",
+            "Recommendation letters that only praise the applicant's skills without addressing national interest or waiver — these belong in Prong 2",
+            "Publication lists, citation counts, or award names without context connecting them to the waiver argument",
+        ],
+        "subject_rule": "Subject may be: the applicant's work and its BROADER societal impact, government/policy context supporting urgency, industry demand for the applicant's expertise, or institutions that benefit from the applicant's contributions. Focus is on WHY the national interest is better served by waiving labor certification. Be SELECTIVE — only include evidence with a clear connection to the waiver argument.",
+    },
+}
+
+
 async def _topdown_pickup_for_standard(
     standard_key: str,
     standard_info: Dict,
@@ -1371,6 +1489,290 @@ async def _group_snippets_by_standard_topdown(
     return grouped
 
 
+# ==================== NIW Top-Down Pickup ====================
+
+async def _niw_topdown_pickup_for_prong(
+    prong_key: str,
+    prong_info: Dict,
+    all_snippets: List[Dict],
+    provider: str = "deepseek",
+    cross_prong_context: str = ""
+) -> List[Dict]:
+    """
+    NIW top-down: LLM selects snippets relevant to a specific Dhanasar prong.
+    For Prong 3, cross_prong_context provides Prong 1/2 pickup summary.
+    Returns selected snippets, each with _topdown_chain field.
+    """
+    from collections import defaultdict as _defaultdict
+
+    # Build exhibit-level source context
+    _exhibit_sources = _defaultdict(set)
+    for snp in all_snippets:
+        eid = snp.get('exhibit_id', '')
+        if not eid:
+            continue
+        rec = snp.get('recommender_name', '')
+        if rec:
+            _exhibit_sources[eid].add(rec)
+        if snp.get('evidence_type') in ('source_credibility', 'recommendation') and snp.get('subject_role') in ('organization', 'media', 'event', 'recommender'):
+            subj = snp.get('subject', '')
+            if subj and len(subj) < 60:
+                _exhibit_sources[eid].add(subj)
+
+    exhibit_label = {}
+    for eid, sources in _exhibit_sources.items():
+        best = min(sources, key=len) if sources else ''
+        exhibit_label[eid] = f"{eid}({best})" if best else eid
+
+    # Compress snippets
+    compact_lines = []
+    snippet_lookup = {}
+    for snp in all_snippets:
+        sid = snp.get('snippet_id', snp.get('id', ''))
+        snippet_lookup[sid] = snp
+        exhibit_id = snp.get('exhibit_id', '')
+        evidence_type = snp.get('evidence_type', '')
+        subject = snp.get('subject', '')
+        text = snp.get('text', '')[:150]
+        ex_label = exhibit_label.get(exhibit_id, exhibit_id)
+        compact_lines.append(
+            f"[{sid}] exhibit={ex_label} type={evidence_type} subject={subject} text={text}"
+        )
+
+    snippets_text = "\n".join(compact_lines)
+
+    # Per-prong pickup criteria
+    pickup_criteria = _NIW_TOPDOWN_PICKUP_CRITERIA.get(prong_key, {})
+    include_direct = pickup_criteria.get("include_direct", [])
+    include_supporting = pickup_criteria.get("include_supporting", [])
+    exclude_rules = pickup_criteria.get("exclude", [])
+    subject_rule = pickup_criteria.get("subject_rule", "Subject must be the applicant")
+
+    include_text = ""
+    if include_direct:
+        include_text += "DIRECT evidence (must include):\n"
+        for item in include_direct:
+            include_text += f"  - {item}\n"
+    if include_supporting:
+        include_text += "Valid SUPPORTING evidence:\n"
+        for item in include_supporting:
+            include_text += f"  - {item}\n"
+
+    exclude_text = ""
+    if exclude_rules:
+        exclude_text = "EXCLUDE (do NOT select):\n"
+        for item in exclude_rules:
+            exclude_text += f"  - {item}\n"
+
+    cross_prong_section = ""
+    if cross_prong_context:
+        cross_prong_section = f"""
+CROSS-PRONG CONTEXT (evidence already selected for Prong 1 & 2):
+{cross_prong_context}
+
+INSTRUCTIONS FOR PRONG 3 PICKUP:
+- Dhanasar allows cross-prong consideration: "USCIS may consider... the degree to which
+  other evidence of record — including evidence submitted to meet other prongs — supports
+  the finding that the foreign national's entry will serve the national interest."
+- You MAY selectively include a SMALL number of the STRONGEST Prong 1/2 snippets that
+  directly support a specific waiver argument (e.g., a policy document showing urgency,
+  an expert quote about irreplaceable expertise). Do NOT bulk-include all Prong 1/2 evidence.
+- Your PRIMARY focus is evidence that specifically addresses: impracticality of labor cert,
+  national benefit despite available U.S. workers, benefits beyond a single employer, and urgency.
+- Target: select roughly 30-50% of total snippets for Prong 3, NOT 80-100%.
+"""
+
+    system_prompt = f"""You are an immigration law expert specializing in NIW (National Interest Waiver) petitions under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
+
+Your task: select snippets relevant to a specific Dhanasar prong from the full evidence pool.
+
+SELECTION RULES:
+{include_text}
+{exclude_text}
+SUBJECT RULE: {subject_rule}
+
+IMPORTANT NIW CONTEXT:
+- NIW has three prongs under Dhanasar. You are selecting for ONE prong.
+- For Prong 1 & 2: be INCLUSIVE — if a snippet is arguably relevant, include it.
+- For Prong 3 (waiver): be SELECTIVE — only include evidence with a CLEAR connection to the waiver argument. Do NOT bulk-include everything.
+- Recommendation letters often support multiple prongs — include them if they contain content relevant to THIS prong.
+{cross_prong_section}
+Group selected snippets into "chains" — a chain is a group of snippets about the same
+topic, recommender, organization, or evidence theme.
+
+Return COMPACT JSON (to avoid output truncation):
+{{
+  "chains": {{
+    "chain label": ["snippet_id_1", "snippet_id_2", ...]
+  }}
+}}
+
+If no snippets are relevant, return {{"chains": {{}}}}.
+"""
+
+    user_prompt = f"""## Dhanasar Prong: {prong_info.get('name', prong_key)}
+**Citation**: {prong_info.get('citation', '')}
+**Legal Requirements**:
+{prong_info.get('requirements', '')}
+
+## All Available Snippets ({len(all_snippets)} total)
+{snippets_text}
+
+Select snippets relevant to "{prong_info.get('name', prong_key)}" following the selection rules above.
+"""
+
+    try:
+        result = await call_llm(
+            prompt=user_prompt,
+            provider=provider,
+            system_prompt=system_prompt,
+            temperature=0.1,
+            max_tokens=8192
+        )
+
+        chains_data = result.get('chains', {})
+
+        # Fallback: old format
+        if not chains_data and result.get('selected'):
+            for item in result['selected']:
+                chain = item.get('chain', 'uncategorized')
+                sid = item.get('snippet_id', '')
+                chains_data.setdefault(chain, []).append(sid)
+
+        # Fallback: truncated response recovery
+        if not chains_data and 'content' in result and isinstance(result['content'], str):
+            raw = result['content']
+            try:
+                import re
+                for match in re.finditer(r'"([^"]+)"\s*:\s*\[([^\]]*)\]', raw):
+                    chain_label = match.group(1)
+                    if chain_label == 'chains':
+                        continue
+                    ids_str = match.group(2)
+                    ids = re.findall(r'"(snp_[^"]+)"', ids_str)
+                    if ids:
+                        chains_data[chain_label] = ids
+                if chains_data:
+                    print(f"[NIW-TopDown] {prong_key}: recovered {len(chains_data)} chains from truncated response")
+            except Exception as recover_err:
+                print(f"[NIW-TopDown] {prong_key}: recovery failed: {recover_err}")
+
+        selected_snippets = []
+        for chain_label, snippet_ids in chains_data.items():
+            for sid in snippet_ids:
+                if sid in snippet_lookup:
+                    snp_copy = dict(snippet_lookup[sid])
+                    snp_copy['_topdown_chain'] = chain_label
+                    snp_copy['_topdown_relevance'] = 'direct'
+                    selected_snippets.append(snp_copy)
+
+        print(f"[NIW-TopDown] {prong_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+              f"{len(chains_data)} chains")
+        return selected_snippets
+
+    except Exception as e:
+        print(f"[NIW-TopDown] Error for {prong_key}: {e}")
+        return []  # caller handles fallback
+
+
+async def _niw_group_snippets_by_prong_topdown(
+    snippets: List[Dict],
+    provider: str = "deepseek",
+    project_id: str = None
+) -> Dict[str, List[Dict]]:
+    """
+    NIW top-down snippet grouping: per-prong LLM selects from full snippet pool.
+
+    Flow: Prong 1 & 2 in parallel → build cross-prong context → Prong 3 with context.
+    This mirrors Dhanasar's structure: Prong 3 (waiver) reframes Prong 1/2 evidence.
+
+    Returns {prong_key: [selected_snippets]}.
+    """
+    print(f"[NIW-TopDown] Starting top-down pickup for 3 Dhanasar prongs "
+          f"with {len(snippets)} total snippets")
+
+    grouped = {prong: [] for prong in NIW_LEGAL_STANDARDS.keys()}
+
+    # Phase 1: Prong 1 & Prong 2 in parallel
+    print("[NIW-TopDown] Phase 1: Prong 1 & 2 in parallel...")
+    p1_info = NIW_LEGAL_STANDARDS["prong1_merit"]
+    p2_info = NIW_LEGAL_STANDARDS["prong2_positioned"]
+    p1_task = _niw_topdown_pickup_for_prong("prong1_merit", p1_info, snippets, provider)
+    p2_task = _niw_topdown_pickup_for_prong("prong2_positioned", p2_info, snippets, provider)
+
+    results_12 = await asyncio.gather(p1_task, p2_task, return_exceptions=True)
+
+    for prong_key, result in zip(["prong1_merit", "prong2_positioned"], results_12):
+        if isinstance(result, Exception):
+            print(f"[NIW-TopDown] {prong_key} FAILED: {result}")
+            raise RuntimeError(f"NIW top-down pickup failed for {prong_key}: {result}")
+        grouped[prong_key] = result
+
+    # Phase 2: Build cross-prong context from Prong 1/2 results for Prong 3
+    print("[NIW-TopDown] Phase 2: Prong 3 with Prong 1/2 context...")
+    cross_prong_lines = []
+    for pk in ["prong1_merit", "prong2_positioned"]:
+        snps = grouped[pk]
+        if not snps:
+            continue
+        chains = {}
+        for s in snps:
+            chain = s.get('_topdown_chain', 'other')
+            chains.setdefault(chain, []).append(s)
+        chain_summaries = []
+        for chain_label, chain_snps in chains.items():
+            sids = [s.get('snippet_id', s.get('id', '')) for s in chain_snps]
+            sample_text = chain_snps[0].get('text', '')[:100] if chain_snps else ''
+            chain_summaries.append(f"  - {chain_label} ({len(sids)} snippets): {sample_text}...")
+        pk_name = NIW_LEGAL_STANDARDS[pk].get('name', pk)
+        cross_prong_lines.append(f"\n{pk_name} ({len(snps)} snippets selected):")
+        cross_prong_lines.extend(chain_summaries)
+
+    cross_prong_context = "\n".join(cross_prong_lines) if cross_prong_lines else ""
+
+    p3_info = NIW_LEGAL_STANDARDS["prong3_balance"]
+    p3_result = await _niw_topdown_pickup_for_prong(
+        "prong3_balance", p3_info, snippets, provider,
+        cross_prong_context=cross_prong_context
+    )
+    if isinstance(p3_result, Exception):
+        raise RuntimeError(f"NIW top-down pickup failed for prong3_balance: {p3_result}")
+    grouped["prong3_balance"] = p3_result
+
+    # Summary + save intermediate results
+    pickup_report = {}
+    for prong_key, snps in grouped.items():
+        if snps:
+            chains = set(s.get('_topdown_chain', '') for s in snps)
+            chains.discard('')
+            chain_info = f", chains: {sorted(chains)}" if chains else ""
+            print(f"[NIW-TopDown] {prong_key}: {len(snps)} snippets{chain_info}")
+            pickup_report[prong_key] = {
+                "count": len(snps),
+                "chains": sorted(chains),
+                "snippet_ids": [s.get('snippet_id', s.get('id', '')) for s in snps],
+            }
+
+    if project_id:
+        try:
+            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
+            args_dir = projects_dir / project_id / "arguments"
+            args_dir.mkdir(parents=True, exist_ok=True)
+            pickup_file = args_dir / "niw_topdown_pickup.json"
+            with open(pickup_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "total_snippets": len(snippets),
+                    "prongs_count": len(NIW_LEGAL_STANDARDS),
+                    "pickup_by_prong": pickup_report,
+                }, f, ensure_ascii=False, indent=2)
+            print(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
+        except Exception as e:
+            print(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
+
+    return grouped
+
+
 def _group_snippets_by_standard(
     snippets: List[Dict],
     legal_stds: Dict = None,
@@ -1592,12 +1994,29 @@ async def niw_organize_per_prong(
 
     # Determine target sub-argument count
     n = len(prong_snippets)
-    if n <= 10:
-        target = "3-4"
+    if n <= 5:
+        target = "2-3"
+    elif n <= 10:
+        target = "3-5"
     elif n <= 30:
         target = "4-6"
     else:
         target = "5-8"
+
+    # Prong-specific organization hints
+    prong_hint = ""
+    if prong_key == "prong1_merit":
+        prong_hint = (
+            "\n\nIMPORTANT for Prong 1: You MUST create SEPARATE sub-arguments for "
+            "'Substantial Merit' and 'National Importance' — these are two distinct legal "
+            "elements. Do NOT merge them into one sub-argument."
+        )
+    elif prong_key == "prong2_positioned":
+        prong_hint = (
+            "\n\nIMPORTANT for Prong 2: Create separate sub-arguments for distinct "
+            "dimensions (e.g., education, track record, awards, publications, expert "
+            "endorsements, future plans). Do NOT collapse all evidence into one group."
+        )
 
     user_prompt = NIW_PRONG_ORGANIZE_USER_PROMPT.format(
         prong_name=prong_name,
@@ -1607,7 +2026,7 @@ async def niw_organize_per_prong(
         snippet_count=len(prong_snippets),
         snippets_text=snippets_text,
         target_subargs=target,
-    )
+    ) + prong_hint
 
     arg_id = f"arg-{uuid.uuid4().hex[:8]}"
 
@@ -1631,6 +2050,37 @@ async def niw_organize_per_prong(
                 "relationship": f"Supports {prong_name}",
                 "snippet_ids": [f"S{i}" for i in range(1, len(prong_snippets) + 1)],
             }]
+
+        # Minimum floor: if LLM collapsed to 1 sub-arg with >5 snippets, force split
+        if len(raw_sub_args) == 1 and len(prong_snippets) > 5:
+            single = raw_sub_args[0]
+            all_sids = single.get('snippet_ids', [])
+            mid = len(all_sids) // 2
+            if prong_key == "prong1_merit":
+                # P1 natural split: substantial merit vs national importance
+                raw_sub_args = [
+                    {"title": f"Substantial Merit of {applicant_name}'s Proposed Endeavor",
+                     "purpose": "Establishes the endeavor has substantial merit",
+                     "relationship": "Demonstrates substantial merit",
+                     "snippet_ids": all_sids[:mid]},
+                    {"title": f"National Importance of {applicant_name}'s Endeavor",
+                     "purpose": "Establishes the endeavor has national-level importance",
+                     "relationship": "Demonstrates national importance",
+                     "snippet_ids": all_sids[mid:]},
+                ]
+            else:
+                # Generic split by halves
+                raw_sub_args = [
+                    {"title": single.get('title', 'Evidence Group') + " (Part 1)",
+                     "purpose": single.get('purpose', ''),
+                     "relationship": single.get('relationship', f'Supports {prong_name}'),
+                     "snippet_ids": all_sids[:mid]},
+                    {"title": single.get('title', 'Evidence Group') + " (Part 2)",
+                     "purpose": single.get('purpose', ''),
+                     "relationship": single.get('relationship', f'Supports {prong_name}'),
+                     "snippet_ids": all_sids[mid:]},
+                ]
+            print(f"[NIW-v2] Prong {prong_key}: forced split from 1 → {len(raw_sub_args)} sub-args (minimum floor)")
 
         # Convert sub-arguments, mapping simple IDs back to real IDs
         sub_arguments = []
@@ -1732,71 +2182,51 @@ async def niw_organize_per_prong(
 
 
 async def niw_organize_arguments_v2(
-    snippets: List[Dict], applicant_name: str, provider: str = "deepseek"
+    snippets: List[Dict], applicant_name: str, provider: str = "deepseek",
+    project_id: str = None
 ) -> Tuple[List[LegalArgument], List[Dict], List[Dict]]:
     """
-    NIW v2: 规则分配 + "other"分类 + 按prong LLM组织
+    NIW v2: Top-down Dhanasar pickup + per-prong LLM organization.
 
-    Three-step flow:
-    1. Rule-based assignment: use NIW_EVIDENCE_TYPE_MAPPING for known evidence_types
-    2. "other" classification: LLM classifies "other" type snippets into prongs
-    3. Per-prong organization: parallel LLM calls organize each prong's snippets
+    Two-step flow:
+    1. Top-down pickup: LLM selects snippets for each Dhanasar prong (parallel, 3 prongs)
+    2. Per-prong organization: parallel LLM calls organize each prong's snippets
 
     Returns:
         (arguments, sub_arguments, filtered_out)
     """
     print(f"[NIW-v2] Starting with {len(snippets)} total snippets")
 
-    # Step 1: Rule-based assignment
-    prong_buckets = {
-        "prong1_merit": [],
-        "prong2_positioned": [],
-        "prong3_balance": [],
-    }
-    other_snippets = []
-    skipped_non_applicant = 0
-
-    for snp in snippets:
-        if not snp.get('is_applicant_achievement', True):
-            skipped_non_applicant += 1
-            continue
-
-        etype = snp.get('evidence_type', '').lower()
-        mapped_prong = NIW_EVIDENCE_TYPE_MAPPING.get(etype)
-
-        if mapped_prong and mapped_prong in prong_buckets:
-            prong_buckets[mapped_prong].append(snp)
-        elif etype == 'other' or not mapped_prong:
-            other_snippets.append(snp)
-
-    rule_counts = {k: len(v) for k, v in prong_buckets.items()}
-    print(f"[NIW-v2] Step 1 rule-based: {rule_counts}, other: {len(other_snippets)}, "
-          f"skipped non-applicant: {skipped_non_applicant}")
-
-    # Step 2: Classify "other" snippets
-    filtered_out = []
-    if other_snippets:
-        print(f"[NIW-v2] Step 2: Classifying {len(other_snippets)} 'other' snippets...")
-        classify_map = await niw_classify_other_snippets(other_snippets, provider)
-
-        for snp in other_snippets:
-            sid = snp.get('snippet_id', snp.get('id', ''))
-            prong = classify_map.get(sid, 'prong2_positioned')
-            if prong == 'skip':
-                filtered_out.append({
-                    "snippet_ids": [sid],
-                    "reason": "Classified as not relevant to any Dhanasar prong"
-                })
-            elif prong in prong_buckets:
-                prong_buckets[prong].append(snp)
+    # Step 1: Top-down pickup — LLM selects per prong from full snippet pool
+    print("[NIW-v2] Step 1: Top-down Dhanasar pickup...")
+    try:
+        prong_buckets = await _niw_group_snippets_by_prong_topdown(
+            snippets, provider, project_id=project_id
+        )
+    except RuntimeError as e:
+        # Fallback to rule-based if top-down fails completely
+        print(f"[NIW-v2] Top-down pickup failed ({e}), falling back to rule-based mapping")
+        prong_buckets = {
+            "prong1_merit": [],
+            "prong2_positioned": [],
+            "prong3_balance": [],
+        }
+        for snp in snippets:
+            if not snp.get('is_applicant_achievement', True):
+                continue
+            etype = snp.get('evidence_type', '').lower()
+            mapped_prong = NIW_EVIDENCE_TYPE_MAPPING.get(etype)
+            if mapped_prong and mapped_prong in prong_buckets:
+                prong_buckets[mapped_prong].append(snp)
             else:
                 prong_buckets['prong2_positioned'].append(snp)
 
-    final_counts = {k: len(v) for k, v in prong_buckets.items()}
-    print(f"[NIW-v2] After classification: {final_counts}, filtered: {len(filtered_out)}")
+    prong_counts = {k: len(v) for k, v in prong_buckets.items()}
+    print(f"[NIW-v2] After pickup: {prong_counts}")
 
-    # Step 3: Per-prong organization (parallel)
-    print("[NIW-v2] Step 3: Organizing per prong...")
+    # Step 2: Per-prong organization (parallel)
+    print("[NIW-v2] Step 2: Organizing per prong...")
+    filtered_out = []
     tasks = []
     active_prongs = []
     for prong_key, prong_snps in prong_buckets.items():
@@ -1821,12 +2251,14 @@ async def niw_organize_arguments_v2(
         arguments.append(arg)
         all_sub_arguments.extend(sub_args)
 
-    # Coverage stats
-    total_input = len(snippets) - skipped_non_applicant
-    total_assigned = sum(len(a.snippet_ids) for a in arguments)
-    coverage = (total_assigned / total_input * 100) if total_input > 0 else 0
+    # Coverage stats — count unique snippets across all prongs
+    all_assigned_ids = set()
+    for a in arguments:
+        all_assigned_ids.update(a.snippet_ids)
+    total_input = len(snippets)
+    coverage = (len(all_assigned_ids) / total_input * 100) if total_input > 0 else 0
     print(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
-    print(f"[NIW-v2] Coverage: {total_assigned}/{total_input} snippets ({coverage:.1f}%)")
+    print(f"[NIW-v2] Coverage: {len(all_assigned_ids)}/{total_input} unique snippets ({coverage:.1f}%)")
 
     return arguments, all_sub_arguments, filtered_out
 
@@ -1892,10 +2324,10 @@ async def full_legal_pipeline(
             project_type = "EB-1A"
 
     if project_type == "NIW":
-        # NIW v2: rule-based + LLM classify + per-prong organize (one-step, no separate subdivide)
+        # NIW v2: top-down Dhanasar pickup + per-prong organize (one-step, no separate subdivide)
         print(f"\n[NIW-v2] Running NIW v2 pipeline...")
         arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
-            snippets, applicant_name, provider
+            snippets, applicant_name, provider, project_id=project_id
         )
         print(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
     else:

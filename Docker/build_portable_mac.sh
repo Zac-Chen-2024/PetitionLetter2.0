@@ -47,14 +47,20 @@ cd "$(dirname "$0")"
 echo "[5/7] Copying backend..."
 mkdir -p "$DIST/backend"
 cp -r "$ROOT/backend/app"  "$DIST/backend/app"
-cp -r "$ROOT/backend/data" "$DIST/backend/data"
 [ -f "$ROOT/backend/.env" ] && cp "$ROOT/backend/.env" "$DIST/backend/.env"
+
+# Copy only selected project data (4 demo cases)
+mkdir -p "$DIST/backend/data/projects"
+cp -r "$ROOT/backend/data/projects/yaruo_qu"    "$DIST/backend/data/projects/yaruo_qu"
+cp -r "$ROOT/backend/data/projects/dehuan_liu"   "$DIST/backend/data/projects/dehuan_liu"
+cp -r "$ROOT/backend/data/projects/chen_zhen"    "$DIST/backend/data/projects/chen_zhen"
+cp -r "$ROOT/backend/data/projects/liu_donglan"  "$DIST/backend/data/projects/liu_donglan"
 
 echo "[6/7] Copying data (PDFs + OCR)..."
 mkdir -p "$DIST/data"
 cp -r "$ROOT/data/eb1a" "$DIST/data/eb1a"
-cp -r "$ROOT/data/niw"  "$DIST/data/niw"
-cp -r "$ROOT/data/l1"   "$DIST/data/l1"
+cp -r "$ROOT/data/niw/Chen Zhen"     "$DIST/data/niw/Chen Zhen"
+cp -r "$ROOT/data/l1/Liu Donglan"    "$DIST/data/l1/Liu Donglan"
 
 echo "[7/7] Assembling final package..."
 cp -r "$ROOT/frontend/frontend/dist" "$DIST/backend/frontend-dist"

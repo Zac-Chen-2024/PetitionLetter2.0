@@ -57,13 +57,18 @@ cd "%~dp0"
 REM ===== 5. Assemble files =====
 echo [5/7] Copying backend...
 xcopy /E /I /Q "%ROOT%\backend\app"  "%DIST%\backend\app"  >nul
-xcopy /E /I /Q "%ROOT%\backend\data" "%DIST%\backend\data" >nul
 copy /Y "%ROOT%\backend\.env" "%DIST%\backend\.env" >nul 2>nul
+
+REM Copy only selected project data (4 demo cases)
+xcopy /E /I /Q "%ROOT%\backend\data\projects\yaruo_qu"    "%DIST%\backend\data\projects\yaruo_qu"    >nul
+xcopy /E /I /Q "%ROOT%\backend\data\projects\dehuan_liu"   "%DIST%\backend\data\projects\dehuan_liu"   >nul
+xcopy /E /I /Q "%ROOT%\backend\data\projects\chen_zhen"    "%DIST%\backend\data\projects\chen_zhen"    >nul
+xcopy /E /I /Q "%ROOT%\backend\data\projects\liu_donglan"  "%DIST%\backend\data\projects\liu_donglan"  >nul
 
 echo [6/7] Copying data (PDFs + OCR)...
 xcopy /E /I /Q "%ROOT%\data\eb1a" "%DIST%\data\eb1a" >nul
-xcopy /E /I /Q "%ROOT%\data\niw"  "%DIST%\data\niw"  >nul
-xcopy /E /I /Q "%ROOT%\data\l1"   "%DIST%\data\l1"   >nul
+xcopy /E /I /Q "%ROOT%\data\niw\Chen Zhen"     "%DIST%\data\niw\Chen Zhen"     >nul
+xcopy /E /I /Q "%ROOT%\data\l1\Liu Donglan"    "%DIST%\data\l1\Liu Donglan"    >nul
 
 echo [7/7] Assembling final package...
 xcopy /E /I /Q "%ROOT%\frontend\frontend\dist" "%DIST%\backend\frontend-dist" >nul

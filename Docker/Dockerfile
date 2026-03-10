@@ -37,12 +37,16 @@ COPY --from=build-frontend /build/dist/ ./frontend-dist/
 COPY Docker/serve.py ./serve.py
 
 # Copy project data (JSON: arguments, snippets, OCR results, etc.)
-COPY backend/data/ ./data/
+# Only include selected demo cases
+COPY backend/data/projects/yaruo_qu/     ./data/projects/yaruo_qu/
+COPY backend/data/projects/dehuan_liu/   ./data/projects/dehuan_liu/
+COPY backend/data/projects/chen_zhen/    ./data/projects/chen_zhen/
+COPY backend/data/projects/liu_donglan/  ./data/projects/liu_donglan/
 
-# Copy source PDFs + OCR (all visa types)
+# Copy source PDFs + OCR (selected cases only)
 COPY data/eb1a/ /app/data/eb1a/
-COPY data/niw/  /app/data/niw/
-COPY data/l1/   /app/data/l1/
+COPY "data/niw/Chen Zhen/"      "/app/data/niw/Chen Zhen/"
+COPY "data/l1/Liu Donglan/"     "/app/data/l1/Liu Donglan/"
 
 EXPOSE 8008
 
