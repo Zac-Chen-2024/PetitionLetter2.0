@@ -1123,6 +1123,33 @@ async def _topdown_pickup_for_standard(
     Top-down: LLM 从全量 applicant snippet 中为一个 standard 挑选相关证据。
     返回被选中的 snippet 列表，每个附加 _topdown_chain 字段。
     """
+    # Build exhibit-level source context from snippets
+    # Aggregates recommender_name, source_credibility subjects, and org names per exhibit
+    from collections import defaultdict as _defaultdict
+    _exhibit_sources = _defaultdict(set)
+    for snp in all_snippets:
+        eid = snp.get('exhibit_id', '')
+        if not eid:
+            continue
+        # Recommender name (already extracted by unified_extractor)
+        rec = snp.get('recommender_name', '')
+        if rec:
+            _exhibit_sources[eid].add(rec)
+        # Source credibility snippets — the subject is often the authoritative source
+        if snp.get('evidence_type') in ('source_credibility', 'membership_criteria') and snp.get('subject_role') in ('organization', 'media', 'event'):
+            subj = snp.get('subject', '')
+            if subj and len(subj) < 60:
+                _exhibit_sources[eid].add(subj)
+    # Build compact label per exhibit: "F4(China Weightlifting Association)"
+    exhibit_label = {}
+    for eid, sources in _exhibit_sources.items():
+        # Pick the shortest meaningful source name (avoid overly long ones)
+        best = min(sources, key=len) if sources else ''
+        if best:
+            exhibit_label[eid] = f"{eid}({best})"
+        else:
+            exhibit_label[eid] = eid
+
     # 压缩 snippet 表示，减少 token 用量
     compact_lines = []
     snippet_lookup = {}
@@ -1133,8 +1160,9 @@ async def _topdown_pickup_for_standard(
         evidence_type = snp.get('evidence_type', '')
         subject = snp.get('subject', '')
         text = snp.get('text', '')[:150]
+        ex_label = exhibit_label.get(exhibit_id, exhibit_id)
         compact_lines.append(
-            f"[{sid}] exhibit={exhibit_id} type={evidence_type} subject={subject} text={text}"
+            f"[{sid}] exhibit={ex_label} type={evidence_type} subject={subject} text={text}"
         )
 
     snippets_text = "\n".join(compact_lines)
