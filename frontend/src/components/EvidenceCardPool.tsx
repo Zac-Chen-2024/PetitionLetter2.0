@@ -791,7 +791,7 @@ export function EvidenceCardPool() {
     if (!projectId) return;
     setIsExtracting(true);
     try {
-      const result = await apiClient.post<{
+      const result = await apiClient.postJob<{
         success: boolean;
         total_snippets: number;
       }>(`/extraction/${projectId}/extract`, {});

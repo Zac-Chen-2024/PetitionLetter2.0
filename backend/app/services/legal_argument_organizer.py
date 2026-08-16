@@ -1688,7 +1688,8 @@ async def full_legal_pipeline(
     project_id: str,
     applicant_name: str = "the Applicant",
     provider: str = "deepseek",
-    project_type: str = "EB-1A"
+    project_type: str = "EB-1A",
+    job=None,
 ) -> Dict[str, Any]:
     """
     完整的法律论点组织流程
@@ -1740,8 +1741,12 @@ async def full_legal_pipeline(
         except Exception:
             project_type = "EB-1A"
 
+    from ..core.jobs import NullJob
+    job = job or NullJob()
+
     if project_type == "NIW":
         # NIW v2: top-down Dhanasar pickup + per-prong organize (one-step, no separate subdivide)
+        job.checkpoint(step="organize", detail="Organizing NIW prongs", progress=0.1)
         logger.info("\n[NIW-v2] Running NIW v2 pipeline...")
         arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
             snippets, applicant_name, provider, project_id=project_id
@@ -1750,6 +1755,7 @@ async def full_legal_pipeline(
     else:
         # EB-1A: original two-step flow
         # Step 1: 组织子论点
+        job.checkpoint(step="organize", detail="Step 1/2: Organizing arguments", progress=0.1)
         logger.info(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
         arguments, filtered = await organize_arguments_with_legal_framework(
             snippets, applicant_name, provider, project_type, project_id=project_id
@@ -1765,7 +1771,9 @@ async def full_legal_pipeline(
 
         from .subargument_generator import subdivide_argument
 
-        for arg in arguments:
+        for arg_i, arg in enumerate(arguments):
+            job.checkpoint(step="subdivide", detail=f"Step 2/2: SubArguments {arg_i + 1}/{len(arguments)}",
+                           progress=0.5 + 0.45 * arg_i / max(len(arguments), 1))
             # Get snippets for this argument
             arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
 

@@ -665,7 +665,7 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     setIsGeneratingArguments(true);
     try {
       // Step 1: Run the generation pipeline
-      await apiClient.post<{
+      await apiClient.postJob<{
         success: boolean;
       }>(`/arguments/${projectId}/generate`, {
         force_reanalyze: forceReanalyze,

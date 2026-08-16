@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { cancelJob } from '../services/api';
 import { logInteraction } from '../services/interactionLogger';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
@@ -869,8 +870,28 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
                   </svg>
                   <span className="text-xs">
                     Generating: {pipelineState.generatingStandard.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}...
+                    {pipelineState.jobDetail && (
+                      <span className="ml-2 text-slate-500">{pipelineState.jobDetail}</span>
+                    )}
+                    {typeof pipelineState.progress === 'number' && (
+                      <span className="ml-2 tabular-nums">{pipelineState.progress}%</span>
+                    )}
                   </span>
+                  {pipelineState.jobId && (
+                    <button
+                      onClick={() => cancelJob(pipelineState.jobId!).catch(() => {/* already finished */})}
+                      className="ml-auto text-xs text-red-500 hover:text-red-700 hover:underline"
+                      title="Cancel the running generation job (already-finished sections are kept)"
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
+                {typeof pipelineState.progress === 'number' && (
+                  <div className="mt-2 h-1 w-full rounded bg-slate-100 overflow-hidden">
+                    <div className="h-full bg-blue-400 transition-all" style={{ width: `${pipelineState.progress}%` }} />
+                  </div>
+                )}
               </div>
             )}
           </>

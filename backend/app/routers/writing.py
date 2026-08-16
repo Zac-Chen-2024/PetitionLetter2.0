@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.core.ids import validate_path_params
+from app.core.jobs import manager as job_manager
 from app.services.petition_writer_v3 import (
     analyze_change_impact,
     load_latest_writing_v3,
@@ -123,66 +124,62 @@ async def get_all_v3_sections(project_id: str):
         raise
 
 
-@router.post("/{project_id}/{standard_key}", response_model=WriteV3Response)
+async def _run_write_v3(project_id: str, standard_key: str, req: "WriteV3Request", job=None) -> dict:
+    """The generation pipeline + persistence, shared by the job runner and tests."""
+    result = await write_petition_section_v3(
+        project_id=project_id,
+        standard_key=standard_key,
+        argument_ids=req.argument_ids,
+        subargument_ids=req.subargument_ids,
+        additional_instructions=req.additional_instructions,
+        provider=req.provider,
+        exploration_writing=req.exploration_writing,
+        job=job,
+    )
+
+    if not result.get("success"):
+        return WriteV3Response(
+            success=False,
+            section=standard_key,
+            paragraph_text="",
+            sentences=[],
+            provenance_index=ProvenanceIndex(),
+            validation=ValidationResult(total_sentences=0, traced_sentences=0),
+            error=result.get("error", "Unknown error")
+        ).model_dump()
+
+    save_writing_v3(project_id, standard_key, result)
+
+    return WriteV3Response(
+        success=True,
+        section=result["section"],
+        paragraph_text=result["paragraph_text"],
+        sentences=[SentenceWithProvenanceV3(**s) for s in result["sentences"]],
+        provenance_index=ProvenanceIndex(**result.get("provenance_index", {})),
+        validation=ValidationResult(**result.get("validation", {})),
+        updated_subargument_snippets=result.get("updated_subargument_snippets")
+    ).model_dump()
+
+
+@router.post("/{project_id}/{standard_key}", status_code=202)
 async def write_petition_v3(
     project_id: str,
     standard_key: str,
     request: WriteV3Request = None
 ):
     """
-    V3 写作端点 - SubArgument 感知的写作
+    V3 写作端点 - SubArgument 感知的写作（M10：异步 job）
 
-    基于 SubArgument 结构生成内容，输出包含完整溯源链：
-    句子 → SubArgument → Argument → Standard
-
-    Args:
-        project_id: 项目 ID
-        standard_key: 标准 key (如 "membership", "leading_role")
-        request: 写作请求参数
-
-    Returns:
-        WriteV3Response: 包含段落文本、句子列表、溯源索引
+    立即返回 job 记录 `{id, status, ...}`；轮询 GET /api/jobs/{id}，
+    `status == "succeeded"` 时 `result` 是原来的 WriteV3Response。
+    相同请求体在已有 running job 时返回同一个 job（幂等）。
     """
-    try:
-        req = request or WriteV3Request()
-
-        # 执行 V3 写作
-        result = await write_petition_section_v3(
-            project_id=project_id,
-            standard_key=standard_key,
-            argument_ids=req.argument_ids,
-            subargument_ids=req.subargument_ids,
-            additional_instructions=req.additional_instructions,
-            provider=req.provider,
-            exploration_writing=req.exploration_writing
-        )
-
-        if not result.get("success"):
-            return WriteV3Response(
-                success=False,
-                section=standard_key,
-                paragraph_text="",
-                sentences=[],
-                provenance_index=ProvenanceIndex(),
-                validation=ValidationResult(total_sentences=0, traced_sentences=0),
-                error=result.get("error", "Unknown error")
-            )
-
-        # 保存结果
-        save_writing_v3(project_id, standard_key, result)
-
-        return WriteV3Response(
-            success=True,
-            section=result["section"],
-            paragraph_text=result["paragraph_text"],
-            sentences=[SentenceWithProvenanceV3(**s) for s in result["sentences"]],
-            provenance_index=ProvenanceIndex(**result.get("provenance_index", {})),
-            validation=ValidationResult(**result.get("validation", {})),
-            updated_subargument_snippets=result.get("updated_subargument_snippets")
-        )
-
-    except Exception:
-        raise
+    req = request or WriteV3Request()
+    params = {"project_id": project_id, "standard_key": standard_key, **req.model_dump()}
+    return job_manager.submit(
+        "write_v3", project_id, params,
+        lambda job: _run_write_v3(project_id, standard_key, req, job=job),
+    )
 
 
 class AnalyzeImpactRequest(BaseModel):

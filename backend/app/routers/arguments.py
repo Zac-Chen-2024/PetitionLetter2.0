@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.ids import validate_path_params
+from app.core.jobs import manager as job_manager
 
 from ..services.legal_argument_organizer import (
     full_legal_pipeline,
@@ -63,45 +64,40 @@ class GenerateResponse(BaseModel):
 # Generation Endpoints
 # ============================================
 
-@router.post("/{project_id}/generate", response_model=GenerateResponse)
+async def _run_generate(project_id: str, request: GenerateRequest, job=None) -> dict:
+    result = await full_legal_pipeline(
+        project_id=project_id,
+        applicant_name=request.applicant_name or "the applicant",
+        provider=request.provider,
+        job=job,
+    )
+    return GenerateResponse(
+        success=True,
+        main_subject=request.applicant_name,
+        argument_count=result.get("stats", {}).get("argument_count", 0),
+        arguments=result.get("arguments", []),
+        stats=result.get("stats", {})
+    ).model_dump()
+
+
+@router.post("/{project_id}/generate", status_code=202)
 async def generate_arguments(
     project_id: str,
     request: GenerateRequest = GenerateRequest()
 ):
     """
-    一键生成论据 (LLM + 法律条例驱动)
+    一键生成论据 (LLM + 法律条例驱动) —— M10：异步 job
 
     Pipeline:
     1. LLM + 法律条例 → 组织子论点 (~7-8个，符合律师论证风格)
     2. LLM → 划分次级子论点 (每个2-4个 SubArguments)
     3. 智能过滤弱证据（如普通认证）
 
-    Args:
-        project_id: 项目 ID
-        force_reanalyze: 是否强制重新生成
-        applicant_name: 申请人姓名
-        provider: LLM provider (deepseek/openai)
+    立即返回 job 记录；轮询 GET /api/jobs/{id}，succeeded 时 result 是 GenerateResponse。
     """
-    try:
-        # 使用新的 LLM + 法律条例驱动流程
-        result = await full_legal_pipeline(
-            project_id=project_id,
-            applicant_name=request.applicant_name or "the applicant",
-            provider=request.provider
-        )
-
-        return GenerateResponse(
-            success=True,
-            main_subject=request.applicant_name,
-            argument_count=result.get("stats", {}).get("argument_count", 0),
-            arguments=result.get("arguments", []),
-            stats=result.get("stats", {})
-        )
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
-        raise
+    params = {"project_id": project_id, **request.model_dump()}
+    return job_manager.submit("generate_arguments", project_id, params,
+                              lambda job: _run_generate(project_id, request, job=job))
 
 
 class RegenerateStandardRequest(BaseModel):

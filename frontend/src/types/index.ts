@@ -466,6 +466,9 @@ export interface PipelineState {
   generatingStandard?: string;   // Current standard being generated (e.g. 'awards')
   generatedCount?: number;       // How many sections generated so far
   totalToGenerate?: number;      // Total sections to generate
+  // Background job (M10): real progress from the server
+  jobId?: string;                // Currently running job (cancelable)
+  jobDetail?: string;            // e.g. "Step 1/3: Argument 2/5"
 }
 
 export interface MergeSuggestion {

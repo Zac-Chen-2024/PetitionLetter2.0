@@ -272,7 +272,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         }));
 
         try {
-          const response = await apiClient.post<{
+          const response = await apiClient.postJob<{
             success: boolean;
             section: string;
             paragraph_text: string;
@@ -298,6 +298,14 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           }>(`/write/v3/${projectId}/${section}`, {
             provider: llmProvider,
             exploration_writing: explorationWritingRef.current,
+          }, {
+            onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
+            onProgress: (job) => setPipelineState(prev => ({
+              ...prev,
+              jobDetail: job.detail ?? undefined,
+              // whole-run progress = finished sections + this job's fraction
+              progress: Math.round(((i + (job.progress || 0)) / total) * 100),
+            })),
           });
 
           if (response.success && response.paragraph_text) {
@@ -331,6 +339,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         generatingStandard: undefined,
         generatedCount: total,
         totalToGenerate: total,
+        jobId: undefined,
+        jobDetail: undefined,
       }));
     } catch (err) {
       setPipelineState(prev => ({
@@ -338,6 +348,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         stage: 'mapping_confirmed',
         error: err instanceof Error ? err.message : 'Generation failed',
         generatingStandard: undefined,
+        jobId: undefined,
+        jobDetail: undefined,
       }));
     }
   }, []);
@@ -359,7 +371,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     setRewritingStandardKey(standardKey);
     let response;
     try {
-      response = await apiClient.post<{
+      response = await apiClient.postJob<{
         success: boolean;
         section: string;
         paragraph_text: string;
@@ -451,7 +463,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     setPipelineState(prev => ({ ...prev, stage: 'extracting', progress: 0 }));
 
     try {
-      const response = await apiClient.post<{
+      const response = await apiClient.postJob<{
         success: boolean;
         exhibits_processed: number;
         total_snippets: number;
@@ -461,6 +473,14 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       }>(`/extraction/${projectId}/extract`, {
         applicant_name: applicantName,
         provider: llmProvider,
+      }, {
+        onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
+        onProgress: (job) => {
+          setPipelineState(prev => ({ ...prev, jobDetail: job.detail ?? undefined, progress: Math.round((job.progress || 0) * 100) }));
+          // "Extracted A1 (3/12)" -> keep the numeric progress the UI already knows how to show
+          const m = /\((\d+)\/(\d+)\)/.exec(job.detail || '');
+          if (m) setExtractionProgress({ current: Number(m[1]), total: Number(m[2]) });
+        },
       });
 
       if (response.success) {
@@ -636,7 +656,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     const argId = arg.id;
 
     try {
-      const response = await apiClient.post<{
+      const response = await apiClient.postJob<{
         success: boolean;
         sentences: Array<{
           text: string;

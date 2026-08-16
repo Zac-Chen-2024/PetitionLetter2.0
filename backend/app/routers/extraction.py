@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.ids import validate_path_params
+from app.core.jobs import manager as job_manager
 
 from ..services.entity_merger import (
     apply_entity_merges,
@@ -47,7 +48,7 @@ class MergeConfirmation(BaseModel):
 
 # ==================== Extraction Endpoints ====================
 
-@router.post("/{project_id}/extract")
+@router.post("/{project_id}/extract", status_code=202)
 async def extract_project(
     project_id: str,
     request: ExtractionRequest
@@ -72,21 +73,21 @@ async def extract_project(
         except Exception:
             project_type = "EB-1A"
 
-    try:
+    async def _run(job):
         result = await extract_all_unified(
             project_id=project_id,
             applicant_name=applicant_name,
             provider=provider,
-            project_type=project_type
+            project_type=project_type,
+            job=job,
         )
-
         if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "Extraction failed"))
-
+            raise RuntimeError(result.get("error", "Extraction failed"))
         return result
 
-    except Exception:
-        raise
+    params = {"project_id": project_id, "applicant_name": applicant_name, "provider": provider,
+              "project_type": project_type}
+    return job_manager.submit("extract", project_id, params, _run)
 
 
 # ==================== Snippet Query Endpoints ====================

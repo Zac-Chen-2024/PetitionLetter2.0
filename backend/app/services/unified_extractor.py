@@ -1035,7 +1035,8 @@ async def extract_all_unified(
     applicant_name: str,
     provider: str = "deepseek",
     progress_callback=None,
-    project_type: str = "EB-1A"
+    project_type: str = "EB-1A",
+    job=None,
 ) -> Dict:
     """
     提取项目中所有 exhibits
@@ -1050,6 +1051,13 @@ async def extract_all_unified(
     Returns:
         提取结果汇总
     """
+    from ..core.jobs import NullJob
+    job = job or NullJob()
+    if progress_callback is None:
+        def progress_callback(current, total, message):  # noqa: E306
+            job.checkpoint(step="extract", detail=f"{message} ({current}/{total})",
+                           progress=0.05 + 0.9 * (current / max(total, 1)))
+
     documents_dir = project_path(project_id, "documents")
 
     if not documents_dir.exists():

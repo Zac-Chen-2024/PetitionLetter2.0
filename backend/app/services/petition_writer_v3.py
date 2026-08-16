@@ -14,14 +14,16 @@ Argument → SubArgument结构(大纲) + snippet指针
 输出：{text, snippet_ids, subargument_id, argument_id, exhibit_refs}[]
 """
 
+import hashlib
 import json
 import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..core.atomic_io import write_json
+from ..core.atomic_io import read_json, write_json
 from ..core.prompt_loader import body as _prompt_body
 from ..core.prompt_loader import render as _prompt_render
 from ..core.text import text_similarity as _text_similarity
@@ -1769,6 +1771,49 @@ def _build_provenance_from_sentences(sentences: List[Dict]) -> Dict:
     }
 
 
+
+# ============================================
+# Step 1 checkpoints (M10)
+# ============================================
+
+def _step1_fingerprint(argument: Dict, provider: str, project_type: str,
+                       additional_instructions: Optional[str], cross_prong_context: Optional[str]) -> str:
+    """Structural fingerprint of one Argument's Step-1 request."""
+    payload = {
+        "id": argument.get("id"),
+        "title": argument.get("title"),
+        "sub_arguments": [
+            {"id": sa.get("id"), "title": sa.get("title"), "purpose": sa.get("purpose"),
+             "relationship": sa.get("relationship"),
+             "snippets": sorted(s.get("id", "") for s in sa.get("snippets", []))}
+            for sa in argument.get("sub_arguments", [])
+        ],
+        "provider": provider, "project_type": project_type,
+        "additional_instructions": additional_instructions or "",
+        "cross_prong_context": cross_prong_context or "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
+
+
+def _checkpoint_path(project_id: str, standard_key: str, fp: str) -> Path:
+    return project_path(project_id, "writing_v3", "checkpoints", f"{standard_key}_{fp}.json")
+
+
+def _load_step1_checkpoint(project_id: str, standard_key: str, fp: str) -> Optional[List[Dict]]:
+    data = read_json(_checkpoint_path(project_id, standard_key, fp))
+    if isinstance(data, dict) and isinstance(data.get("bodies"), list) and data["bodies"]:
+        return data["bodies"]
+    return None
+
+
+def _save_step1_checkpoint(project_id: str, standard_key: str, fp: str, bodies: List[Dict]) -> None:
+    try:
+        write_json(_checkpoint_path(project_id, standard_key, fp),
+                   {"fingerprint": fp, "saved_at": datetime.now(timezone.utc).isoformat(), "bodies": bodies})
+    except Exception as e:  # checkpoints are an optimisation, never fatal
+        logger.warning(f"Step1 checkpoint save failed: {e}")
+
+
 async def write_petition_section_v3(
     project_id: str,
     standard_key: str,
@@ -1776,7 +1821,9 @@ async def write_petition_section_v3(
     subargument_ids: List[str] = None,
     additional_instructions: str = None,
     provider: str = "deepseek",
-    exploration_writing: bool = False
+    exploration_writing: bool = False,
+    job=None,
+    use_checkpoints: bool = True,
 ) -> Dict:
     """
     V3.1 版本的写作入口 — OCR 回溯三步流水线
@@ -1791,7 +1838,13 @@ async def write_petition_section_v3(
         argument_ids: 可选，指定要生成的 Argument IDs
         subargument_ids: 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
         additional_instructions: 可选，额外指令
+        job: 可选 JobHandle（M10）——每个 Argument 边界 checkpoint 进度 / 协作式取消
+        use_checkpoints: Step 1 每个 Argument 的产出即时落盘为 checkpoint；
+            结构指纹相同时直接复用，重试 Step 2/3 不必重烧最贵的 Step 1
     """
+    from ..core.jobs import NullJob
+    job = job or NullJob()
+
     # Detect project_type
     try:
         from .storage import get_project_type
@@ -1844,12 +1897,26 @@ async def write_petition_section_v3(
                 f"{len(cross_prong_exhibit_texts)} cross-prong exhibits"
             )
 
-    for argument in all_arguments:
+    total_args = len(all_arguments)
+    for arg_index, argument in enumerate(all_arguments):
         arg_id = argument.get("id", "")
         sub_arguments = argument.get("sub_arguments", [])
+        job.checkpoint(step="step1", detail=f"Step 1/3: Argument {arg_index + 1}/{total_args}",
+                       progress=0.05 + 0.60 * arg_index / max(total_args, 1))
 
         if not sub_arguments:
             all_warnings.append(f"Skipped argument {arg_id}: no sub_arguments")
+            continue
+
+        # Step 1 checkpoint: keyed by a fingerprint of the argument's structure
+        # (ids, titles, snippet ids) + generation params. A hit means the exact
+        # same request was already answered -- reuse it instead of paying again.
+        ckpt_fp = _step1_fingerprint(argument, provider, project_type, additional_instructions, cross_prong_context)
+        cached_bodies = _load_step1_checkpoint(project_id, standard_key, ckpt_fp) if use_checkpoints else None
+        if cached_bodies:
+            logger.info(f"Step1: checkpoint hit for argument {arg_id} ({ckpt_fp})")
+            per_argument_bodies.append(cached_bodies)
+            per_argument_refs.append(argument)
             continue
 
         # Load OCR pages for all exhibits referenced by this argument
@@ -1887,6 +1954,9 @@ async def write_petition_section_v3(
                     if _contains_non_ascii(sent["text"]):
                         sent["text"] = _remove_remaining_chinese(sent["text"])
 
+        if use_checkpoints:
+            _save_step1_checkpoint(project_id, standard_key, ckpt_fp, arg_bodies)
+
         per_argument_bodies.append(arg_bodies)
         per_argument_refs.append(argument)
 
@@ -1904,6 +1974,8 @@ async def write_petition_section_v3(
 
     for i, arg_bodies in enumerate(per_argument_bodies):
         argument_ref = per_argument_refs[i]
+        job.checkpoint(step="step2", detail=f"Step 2/3: Polishing {i + 1}/{len(per_argument_bodies)}",
+                       progress=0.65 + 0.20 * i / max(len(per_argument_bodies), 1))
         logger.info(f"Step2: Polishing argument group {i+1}/{len(per_argument_bodies)} ({len(arg_bodies)} subargs, arg={argument_ref.get('id', '')})")
 
         polished = await _step2_polish_argument(
@@ -1923,6 +1995,7 @@ async def write_petition_section_v3(
         polished_bodies.append(polished)
 
     # ========== Step 3: 生成 Opening/Closing ==========
+    job.checkpoint(step="step3", detail="Step 3/3: Opening/closing", progress=0.88)
     logger.info("Step3: Generating opening/closing")
     frame = await _step3_generate_section_frame(
         standard=standard,

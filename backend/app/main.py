@@ -13,6 +13,7 @@ from app.core.workspace import WorkspaceMiddleware
 from app.routers.arguments import router as arguments_router
 from app.routers.documents import router as documents_router
 from app.routers.extraction import router as extraction_router
+from app.routers.jobs import router as jobs_router
 from app.routers.logs import router as logs_router
 from app.routers.projects import router as projects_router
 from app.routers.writing import router as writing_router
@@ -38,6 +39,9 @@ async def lifespan(app: FastAPI):
     # Every prompt file must parse and declare exactly the variables it uses.
     prompts = validate_prompts()
     logger.info("Loaded %d prompt templates from %s", len(prompts), prompts[0].path.parent.parent if prompts else "-")
+    # Jobs cannot survive a restart: mark leftovers failed so clients stop polling.
+    from app.core.jobs import manager as job_manager
+    job_manager.recover_on_startup()
     logger.info("EB-1A Petition API starting (provider=%s, auth_disabled=%s)", settings.llm_provider, settings.auth_disabled)
     yield
     # Close the shared HTTP client used by the LLM providers.
@@ -75,6 +79,7 @@ app.include_router(arguments_router)
 app.include_router(extraction_router)
 app.include_router(documents_router)
 app.include_router(logs_router)
+app.include_router(jobs_router)
 
 
 @app.exception_handler(AppError)
@@ -115,7 +120,7 @@ def root():
         "version": "2.0.0",
         "routers": [
             "projects", "documents", "extraction",
-            "arguments", "writing-v3", "logs"
+            "arguments", "writing-v3", "logs", "jobs"
         ]
     }
 
