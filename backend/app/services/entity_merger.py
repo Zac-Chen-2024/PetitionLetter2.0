@@ -15,20 +15,12 @@ Entity Merger - 实体合并服务
 
 import json
 import uuid
-from typing import List, Dict, Optional
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional
 
 from .llm_client import call_llm
-from .unified_extractor import (
-    get_extraction_dir,
-    get_entities_dir,
-    load_combined_extraction,
-    PROJECTS_DIR
-)
-from ..core.config import settings
-
+from .unified_extractor import PROJECTS_DIR, get_entities_dir, get_extraction_dir, load_combined_extraction
 
 # ==================== Data Models ====================
 

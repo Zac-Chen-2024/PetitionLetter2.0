@@ -8,18 +8,15 @@ Legal Argument Organizer - LLM + 法律条例驱动的子论点组织器
 4. 输出数量与律师例文一致（~7-8个子论点）
 """
 
-import json
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
+import json
+import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import uuid
+from typing import Any, Dict, List, Tuple
 
 from .llm_client import call_llm
-from .subargument_generator import generate_sub_arguments_for_composed, GeneratedSubArgument
-from .standards_registry import get_standards_for_type
-
 
 # ==================== EB-1A 法律条例定义 ====================
 
@@ -2325,7 +2322,7 @@ async def full_legal_pipeline(
 
     if project_type == "NIW":
         # NIW v2: top-down Dhanasar pickup + per-prong organize (one-step, no separate subdivide)
-        print(f"\n[NIW-v2] Running NIW v2 pipeline...")
+        print("\n[NIW-v2] Running NIW v2 pipeline...")
         arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
             snippets, applicant_name, provider, project_id=project_id
         )

@@ -13,19 +13,18 @@ Unified Extractor - 统一的 Snippets + Entities + Relations 提取服务
 3. 用户确认合并后生成最终关系图
 """
 
+import asyncio
+import hashlib
 import json
 import re
-import uuid
-import hashlib
-import asyncio
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-from .llm_client import call_llm, call_llm_text
-from .snippet_registry import build_registry_from_combined_extraction
 from ..core.config import settings
+from .llm_client import call_llm
+from .snippet_registry import build_registry_from_combined_extraction
 
 # 数据目录
 DATA_DIR = Path(__file__).parent.parent.parent / "data"

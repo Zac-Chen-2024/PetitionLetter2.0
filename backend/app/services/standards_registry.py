@@ -4,9 +4,8 @@ Standards Registry - Single source of truth for all petition types and their leg
 Supports EB-1A (10 criteria), NIW (Dhanasar 3-prong test), and L-1A (4 standards).
 """
 
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional
-
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional
 
 PROJECT_TYPES = ["EB-1A", "NIW", "L-1A"]
 

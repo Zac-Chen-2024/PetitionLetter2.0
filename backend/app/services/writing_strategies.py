@@ -10,7 +10,7 @@ Extensible to EB-2, O-1A, etc. by adding new strategy entries.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 
 @dataclass(frozen=True)

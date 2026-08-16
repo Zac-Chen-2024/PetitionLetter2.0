@@ -9,10 +9,10 @@ For each person folder:
 """
 
 import json
-import sys
 import re
-from pathlib import Path
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Paths
 ROOT = Path(__file__).parent.parent

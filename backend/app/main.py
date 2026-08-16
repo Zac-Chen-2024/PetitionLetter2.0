@@ -7,11 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.routers.arguments import router as arguments_router
+from app.routers.documents import router as documents_router
+from app.routers.extraction import router as extraction_router
 from app.routers.projects import router as projects_router
 from app.routers.writing import router as writing_router
-from app.routers.arguments import router as arguments_router
-from app.routers.extraction import router as extraction_router
-from app.routers.documents import router as documents_router
 
 # Application-wide logging. Without this, every `logger.debug/info` in the
 # routers and services is silently dropped (root logger defaults to WARNING).

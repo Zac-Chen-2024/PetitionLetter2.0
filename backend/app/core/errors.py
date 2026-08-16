@@ -2,8 +2,9 @@
 Unified error response schema for the API.
 """
 
+from typing import Any, Optional
+
 from pydantic import BaseModel
-from typing import Optional, Any
 
 
 class ErrorResponse(BaseModel):

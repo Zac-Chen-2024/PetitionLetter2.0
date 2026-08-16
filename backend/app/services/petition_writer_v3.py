@@ -16,17 +16,17 @@ Argument → SubArgument结构(大纲) + snippet指针
 
 import json
 import logging
-from typing import List, Dict, Optional, Any
-from pathlib import Path
-from datetime import datetime, timezone
+import re
 from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
+from ..core.text import text_similarity as _text_similarity
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
 from .writing_strategies import get_writing_strategy
-from ..core.text import text_similarity as _text_similarity
-import re
 
 # Labels that LLMs sometimes leak from the argumentation-method prompt
 _LEAKED_LABEL_RE = re.compile(
@@ -769,7 +769,6 @@ def load_subargument_context(
 
 def _build_writing_prompt(context: Dict) -> str:
     """构建写作 Prompt"""
-    standard = context.get("standard", {})
     arguments = context.get("arguments", [])
 
     if not arguments:
@@ -950,7 +949,7 @@ async def _step1_generate_argument_body(
         lines = [
             f"  {i}. [{subarg['id']}] {subarg.get('title', '')}",
             f"     Purpose: {subarg.get('purpose', '')}",
-            f"     Key evidence pointers:"
+            "     Key evidence pointers:"
         ]
         for snip in subarg.get("snippets", []):
             text_preview = snip["text"][:200] + "..." if len(snip["text"]) > 200 else snip["text"]
@@ -2229,7 +2228,7 @@ async def write_petition_section_v3(
                                 sa_data.setdefault("snippet_ids", []).append(new_sid)
 
                 save_legal_arguments(project_id, legal_data)
-                logger.info(f"Persisted new snippet associations to legal_arguments.json")
+                logger.info("Persisted new snippet associations to legal_arguments.json")
             except Exception as e:
                 logger.warning(f"Failed to persist exploration snippets: {e}")
 

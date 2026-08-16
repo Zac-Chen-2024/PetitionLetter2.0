@@ -11,19 +11,19 @@ Endpoints:
 - POST /api/arguments/{project_id}/infer-relationship - 推断关系
 """
 
-from fastapi import APIRouter, HTTPException, Depends
-from app.core.ids import validate_path_params
-from typing import List, Dict, Optional
+import logging
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from app.core.ids import validate_path_params
 
 from ..services.legal_argument_organizer import (
     full_legal_pipeline,
     regenerate_standard_pipeline,
 )
-import json
-import logging
-from datetime import datetime, timezone
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -176,12 +176,12 @@ async def get_arguments(project_id: str):
 # ============================================
 
 from ..services.snippet_recommender import (
-    recommend_snippets_for_subargument,
+    consolidate_subarguments,
     create_subargument,
     get_assigned_snippet_ids,
     infer_relationship,
     merge_subarguments,
-    consolidate_subarguments,
+    recommend_snippets_for_subargument,
 )
 
 
@@ -541,8 +541,8 @@ async def delete_subargument(
     """
     logger.debug(f"DELETE SubArgument: project_id={project_id}, subargument_id={subargument_id}")
 
-    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
     from ..services.petition_writer_v3 import remove_subargument_from_writing
+    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
 
     legal_args = load_legal_arguments(project_id)
     sub_arguments = legal_args.get("sub_arguments", [])
@@ -631,8 +631,9 @@ async def move_to_overall_merits(project_id: str, request: MoveToOverallMeritsRe
     - argument level: single argument is moved
     - subargument level: single sub-argument is moved (creates/joins an OM argument)
     """
-    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
     import uuid as _uuid
+
+    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
 
     if request.level not in ("standard", "argument", "subargument"):
         raise HTTPException(status_code=400, detail=f"Invalid level: {request.level}")

@@ -8,9 +8,9 @@ Quote Merger Service - 引用汇总服务 (本地处理，不调用 LLM)
 - 生成结构化的关键引用清单
 """
 
-from typing import List, Dict, Any, Set
-from datetime import datetime, timezone
 import hashlib
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Set
 
 
 def hash_quote(quote: str, max_length: int = 100) -> str:

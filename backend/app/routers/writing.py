@@ -6,17 +6,17 @@ Writing Router - 写作 API
 (v2 endpoints were removed in M1: no live frontend caller, see Doc/03.)
 """
 
-from fastapi import APIRouter, HTTPException, Depends
-from app.core.ids import validate_path_params
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from typing import List, Dict, Optional
 
-
+from app.core.ids import validate_path_params
 from app.services.petition_writer_v3 import (
-    write_petition_section_v3,
-    save_writing_v3,
-    load_latest_writing_v3,
     analyze_change_impact,
+    load_latest_writing_v3,
+    save_writing_v3,
+    write_petition_section_v3,
 )
 
 router = APIRouter(prefix="/api/write/v3", tags=["Writing V3"], dependencies=[Depends(validate_path_params)])

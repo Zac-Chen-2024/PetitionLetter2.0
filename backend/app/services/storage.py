@@ -2,11 +2,10 @@
 本地文件存储服务
 将项目数据保存为本地 JSON 文件，类似日志系统
 """
-import os
 import json
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from ..core.ids import is_safe_id
 
@@ -944,7 +943,6 @@ def load_l1_analysis(project_id: str, version_id: str = None) -> Optional[List[D
     - 不同文档的结果可以来自不同的分析文件
     - 解决批量分析产生多个文件导致数据分散的问题
     """
-    from .quote_merger import hash_quote
 
     l1_dir = get_project_dir(project_id) / "l1_analysis"
     if not l1_dir.exists():

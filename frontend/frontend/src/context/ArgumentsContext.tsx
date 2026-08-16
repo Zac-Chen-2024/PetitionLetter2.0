@@ -9,6 +9,13 @@ import { apiClient } from '../services/api';
 // ============================================
 
 // Backend argument response types
+interface BackendLayerItem {
+  text: string;
+  exhibit_id: string;
+  purpose: string;
+  snippet_id: string;
+}
+
 interface BackendArgument {
   id: string;
   title: string;
@@ -20,7 +27,12 @@ interface BackendArgument {
   sub_argument_ids?: string[];
   created_at: string;
   exhibits?: string[];
-  layers?: { claim: any[]; proof: any[]; significance: any[]; context: any[] };
+  layers?: {
+    claim: BackendLayerItem[];
+    proof: BackendLayerItem[];
+    significance: BackendLayerItem[];
+    context: BackendLayerItem[];
+  };
   conclusion?: string;
   completeness?: { has_claim: boolean; has_proof: boolean; has_significance: boolean; has_context: boolean; score: number };
 }

@@ -10,21 +10,23 @@ Extraction Router - 统一提取 API
 这将替代旧的 analysis router 的提取功能。
 """
 
-from fastapi import APIRouter, HTTPException, Depends
-from app.core.ids import validate_path_params
 from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.core.ids import validate_path_params
+
+from ..services.entity_merger import (
+    apply_entity_merges,
+    get_merge_status,
+    load_merge_suggestions,
+    suggest_entity_merges,
+    update_merge_suggestion_status,
+)
 from ..services.unified_extractor import (
     extract_all_unified,
     load_combined_extraction,
-)
-from ..services.entity_merger import (
-    suggest_entity_merges,
-    load_merge_suggestions,
-    update_merge_suggestion_status,
-    apply_entity_merges,
-    get_merge_status,
 )
 
 router = APIRouter(prefix="/api/extraction", tags=["extraction"], dependencies=[Depends(validate_path_params)])

@@ -7,14 +7,14 @@ Snippet Recommender - 根据标题/描述为新 SubArgument 推荐相关 Snippet
 """
 
 import json
-from typing import List, Dict, Optional, Set
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+
 import portalocker
 
-from .snippet_registry import load_registry
 from .llm_client import call_llm, call_llm_text
-
+from .snippet_registry import load_registry
 
 # 数据存储根目录
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -65,8 +65,6 @@ def get_assigned_snippet_ids(project_id: str) -> Set[str]:
 
 def remove_standard(project_id: str, standard_key: str) -> Dict:
     """移除一个 Standard 下的所有 Arguments 和 SubArguments，清理 writing_v3 文件"""
-    import glob as glob_mod
-    import os
 
     legal_args = load_legal_arguments(project_id)
     arguments = legal_args.get("arguments", [])
@@ -691,7 +689,6 @@ async def consolidate_subarguments(
     - 创建新 SubArgument 挂到 target_argument_id
     - 删除原 sub-args
     """
-    import uuid
 
     if len(subargument_ids) < 2:
         raise ValueError("At least 2 sub-arguments are required for consolidation")

@@ -8,8 +8,10 @@ DeepSeek 和 OpenAI 都是 OpenAI 兼容 API，合并为统一接口。
 import json
 import logging
 import re
-import httpx
 from typing import Dict, Optional
+
+import httpx
+
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)

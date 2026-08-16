@@ -10,16 +10,13 @@ SubArgument Generator - 次级子论点生成器
 4. relationship 字段由 LLM 生成（如 "证明管理能力"）
 """
 
-import json
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
 import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple
 
 from .llm_client import call_llm
-
 
 # ==================== Prompt Templates ====================
 

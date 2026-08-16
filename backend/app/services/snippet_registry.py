@@ -11,9 +11,9 @@ Snippet Registry - 从 L1/EB1A 分析结果构建带 ID 的 snippet 注册表
 
 import hashlib
 import json
-from typing import List, Dict, Optional
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
 # 数据存储根目录
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
