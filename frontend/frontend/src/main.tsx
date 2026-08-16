@@ -4,6 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import './i18n'
 import './index.css'
 import App from './App.tsx'
+import { adoptTokenFromUrl } from './services/auth'
+
+// Adopt ?token=... before anything renders / fetches.
+adoptTokenFromUrl()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

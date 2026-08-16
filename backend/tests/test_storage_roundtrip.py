@@ -95,7 +95,7 @@ def test_concurrent_subargument_creation_loses_nothing(tmp_data_dir):
     assert len(data["arguments"][0]["sub_argument_ids"]) == 30
 
 
-def test_resolve_source_path_falls_back_to_source_data_dir(tmp_data_dir, tmp_path, monkeypatch):
+def test_resolve_source_path_falls_back_to_source_data_dir(tmp_data_dir, projects_root, tmp_path, monkeypatch):
     """metadata.json holds a Windows path from another machine; resolve by folder name."""
     from app.core.config import settings
 
@@ -103,7 +103,7 @@ def test_resolve_source_path_falls_back_to_source_data_dir(tmp_data_dir, tmp_pat
     (src_root / "eb1a" / "Dehuan Liu" / "PDF").mkdir(parents=True)
     monkeypatch.setattr(settings, "source_data_dir", str(src_root))
 
-    pdir = tmp_data_dir / "projects" / "dehuan_liu"
+    pdir = projects_root / "dehuan_liu"
     pdir.mkdir()
     (pdir / "metadata.json").write_text(
         json.dumps({"source_path": "F:\\\\work\\\\data\\\\eb1a\\\\Dehuan Liu"}), encoding="utf-8"

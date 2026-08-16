@@ -2,7 +2,9 @@
  * API Client - 统一的 HTTP 请求客户端
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8004/api';
+import { getToken, notifyUnauthorized } from './auth';
+
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
 
 // Backend origin (without /api path) for direct resource URLs (e.g. PDF files)
 export const BACKEND_URL = API_BASE.replace(/\/api\/?$/, '');
@@ -31,10 +33,12 @@ class ApiError extends Error {
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, headers = {}, signal } = options;
 
+  const token = getToken();
   const config: RequestInit = {
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
     signal,
@@ -53,6 +57,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     } catch {
       data = null;
     }
+    if (response.status === 401) notifyUnauthorized();
     throw new ApiError(response.status, response.statusText, data);
   }
 

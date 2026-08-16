@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useApp } from '../context/AppContext';
 import { apiClient, BACKEND_URL } from '../services/api';
+import { withToken } from '../services/auth';
 import type { Snippet, BoundingBox, MaterialType } from '../types';
 import { SnippetCreationModal } from './SnippetCreationModal';
 import { Magnifier } from './Magnifier';
@@ -281,7 +282,8 @@ function PDFViewer({
     }
   };
 
-  const fullPdfUrl = `${BACKEND_URL}${pdfUrl}`;
+  // Direct resource URL: cannot carry the Authorization header, so pass ?token=
+  const fullPdfUrl = withToken(`${BACKEND_URL}${pdfUrl}`);
 
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);

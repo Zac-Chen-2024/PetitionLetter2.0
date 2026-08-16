@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from ..core.atomic_io import update_json, write_json
 from ..core.config import settings
 from ..core.ids import is_safe_id
+from ..core.workspace import current_workspace
 
 # ---------------------------------------------------------------------------
 # Data-root resolution -- the ONE place that knows where data lives.
@@ -30,9 +31,15 @@ def data_dir() -> Path:
     return _DEFAULT_DATA_DIR
 
 
+def workspace_dir(workspace_id: Optional[str] = None) -> Path:
+    """Root of one workspace (defaults to the request's current workspace)."""
+    return data_dir() / "workspaces" / (workspace_id or current_workspace())
+
+
 def projects_dir() -> Path:
-    """Directory that holds one sub-directory per project."""
-    return data_dir() / "projects"
+    """Directory that holds one sub-directory per project, scoped to the
+    current workspace (see app.core.workspace)."""
+    return workspace_dir() / "projects"
 
 
 def ensure_dirs():

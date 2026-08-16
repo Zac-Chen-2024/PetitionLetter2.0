@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.workspace import WorkspaceMiddleware
 from app.routers.arguments import router as arguments_router
 from app.routers.documents import router as documents_router
 from app.routers.extraction import router as extraction_router
@@ -49,6 +50,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Workspace scoping (bearer token -> ContextVar). Added AFTER CORSMiddleware so
+# that CORS wraps it (Starlette applies middleware in reverse order of add).
+app.add_middleware(WorkspaceMiddleware)
 
 # Include routers (new frontend only)
 app.include_router(projects_router)

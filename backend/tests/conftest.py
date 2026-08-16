@@ -13,12 +13,21 @@ import pytest
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
+    """Fresh data root; auth disabled so unauthenticated requests hit the
+    'default' workspace. Tests that exercise auth flip settings.auth_disabled."""
     from app.core.config import settings
 
     data = tmp_path / "data"
-    (data / "projects").mkdir(parents=True)
+    (data / "workspaces" / "default" / "projects").mkdir(parents=True)
     monkeypatch.setattr(settings, "data_dir", str(data))
+    monkeypatch.setattr(settings, "auth_disabled", True)
     return data
+
+
+@pytest.fixture
+def projects_root(tmp_data_dir):
+    """projects/ directory of the default workspace."""
+    return tmp_data_dir / "workspaces" / "default" / "projects"
 
 
 @pytest.fixture
@@ -31,9 +40,9 @@ def client(tmp_data_dir):
 
 
 @pytest.fixture
-def victim_project(tmp_data_dir):
+def victim_project(projects_root):
     """A minimal project on disk; returns its id."""
-    pdir = tmp_data_dir / "projects" / "victim"
+    pdir = projects_root / "victim"
     pdir.mkdir()
     (pdir / "meta.json").write_text(
         json.dumps({"id": "victim", "name": "v", "createdAt": "2026-01-01T00:00:00"}),

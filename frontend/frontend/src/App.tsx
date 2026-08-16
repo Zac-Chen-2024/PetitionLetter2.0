@@ -14,6 +14,7 @@ import {
   ArgumentGraph,
 } from './components';
 import { LetterPanel } from './components/LetterPanel';
+import { TokenGate } from './components/TokenGate';
 
 // Error Boundary for debugging
 interface ErrorBoundaryState {
@@ -171,24 +172,26 @@ function AppContent() {
 
 function App() {
   return (
-    <AppProvider>
-      <AppContent />
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          duration: 3000,
-          style: {
-            borderRadius: '10px',
-            background: '#1e293b',
-            color: '#f1f5f9',
-            fontSize: '13px',
-            padding: '10px 16px',
-          },
-          success: { iconTheme: { primary: '#10b981', secondary: '#fff' } },
-          error: { iconTheme: { primary: '#ef4444', secondary: '#fff' }, duration: 4000 },
-        }}
-      />
-    </AppProvider>
+    <TokenGate>
+      <AppProvider>
+        <AppContent />
+        <Toaster
+          position="bottom-center"
+          toastOptions={{
+            duration: 3000,
+            style: {
+              borderRadius: '10px',
+              background: '#1e293b',
+              color: '#f1f5f9',
+              fontSize: '13px',
+              padding: '10px 16px',
+            },
+            success: { iconTheme: { primary: '#10b981', secondary: '#fff' } },
+            error: { iconTheme: { primary: '#ef4444', secondary: '#fff' }, duration: 4000 },
+          }}
+        />
+      </AppProvider>
+    </TokenGate>
   );
 }
 

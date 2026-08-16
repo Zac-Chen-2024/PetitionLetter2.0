@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # present on this machine (paths were recorded on a Windows dev box).
     source_data_dir: str = ""
 
+    # Workspace auth. False (default): every /api request needs a bearer token
+    # minted with scripts/mint_token.py. True: unauthenticated requests fall
+    # back to the "default" workspace (local development).
+    auth_disabled: bool = False
+
     @property
     def cors_origin_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
