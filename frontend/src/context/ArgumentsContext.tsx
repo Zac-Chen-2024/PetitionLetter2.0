@@ -1,92 +1,35 @@
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Argument, SubArgument, WritingEdge, Position, ArgumentStatus } from '../types';
-import { toArgumentClaimType } from '../types';
-import { apiClient } from '../services/api';
+import {
+  argumentsFromAPI,
+  subArgumentsFromAPI,
+  queryKeys,
+  useArgumentsQuery,
+  useConsolidateSubArguments,
+  useCreateArgument,
+  useCreateSubArgument,
+  useDeleteSubArgument,
+  useGenerateArguments,
+  useMergeSubArguments,
+  useMoveSubArguments,
+  useMoveToOverallMerits,
+  useRegenerateStandard,
+  useRemoveStandard,
+  useUpdateSubArgument,
+} from '../api';
+import { useProject } from './ProjectContext';
 
 // ============================================
-// ArgumentsContext
-// Provides: argument assembly state, sub-arguments, argument generation
+// ArgumentsContext (M11: server state via TanStack Query)
+//
+// `arguments` / `subArguments` are a local working copy hydrated from the
+// ['arguments', projectId] query. Every structural mutation goes through the
+// api/ mutation hooks, which invalidate that query; the refetch re-hydrates
+// this state, so no hand-written "mirror the server change locally" code is
+// needed any more. Only cheap, high-frequency edits (title typing, snippet
+// assignment) are applied optimistically before persisting.
 // ============================================
-
-// Backend argument response types
-interface BackendLayerItem {
-  text: string;
-  exhibit_id: string;
-  purpose: string;
-  snippet_id: string;
-}
-
-interface BackendArgument {
-  id: string;
-  title: string;
-  subject: string;
-  snippet_ids: string[];
-  standard_key: string;
-  confidence?: number;
-  is_ai_generated: boolean;
-  sub_argument_ids?: string[];
-  created_at: string;
-  exhibits?: string[];
-  layers?: {
-    claim: BackendLayerItem[];
-    proof: BackendLayerItem[];
-    significance: BackendLayerItem[];
-    context: BackendLayerItem[];
-  };
-  conclusion?: string;
-  completeness?: { has_claim: boolean; has_proof: boolean; has_significance: boolean; has_context: boolean; score: number };
-}
-
-interface BackendSubArgument {
-  id: string;
-  argument_id: string;
-  title: string;
-  purpose: string;
-  relationship: string;
-  snippet_ids: string[];
-  pending_snippet_ids?: string[];
-  needs_snippet_confirmation?: boolean;
-  is_ai_generated: boolean;
-  status: string;
-  created_at: string;
-}
-
-export function convertBackendArguments(args: BackendArgument[]): Argument[] {
-  return args.map((arg) => ({
-    id: arg.id,
-    title: arg.title,
-    subject: arg.subject,
-    snippetIds: arg.snippet_ids,
-    standardKey: arg.standard_key,
-    claimType: toArgumentClaimType(arg.standard_key),
-    status: 'draft' as ArgumentStatus,
-    isAIGenerated: arg.is_ai_generated,
-    subArgumentIds: arg.sub_argument_ids || [],
-    createdAt: new Date(arg.created_at),
-    updatedAt: new Date(),
-    exhibits: arg.exhibits,
-    layers: arg.layers,
-    conclusion: arg.conclusion,
-    completeness: arg.completeness,
-  }));
-}
-
-export function convertBackendSubArguments(subArgs: BackendSubArgument[]): SubArgument[] {
-  return subArgs.map((sa) => ({
-    id: sa.id,
-    argumentId: sa.argument_id,
-    title: sa.title,
-    purpose: sa.purpose,
-    relationship: sa.relationship,
-    snippetIds: sa.snippet_ids,
-    pendingSnippetIds: sa.pending_snippet_ids || [],
-    needsSnippetConfirmation: sa.needs_snippet_confirmation || false,
-    isAIGenerated: sa.is_ai_generated,
-    status: sa.status as 'draft' | 'verified',
-    createdAt: new Date(sa.created_at),
-    updatedAt: new Date(),
-  }));
-}
 
 export interface ArgumentsContextType {
   arguments: Argument[];
@@ -103,7 +46,10 @@ export interface ArgumentsContextType {
   subArguments: SubArgument[];
   setSubArguments: React.Dispatch<React.SetStateAction<SubArgument[]>>;
   addSubArgument: (subArgument: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>, projectId: string) => Promise<SubArgument>;
+  /** Optimistic local edit (no persistence). Pair with saveSubArgument. */
   updateSubArgument: (id: string, updates: Partial<Omit<SubArgument, 'id' | 'createdAt'>>) => void;
+  /** Persist fields of a SubArgument (PUT). Applies the same edit locally first. */
+  saveSubArgument: (id: string, updates: Partial<Pick<SubArgument, 'title' | 'purpose' | 'relationship' | 'snippetIds' | 'pendingSnippetIds' | 'needsSnippetConfirmation' | 'status'>>, projectId: string) => Promise<void>;
   removeSubArgument: (id: string, projectId: string) => void;
   regenerateSubArgument: (subArgumentId: string, projectId: string) => Promise<void>;
   mergeSubArguments: (subArgumentIds: string[], title: string, purpose: string, relationship: string, projectId: string) => Promise<{ newArgument: Argument; movedSubArgumentIds: string[] }>;
@@ -116,18 +62,56 @@ export interface ArgumentsContextType {
   generateArguments: (projectId: string, llmProvider: string, forceReanalyze?: boolean, applicantName?: string) => Promise<void>;
   regenerateStandard: (standardKey: string, projectId: string, llmProvider: string) => Promise<void>;
   generatedMainSubject: string | null;
+  /** True while the ['arguments'] query is loading for the first time. */
+  isLoading: boolean;
 }
 
 const ArgumentsContext = createContext<ArgumentsContextType | undefined>(undefined);
 
 export function ArgumentsProvider({ children }: { children: ReactNode }) {
-  const [arguments_, setArguments] = useState<Argument[]>([]);
-  const [argumentMappings, setArgumentMappings] = useState<WritingEdge[]>([]);
-  const [subArguments, setSubArguments] = useState<SubArgument[]>([]);
-  const [isGeneratingArguments, setIsGeneratingArguments] = useState(false);
-  const [generatedMainSubject, setGeneratedMainSubject] = useState<string | null>(null);
+  const { projectId } = useProject();
+  const qc = useQueryClient();
 
-  // Argument management
+  // ---- server state -> local working copy ----
+  const argsQ = useArgumentsQuery(projectId);
+  const [arguments_, setArguments] = useState<Argument[]>([]);
+  const [subArguments, setSubArguments] = useState<SubArgument[]>([]);
+  useEffect(() => {
+    if (argsQ.data) {
+      setArguments(argumentsFromAPI(argsQ.data.arguments || []));
+      setSubArguments(subArgumentsFromAPI(argsQ.data.sub_arguments || []));
+    } else if (!argsQ.isLoading) {
+      setArguments([]);
+      setSubArguments([]);
+    }
+  }, [argsQ.data, argsQ.isLoading]);
+  useEffect(() => { setArguments([]); setSubArguments([]); }, [projectId]);
+  const generatedMainSubject = argsQ.data?.main_subject ?? null;
+
+  /** Refetch ['arguments', id] and wait for it (used after structural mutations). */
+  const refresh = useCallback(async (pid: string) => {
+    await qc.invalidateQueries({ queryKey: queryKeys.arguments(pid) });
+  }, [qc]);
+
+  // ---- UI-only state ----
+  const [argumentMappings, setArgumentMappings] = useState<WritingEdge[]>([]);
+  const [isGeneratingArguments, setIsGeneratingArguments] = useState(false);
+
+  // ---- mutations ----
+  // (mutateAsync references are stable, so they are safe useCallback deps)
+  const updateSubArgM = useUpdateSubArgument().mutateAsync;
+  const createSubArgM = useCreateSubArgument().mutateAsync;
+  const deleteSubArgM = useDeleteSubArgument().mutateAsync;
+  const createArgM = useCreateArgument().mutateAsync;
+  const moveM = useMoveSubArguments().mutateAsync;
+  const mergeM = useMergeSubArguments().mutateAsync;
+  const consolidateM = useConsolidateSubArguments().mutateAsync;
+  const removeStandardM = useRemoveStandard().mutateAsync;
+  const overallMeritsM = useMoveToOverallMerits().mutateAsync;
+  const generateM = useGenerateArguments().mutateAsync;
+  const regenerateStandardM = useRegenerateStandard().mutateAsync;
+
+  // ---- local-only helpers (unchanged semantics) ----
   const addArgument = useCallback((argumentData: Omit<Argument, 'id' | 'createdAt' | 'updatedAt'>) => {
     const newArgument: Argument = {
       ...argumentData,
@@ -146,7 +130,6 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
 
   const removeArgument = useCallback((id: string) => {
     setArguments(prev => prev.filter(arg => arg.id !== id));
-    // Also remove argument mappings
     setArgumentMappings(prev => prev.filter(e => e.source !== id));
   }, []);
 
@@ -156,52 +139,27 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     ));
   }, []);
 
-  // Snippet to Argument operations
   const addSnippetToArgument = useCallback((argumentId: string, snippetId: string) => {
     setArguments(prev => prev.map(arg => {
-      if (arg.id === argumentId) {
-        if (arg.snippetIds.includes(snippetId)) return arg;
-        return {
-          ...arg,
-          snippetIds: [...arg.snippetIds, snippetId],
-          updatedAt: new Date(),
-        };
-      }
-      return arg;
+      if (arg.id !== argumentId || arg.snippetIds.includes(snippetId)) return arg;
+      return { ...arg, snippetIds: [...arg.snippetIds, snippetId], updatedAt: new Date() };
     }));
   }, []);
 
   const removeSnippetFromArgument = useCallback((argumentId: string, snippetId: string) => {
-    setArguments(prev => prev.map(arg => {
-      if (arg.id === argumentId) {
-        return {
-          ...arg,
-          snippetIds: arg.snippetIds.filter(id => id !== snippetId),
-          updatedAt: new Date(),
-        };
-      }
-      return arg;
-    }));
+    setArguments(prev => prev.map(arg =>
+      arg.id === argumentId ? { ...arg, snippetIds: arg.snippetIds.filter(id => id !== snippetId), updatedAt: new Date() } : arg
+    ));
   }, []);
 
-  // Argument -> Standard mapping
   const addArgumentMapping = useCallback((argumentId: string, standardKey: string) => {
     setArgumentMappings(prev => {
-      const exists = prev.some(e => e.source === argumentId && e.target === standardKey);
-      if (exists) return prev;
-
-      const newMapping: WritingEdge = {
+      if (prev.some(e => e.source === argumentId && e.target === standardKey)) return prev;
+      return [...prev, {
         id: `am-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        source: argumentId,
-        target: standardKey,
-        type: 'argument-to-standard',
-        isConfirmed: true,
-        createdAt: new Date(),
-      };
-      return [...prev, newMapping];
+        source: argumentId, target: standardKey, type: 'argument-to-standard', isConfirmed: true, createdAt: new Date(),
+      }];
     });
-
-    // Also update the argument's standardKey
     setArguments(prev => prev.map(arg =>
       arg.id === argumentId ? { ...arg, standardKey, status: 'mapped' as const, updatedAt: new Date() } : arg
     ));
@@ -211,7 +169,6 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     setArgumentMappings(prev => {
       const mapping = prev.find(e => e.id === edgeId);
       if (mapping) {
-        // Also clear the argument's standardKey
         setArguments(prevArgs => prevArgs.map(arg =>
           arg.id === mapping.source ? { ...arg, standardKey: undefined, status: 'verified' as const, updatedAt: new Date() } : arg
         ));
@@ -220,66 +177,30 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // SubArgument Management
+  // ---- SubArgument management ----
   const addSubArgument = useCallback(async (
     subArgumentData: Omit<SubArgument, 'id' | 'createdAt' | 'updatedAt'>,
-    projectId: string
+    pid: string
   ): Promise<SubArgument> => {
-    const response = await apiClient.post<{
-      success: boolean;
-      subargument: {
-        id: string;
-        argument_id: string;
-        title: string;
-        purpose: string;
-        relationship: string;
-        snippet_ids: string[];
-        is_ai_generated: boolean;
-        status: string;
-        created_at: string;
-      };
-    }>(`/arguments/${projectId}/subarguments`, {
+    const response = await createSubArgM({
+      projectId: pid,
       argument_id: subArgumentData.argumentId,
       title: subArgumentData.title,
       purpose: subArgumentData.purpose,
       relationship: subArgumentData.relationship,
       snippet_ids: subArgumentData.snippetIds,
     });
-
-    if (!response.success) {
-      throw new Error('Failed to create SubArgument');
-    }
-
-    const newSubArgument: SubArgument = {
-      id: response.subargument.id,
-      argumentId: response.subargument.argument_id,
-      title: response.subargument.title,
-      purpose: response.subargument.purpose,
-      relationship: response.subargument.relationship,
-      snippetIds: response.subargument.snippet_ids,
-      isAIGenerated: response.subargument.is_ai_generated,
-      status: response.subargument.status as 'draft' | 'verified',
-      createdAt: new Date(response.subargument.created_at),
-      updatedAt: new Date(),
-    };
-
-    setSubArguments(prev => [...prev, newSubArgument]);
-
-    // Update parent argument's subArgumentIds
-    setArguments(prev => prev.map(arg => {
-      if (arg.id === subArgumentData.argumentId) {
-        const existingSubArgIds = arg.subArgumentIds || [];
-        return {
-          ...arg,
-          subArgumentIds: [...existingSubArgIds, newSubArgument.id],
-          updatedAt: new Date(),
-        };
-      }
-      return arg;
-    }));
-
-    return newSubArgument;
-  }, []);
+    if (!response.success) throw new Error('Failed to create SubArgument');
+    const [created] = subArgumentsFromAPI([response.subargument]);
+    // Optimistic insert so the node appears before the refetch lands
+    setSubArguments(prev => [...prev.filter(sa => sa.id !== created.id), created]);
+    setArguments(prev => prev.map(arg =>
+      arg.id === subArgumentData.argumentId
+        ? { ...arg, subArgumentIds: [...(arg.subArgumentIds || []).filter(id => id !== created.id), created.id], updatedAt: new Date() }
+        : arg
+    ));
+    return created;
+  }, [createSubArgM]);
 
   const updateSubArgument = useCallback((id: string, updates: Partial<Omit<SubArgument, 'id' | 'createdAt'>>) => {
     setSubArguments(prev => prev.map(sa =>
@@ -287,416 +208,120 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     ));
   }, []);
 
-  const removeSubArgument = useCallback((id: string, projectId: string) => {
-    // Update local state (pure — no side effects inside updaters)
+  const saveSubArgument = useCallback(async (
+    id: string,
+    updates: Partial<Pick<SubArgument, 'title' | 'purpose' | 'relationship' | 'snippetIds' | 'pendingSnippetIds' | 'needsSnippetConfirmation' | 'status'>>,
+    pid: string,
+  ) => {
+    updateSubArgument(id, updates);
+    await updateSubArgM({
+      projectId: pid,
+      subArgumentId: id,
+      patch: {
+        ...(updates.title !== undefined ? { title: updates.title } : {}),
+        ...(updates.purpose !== undefined ? { purpose: updates.purpose } : {}),
+        ...(updates.relationship !== undefined ? { relationship: updates.relationship } : {}),
+        ...(updates.snippetIds !== undefined ? { snippet_ids: updates.snippetIds } : {}),
+        ...(updates.pendingSnippetIds !== undefined ? { pending_snippet_ids: updates.pendingSnippetIds } : {}),
+        ...(updates.needsSnippetConfirmation !== undefined ? { needs_snippet_confirmation: updates.needsSnippetConfirmation } : {}),
+        ...(updates.status !== undefined ? { status: updates.status } : {}),
+      },
+    });
+  }, [updateSubArgM, updateSubArgument]);
+
+  const removeSubArgument = useCallback((id: string, pid: string) => {
+    // Optimistic removal; the mutation's invalidation re-syncs afterwards.
     setSubArguments(prev => {
       const subArg = prev.find(sa => sa.id === id);
-      if (!subArg) return prev;
-
-      // Update the parent argument's subArgumentIds
-      setArguments(prevArgs => prevArgs.map(arg => {
-        if (arg.id === subArg.argumentId) {
-          return {
-            ...arg,
-            subArgumentIds: (arg.subArgumentIds || []).filter(saId => saId !== id),
-            updatedAt: new Date(),
-          };
-        }
-        return arg;
-      }));
-
+      if (subArg) {
+        setArguments(prevArgs => prevArgs.map(arg =>
+          arg.id === subArg.argumentId
+            ? { ...arg, subArgumentIds: (arg.subArgumentIds || []).filter(saId => saId !== id), updatedAt: new Date() }
+            : arg
+        ));
+      }
       return prev.filter(sa => sa.id !== id);
     });
-
-    // Persist to backend (side effect outside of state updater)
-    if (projectId) {
-      const deleteUrl = `/arguments/${projectId}/subarguments/${id}`;
-      console.log(`[ArgumentsContext] Calling DELETE ${deleteUrl}`);
-      apiClient.delete(deleteUrl)
-        .then(() => console.log(`[ArgumentsContext] SubArgument ${id} deleted from backend successfully`))
+    if (pid) {
+      deleteSubArgM({ projectId: pid, subArgumentId: id })
         .catch((error) => console.error('[ArgumentsContext] Failed to delete SubArgument from backend:', error));
     }
-  }, []);
+  }, [deleteSubArgM]);
 
   const regenerateSubArgument = useCallback(async (_subArgumentId: string, _projectId: string) => {
     console.warn('regenerateSubArgument should be called via useApp() facade which has access to WritingContext');
   }, []);
 
-  const removeStandard = useCallback(async (standardKey: string, projectId: string) => {
-    const response = await apiClient.delete<{
-      success: boolean;
-      deleted_argument_ids: string[];
-      deleted_subargument_ids: string[];
-    }>(`/arguments/${projectId}/standards/${standardKey}`);
-
+  const removeStandard = useCallback(async (standardKey: string, pid: string) => {
+    const response = await removeStandardM({ projectId: pid, standardKey });
     if (response.success) {
       const deletedArgIds = new Set(response.deleted_argument_ids);
       const deletedSubArgIds = new Set(response.deleted_subargument_ids);
       setArguments(prev => prev.filter(a => !deletedArgIds.has(a.id)));
       setSubArguments(prev => prev.filter(sa => !deletedSubArgIds.has(sa.id)));
-      // Also clean argument mappings
       setArgumentMappings(prev => prev.filter(e => !deletedArgIds.has(e.source)));
     }
-  }, []);
+  }, [removeStandardM]);
 
-  // Merge SubArguments → move them under a new Argument (regroup, not fuse)
   const mergeSubArguments = useCallback(async (
-    subArgumentIds: string[],
-    title: string,
-    purpose: string,
-    relationship: string,
-    projectId: string
+    subArgumentIds: string[], title: string, purpose: string, relationship: string, pid: string
   ): Promise<{ newArgument: Argument; movedSubArgumentIds: string[] }> => {
-    const response = await apiClient.post<{
-      success: boolean;
-      new_argument: {
-        id: string;
-        title: string;
-        subject: string;
-        snippet_ids: string[];
-        standard_key: string;
-        confidence: number;
-        is_ai_generated: boolean;
-        sub_argument_ids: string[];
-        created_at: string;
-      };
-      moved_subargument_ids: string[];
-    }>(`/arguments/${projectId}/subarguments/merge`, {
-      subargument_ids: subArgumentIds,
-      merged_title: title,
-      merged_purpose: purpose,
-      merged_relationship: relationship,
+    const response = await mergeM({
+      projectId: pid, subargument_ids: subArgumentIds, merged_title: title, merged_purpose: purpose, merged_relationship: relationship,
     });
+    if (!response.success) throw new Error('Failed to merge sub-arguments');
+    const [newArgument] = argumentsFromAPI([response.new_argument]);
+    await refresh(pid);
+    return { newArgument, movedSubArgumentIds: response.moved_subargument_ids ?? subArgumentIds };
+  }, [mergeM, refresh]);
 
-    if (!response.success) {
-      throw new Error('Failed to merge sub-arguments');
-    }
+  const moveSubArguments = useCallback(async (subArgumentIds: string[], targetArgumentId: string, pid: string): Promise<void> => {
+    const response = await moveM({ projectId: pid, subargument_ids: subArgumentIds, target_argument_id: targetArgumentId });
+    if (!response.success) throw new Error('Failed to move sub-arguments');
+    await refresh(pid);
+  }, [moveM, refresh]);
 
-    const argData = response.new_argument;
-    const newArgument: Argument = {
-      id: argData.id,
-      title: argData.title,
-      subject: argData.subject,
-      snippetIds: argData.snippet_ids,
-      standardKey: argData.standard_key,
-      claimType: toArgumentClaimType(argData.standard_key),
-      status: 'draft' as ArgumentStatus,
-      isAIGenerated: argData.is_ai_generated,
-      subArgumentIds: argData.sub_argument_ids || [],
-      createdAt: new Date(argData.created_at),
-      updatedAt: new Date(),
-    };
-
-    const movedSet = new Set(response.moved_subargument_ids);
-
-    // Update moved sub-args: change their argumentId to the new Argument
-    setSubArguments(prev => prev.map(sa =>
-      movedSet.has(sa.id)
-        ? { ...sa, argumentId: newArgument.id, updatedAt: new Date() }
-        : sa
-    ));
-
-    // Remove moved sub-arg IDs from old parent arguments, then add the new Argument
-    setArguments(prev => {
-      const updated = prev.map(arg => {
-        const oldIds = arg.subArgumentIds || [];
-        const hasMoved = oldIds.some(id => movedSet.has(id));
-        if (!hasMoved) return arg;
-        return {
-          ...arg,
-          subArgumentIds: oldIds.filter(id => !movedSet.has(id)),
-          updatedAt: new Date(),
-        };
-      });
-      return [...updated, newArgument];
-    });
-
-    return { newArgument, movedSubArgumentIds: response.moved_subargument_ids };
-  }, []);
-
-  // Move SubArguments to an existing Argument
-  const moveSubArguments = useCallback(async (
-    subArgumentIds: string[],
-    targetArgumentId: string,
-    projectId: string
-  ): Promise<void> => {
-    const response = await apiClient.post<{
-      success: boolean;
-      moved_subargument_ids: string[];
-      target_argument_id: string;
-    }>(`/arguments/${projectId}/subarguments/move`, {
-      subargument_ids: subArgumentIds,
-      target_argument_id: targetArgumentId,
-    });
-
-    if (!response.success) {
-      throw new Error('Failed to move sub-arguments');
-    }
-
-    const movedSet = new Set(response.moved_subargument_ids);
-
-    // Update sub-args: change argumentId to target
-    setSubArguments(prev => prev.map(sa =>
-      movedSet.has(sa.id)
-        ? { ...sa, argumentId: targetArgumentId, updatedAt: new Date() }
-        : sa
-    ));
-
-    // Update arguments: remove from old parents, add to target
-    setArguments(prev => prev.map(arg => {
-      const oldIds = arg.subArgumentIds || [];
-      if (arg.id === targetArgumentId) {
-        const newIds = [...oldIds];
-        for (const sid of subArgumentIds) {
-          if (!newIds.includes(sid)) newIds.push(sid);
-        }
-        return { ...arg, subArgumentIds: newIds, updatedAt: new Date() };
-      }
-      if (oldIds.some(id => movedSet.has(id))) {
-        return { ...arg, subArgumentIds: oldIds.filter(id => !movedSet.has(id)), updatedAt: new Date() };
-      }
-      return arg;
-    }));
-  }, []);
-
-  // Consolidate SubArguments → fuse into a single new SubArgument under target Argument
   const consolidateSubArguments = useCallback(async (
-    subArgumentIds: string[],
-    targetArgumentId: string,
-    projectId: string,
-    llmProvider: string
+    subArgumentIds: string[], targetArgumentId: string, pid: string, llmProvider: string
   ): Promise<{ newSubArgument: SubArgument; deletedSubArgumentIds: string[] }> => {
-    const response = await apiClient.post<{
-      success: boolean;
-      new_subargument: {
-        id: string;
-        argument_id: string;
-        title: string;
-        purpose: string;
-        relationship: string;
-        snippet_ids: string[];
-        is_ai_generated: boolean;
-        status: string;
-        created_at: string;
-      };
-      deleted_subargument_ids: string[];
-    }>(`/arguments/${projectId}/subarguments/consolidate`, {
-      subargument_ids: subArgumentIds,
-      target_argument_id: targetArgumentId,
-      provider: llmProvider,
+    const response = await consolidateM({
+      projectId: pid, subargument_ids: subArgumentIds, target_argument_id: targetArgumentId, provider: llmProvider,
     });
-
-    if (!response.success) {
-      throw new Error('Failed to consolidate sub-arguments');
-    }
-
-    const saData = response.new_subargument;
-    const newSubArgument: SubArgument = {
-      id: saData.id,
-      argumentId: saData.argument_id,
-      title: saData.title,
-      purpose: saData.purpose,
-      relationship: saData.relationship,
-      snippetIds: saData.snippet_ids,
-      isAIGenerated: saData.is_ai_generated,
-      status: saData.status as 'draft' | 'verified',
-      createdAt: new Date(saData.created_at),
-      updatedAt: new Date(),
-    };
-
-    const deletedSet = new Set(response.deleted_subargument_ids);
-
-    // Remove deleted sub-args from state and add the new one
-    setSubArguments(prev => [...prev.filter(sa => !deletedSet.has(sa.id)), newSubArgument]);
-
-    // Update arguments: remove deleted sub-arg IDs from old parents, add new to target
-    setArguments(prev => prev.map(arg => {
-      const oldIds = arg.subArgumentIds || [];
-      if (arg.id === targetArgumentId) {
-        // Remove deleted ones and add the new sub-arg (create_subargument already added it on backend)
-        const filtered = oldIds.filter(id => !deletedSet.has(id));
-        if (!filtered.includes(newSubArgument.id)) {
-          filtered.push(newSubArgument.id);
-        }
-        return { ...arg, subArgumentIds: filtered, updatedAt: new Date() };
-      }
-      if (oldIds.some(id => deletedSet.has(id))) {
-        return { ...arg, subArgumentIds: oldIds.filter(id => !deletedSet.has(id)), updatedAt: new Date() };
-      }
-      return arg;
-    }));
-
+    if (!response.success) throw new Error('Failed to consolidate sub-arguments');
+    const [newSubArgument] = subArgumentsFromAPI([response.new_subargument]);
+    await refresh(pid);
     return { newSubArgument, deletedSubArgumentIds: response.deleted_subargument_ids };
-  }, []);
+  }, [consolidateM, refresh]);
 
-  // Create a new Argument under a standard (persisted to backend)
-  const createArgument = useCallback(async (
-    standardKey: string,
-    projectId: string
-  ): Promise<Argument> => {
-    const response = await apiClient.post<{
-      success: boolean;
-      argument: BackendArgument;
-    }>(`/arguments/${projectId}/arguments`, {
-      standard_key: standardKey,
-      title: '',
-    });
-
-    if (!response.success) {
-      throw new Error('Failed to create argument');
-    }
-
-    const newArg = convertBackendArguments([response.argument])[0];
-    setArguments(prev => [...prev, newArg]);
+  const createArgument = useCallback(async (standardKey: string, pid: string): Promise<Argument> => {
+    const response = await createArgM({ projectId: pid, standard_key: standardKey, title: '' });
+    if (!response.success) throw new Error('Failed to create argument');
+    const [newArg] = argumentsFromAPI([response.argument]);
+    setArguments(prev => [...prev.filter(a => a.id !== newArg.id), newArg]);
     return newArg;
-  }, []);
+  }, [createArgM]);
 
-  // Move to Overall Merits
-  const moveToOverallMerits = useCallback(async (
-    level: 'standard' | 'argument' | 'subargument',
-    targetId: string,
-    projectId: string
-  ) => {
-    const response = await apiClient.post<{
-      success: boolean;
-      moved_argument_ids: string[];
-      moved_subargument_ids: string[];
-    }>(`/arguments/${projectId}/move-to-overall-merits`, {
-      level,
-      target_id: targetId,
-    });
+  const moveToOverallMerits = useCallback(async (level: 'standard' | 'argument' | 'subargument', targetId: string, pid: string) => {
+    const response = await overallMeritsM({ projectId: pid, level, target_id: targetId });
+    if (!response.success) throw new Error('Failed to move to Overall Merits');
+    await refresh(pid);
+  }, [overallMeritsM, refresh]);
 
-    if (!response.success) {
-      throw new Error('Failed to move to Overall Merits');
-    }
-
-    // Optimistic update: change standardKey for moved arguments
-    if (response.moved_argument_ids.length > 0) {
-      setArguments(prev => prev.map(arg =>
-        response.moved_argument_ids.includes(arg.id)
-          ? { ...arg, standardKey: 'overall_merits' }
-          : arg
-      ));
-    }
-
-    // For subargument-level moves, re-fetch to get accurate state
-    if (response.moved_subargument_ids.length > 0) {
-      try {
-        const freshData = await apiClient.get<{
-          arguments: BackendArgument[];
-          sub_arguments: BackendSubArgument[];
-        }>(`/arguments/${projectId}`);
-        setArguments(convertBackendArguments(freshData.arguments || []));
-        setSubArguments(convertBackendSubArguments(freshData.sub_arguments || []));
-      } catch {
-        // Optimistic fallback — at least the backend is correct
-      }
-    }
-  }, []);
-
-  // AI Argument Generation
-  // Fetch the current arguments/sub-arguments from the backend and replace local state.
-  // Shared by generateArguments (full pipeline) and regenerateStandard (single standard).
-  const fetchArgumentsFromBackend = useCallback(async (projectId: string) => {
-    const response = await apiClient.get<{
-      project_id: string;
-      arguments: Array<{
-        id: string;
-        title: string;
-        subject: string;
-        snippet_ids: string[];
-        standard_key: string;
-        confidence: number;
-        created_at: string;
-        is_ai_generated: boolean;
-        sub_argument_ids?: string[];
-        exhibits?: string[];
-        layers?: {
-          claim: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-          proof: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-          significance: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-          context: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-        };
-        conclusion?: string;
-        completeness?: {
-          has_claim: boolean;
-          has_proof: boolean;
-          has_significance: boolean;
-          has_context: boolean;
-          score: number;
-        };
-      }>;
-      sub_arguments: Array<{
-        id: string;
-        argument_id: string;
-        title: string;
-        purpose: string;
-        relationship: string;
-        snippet_ids: string[];
-        pending_snippet_ids?: string[];
-        needs_snippet_confirmation?: boolean;
-        is_ai_generated: boolean;
-        status: string;
-        created_at: string;
-      }>;
-      main_subject: string | null;
-      generated_at: string;
-      stats: Record<string, unknown>;
-    }>(`/arguments/${projectId}`);
-
-    setGeneratedMainSubject(response.main_subject);
-
-    const convertedArguments = convertBackendArguments(response.arguments);
-    setArguments(convertedArguments);
-    console.log(`Generated ${convertedArguments.length} arguments for ${response.main_subject}`);
-
-    const subArgsData = response.sub_arguments || [];
-    const convertedSubArgs = convertBackendSubArguments(subArgsData);
-    setSubArguments(convertedSubArgs);
-    console.log(`Generated ${convertedSubArgs.length} sub-arguments`);
-  }, []);
-
-  const generateArguments = useCallback(async (
-    projectId: string,
-    llmProvider: string,
-    forceReanalyze: boolean = false,
-    applicantName?: string
-  ) => {
+  // ---- AI generation ----
+  const generateArguments = useCallback(async (pid: string, llmProvider: string, forceReanalyze: boolean = false, applicantName?: string) => {
     setIsGeneratingArguments(true);
     try {
-      // Step 1: Run the generation pipeline
-      await apiClient.postJob<{
-        success: boolean;
-      }>(`/arguments/${projectId}/generate`, {
-        force_reanalyze: forceReanalyze,
-        applicant_name: applicantName,
-        provider: llmProvider,
-      });
-
-      // Step 2: Fetch generated arguments and sub-arguments
-      await fetchArgumentsFromBackend(projectId);
-    } catch (err) {
-      console.error('Failed to generate arguments:', err);
-      throw err;
+      await generateM({ projectId: pid, provider: llmProvider, force_reanalyze: forceReanalyze, applicant_name: applicantName });
+      await refresh(pid);
     } finally {
       setIsGeneratingArguments(false);
     }
-  }, [fetchArgumentsFromBackend]);
+  }, [generateM, refresh]);
 
-  // Re-run the organizer pipeline for ONE standard only (cheaper than a full
-  // regenerate). Backend replaces that standard's arguments/sub-arguments and
-  // leaves the others untouched; we then reload everything from the backend.
-  const regenerateStandard = useCallback(async (
-    standardKey: string,
-    projectId: string,
-    llmProvider: string,
-  ) => {
-    await apiClient.post<{ success: boolean }>(`/arguments/${projectId}/regenerate-standard`, {
-      standard_key: standardKey,
-      provider: llmProvider,
-    });
-    await fetchArgumentsFromBackend(projectId);
-  }, [fetchArgumentsFromBackend]);
+  const regenerateStandard = useCallback(async (standardKey: string, pid: string, llmProvider: string) => {
+    await regenerateStandardM({ projectId: pid, standardKey, provider: llmProvider });
+    await refresh(pid);
+  }, [regenerateStandardM, refresh]);
 
   const value = useMemo<ArgumentsContextType>(() => ({
     arguments: arguments_,
@@ -714,19 +339,25 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     setSubArguments,
     addSubArgument,
     updateSubArgument,
+    saveSubArgument,
     removeSubArgument,
     regenerateSubArgument,
-    removeStandard,
     mergeSubArguments,
     moveSubArguments,
     consolidateSubArguments,
     createArgument,
     moveToOverallMerits,
+    removeStandard,
     isGeneratingArguments,
     generateArguments,
     regenerateStandard,
     generatedMainSubject,
-  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits, generateArguments, regenerateStandard]);
+    isLoading: argsQ.isLoading,
+  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, argsQ.isLoading,
+    addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument,
+    addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, saveSubArgument, removeSubArgument,
+    regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits,
+    removeStandard, generateArguments, regenerateStandard]);
 
   return <ArgumentsContext.Provider value={value}>{children}</ArgumentsContext.Provider>;
 }
@@ -738,3 +369,7 @@ export function useArguments() {
   }
   return context;
 }
+
+// Backwards-compatible names used by a few call sites
+export { argumentsFromAPI as convertBackendArguments, subArgumentsFromAPI as convertBackendSubArguments };
+export type { ArgumentStatus };

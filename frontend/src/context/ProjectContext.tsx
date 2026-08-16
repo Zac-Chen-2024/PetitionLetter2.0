@@ -2,13 +2,13 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, t
 import { interactionLogger } from '../services/interactionLogger';
 import type { LLMProvider, LegalStandard, PipelineState, ProjectType } from '../types';
 import { toLLMProvider } from '../types';
-import { apiClient } from '../services/api';
 import { legalStandards as defaultEB1AStandards } from '../data/legalStandards';
+import { useProjectQuery, useStandardsQuery } from '../api';
 
 // ============================================
 // ProjectContext
-// Provides: project identity, loading status, LLM provider, pipeline stage,
-//           project type, project number, legal standards
+// Provides: project identity, LLM provider, pipeline stage (UI state) and the
+// project's server-side info (type, number, standards) via TanStack Query (M11).
 // ============================================
 
 const STORAGE_KEY_LLM_PROVIDER = 'evidence-system-llm-provider';
@@ -18,10 +18,9 @@ const DEFAULT_PROJECT_ID = 'yaruo_qu';
 export interface ProjectContextType {
   projectId: string;
   setProjectId: (id: string) => void;
+  /** True while any of the project's core queries is loading for the first time. */
   isLoading: boolean;
-  setIsLoading: (loading: boolean) => void;
   loadError: string | null;
-  setLoadError: (error: string | null) => void;
   llmProvider: LLMProvider;
   setLlmProvider: (provider: LLMProvider) => void;
   pipelineState: PipelineState;
@@ -33,6 +32,8 @@ export interface ProjectContextType {
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
+const VALID_TYPES: ProjectType[] = ['EB-1A', 'NIW', 'L-1A'];
+
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projectId, setProjectIdState] = useState<string>(() => {
     return localStorage.getItem(STORAGE_KEY_PROJECT_ID) || DEFAULT_PROJECT_ID;
@@ -42,25 +43,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setProjectIdState(id);
     localStorage.setItem(STORAGE_KEY_PROJECT_ID, id);
   }, []);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // LLM Provider setting
+  // LLM Provider setting (local preference, not server state)
   const [llmProvider, setLlmProviderState] = useState<LLMProvider>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_LLM_PROVIDER);
     return toLLMProvider(saved);
   });
 
-  // Pipeline state
+  // Pipeline state (UI)
   const [pipelineState, setPipelineState] = useState<PipelineState>({
     stage: 'ocr_complete',
     progress: 0,
   });
-
-  // Project type & number
-  const [projectType, setProjectType] = useState<ProjectType>('EB-1A');
-  const [projectNumber, setProjectNumber] = useState<string | null>(null);
-  const [legalStandards, setLegalStandards] = useState<LegalStandard[]>(defaultEB1AStandards);
 
   const setLlmProvider = useCallback((provider: LLMProvider) => {
     setLlmProviderState(provider);
@@ -72,66 +66,33 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     interactionLogger.setProjectId(projectId || null);
   }, [projectId]);
 
-  // Load project info + standards when projectId changes
+  // Server state
+  const projectQ = useProjectQuery(projectId);
+  const standardsQ = useStandardsQuery(projectId);
+
+  const projectType: ProjectType = useMemo(() => {
+    const t = projectQ.data?.projectType as ProjectType | undefined;
+    return t && VALID_TYPES.includes(t) ? t : 'EB-1A';
+  }, [projectQ.data]);
+  const projectNumber = projectQ.data?.projectNumber ?? null;
+  const legalStandards = useMemo<LegalStandard[]>(() => {
+    const s = standardsQ.data?.standards;
+    return s && s.length > 0 ? (s as unknown as LegalStandard[]) : defaultEB1AStandards;
+  }, [standardsQ.data]);
+
+  // Reset pipeline stage when the project changes
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadProjectData() {
-      // 1. Load project details (type + number)
-      try {
-        const project = await apiClient.get<{
-          projectType?: string;
-          projectNumber?: string;
-        }>(`/projects/${projectId}`);
-
-        if (!cancelled) {
-          const validTypes: ProjectType[] = ['EB-1A', 'NIW', 'L-1A'];
-          const pType = validTypes.includes(project.projectType as ProjectType)
-            ? (project.projectType as ProjectType)
-            : 'EB-1A';
-          setProjectType(pType);
-          setProjectNumber(project.projectNumber || null);
-        }
-      } catch {
-        if (!cancelled) {
-          setProjectType('EB-1A');
-          setProjectNumber(null);
-        }
-      }
-
-      // 2. Load standards for this project
-      try {
-        const resp = await apiClient.get<{
-          standards: LegalStandard[];
-          projectType: string;
-        }>(`/projects/${projectId}/standards`);
-
-        if (!cancelled && resp.standards && resp.standards.length > 0) {
-          setLegalStandards(resp.standards);
-        }
-      } catch {
-        if (!cancelled) {
-          setLegalStandards(defaultEB1AStandards);
-        }
-      }
-
-      // 3. Pipeline stage — default to ocr_complete (analysis router was archived)
-      if (!cancelled) {
-        setPipelineState(prev => ({ ...prev, stage: 'ocr_complete' }));
-      }
-    }
-
-    loadProjectData();
-    return () => { cancelled = true; };
+    setPipelineState(prev => ({ ...prev, stage: 'ocr_complete', progress: 0, error: undefined }));
   }, [projectId]);
+
+  const isLoading = projectQ.isLoading || standardsQ.isLoading;
+  const loadError = projectQ.error ? (projectQ.error as Error).message : null;
 
   const value = useMemo<ProjectContextType>(() => ({
     projectId,
     setProjectId,
     isLoading,
-    setIsLoading,
     loadError,
-    setLoadError,
     llmProvider,
     setLlmProvider,
     pipelineState,

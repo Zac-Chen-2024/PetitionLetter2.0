@@ -1,87 +1,15 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react';
-import type { WritingEdge, LetterSection, Position, Snippet, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard } from '../types';
+import type { WritingEdge, LetterSection, Position, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard } from '../types';
 import { toProvenanceIndex } from '../types';
-import { apiClient } from '../services/api';
+import type { WriteV3Result } from '../api';
 import { STANDARD_ID_TO_KEY } from '../constants/colors';
+import { sectionsFromAPI, sectionTitle, useAnalyzeImpact, useApplyMerges, useConfirmMerges, useExtract, useFetchMergeSuggestions, useGenerateMergeSuggestions, useInvalidate, useSectionsQuery, useWriteSection } from '../api';
+import { useProject } from './ProjectContext';
 
 // ============================================
 // WritingContext
 // Provides: writing canvas state, letter sections, pipeline operations
 // ============================================
-
-// Default color for unassigned snippets
-const DEFAULT_SNIPPET_COLOR = '#94a3b8';  // slate-400
-
-// Backend snippet format (no standard_key - classification at Argument level)
-interface BackendSnippet {
-  snippet_id: string;
-  document_id: string;
-  exhibit_id: string;
-  text: string;
-  page: number;
-  bbox: { x1: number; y1: number; x2: number; y2: number } | null;
-  block_type?: string;
-}
-
-// New unified extraction format (with subject attribution)
-interface UnifiedSnippet {
-  snippet_id: string;
-  block_id: string;
-  exhibit_id: string;
-  text: string;
-  subject: string;
-  subject_role: string;
-  is_applicant_achievement: boolean;
-  evidence_type: string;
-  confidence: number;
-  reasoning: string;
-  page?: number;
-  bbox?: { x1: number; y1: number; x2: number; y2: number } | null;
-}
-
-function convertBackendSnippet(bs: BackendSnippet): Snippet {
-  return {
-    id: bs.snippet_id,
-    documentId: bs.document_id || `doc_${bs.exhibit_id}`,
-    content: bs.text,
-    summary: bs.text.substring(0, 80) + (bs.text.length > 80 ? '...' : ''),
-    boundingBox: bs.bbox ? {
-      x: bs.bbox.x1,
-      y: bs.bbox.y1,
-      width: bs.bbox.x2 - bs.bbox.x1,
-      height: bs.bbox.y2 - bs.bbox.y1,
-      page: bs.page,
-    } : { x: 0, y: 0, width: 100, height: 50, page: bs.page },
-    materialType: 'other',
-    color: DEFAULT_SNIPPET_COLOR,
-    exhibitId: bs.exhibit_id,
-    page: bs.page,
-  };
-}
-
-function convertUnifiedSnippet(us: UnifiedSnippet): Snippet {
-  return {
-    id: us.snippet_id,
-    documentId: `doc_${us.exhibit_id}`,
-    content: us.text,
-    summary: us.text.substring(0, 80) + (us.text.length > 80 ? '...' : ''),
-    boundingBox: us.bbox ? {
-      x: us.bbox.x1,
-      y: us.bbox.y1,
-      width: us.bbox.x2 - us.bbox.x1,
-      height: us.bbox.y2 - us.bbox.y1,
-      page: us.page || 1,
-    } : { x: 0, y: 0, width: 100, height: 50, page: us.page || 1 },
-    materialType: 'other',
-    color: DEFAULT_SNIPPET_COLOR,
-    exhibitId: us.exhibit_id,
-    page: us.page || 1,
-    subject: us.subject,
-    subjectRole: us.subject_role,
-    isApplicantAchievement: us.is_applicant_achievement,
-    evidenceType: us.evidence_type,
-  };
-}
 
 export interface WritingContextType {
   writingEdges: WritingEdge[];
@@ -96,12 +24,12 @@ export interface WritingContextType {
   updateWritingNodePosition: (id: string, position: Position) => void;
   // Pipeline operations take projectId & llmProvider as parameters
   generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[], onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void, legalStandards?: LegalStandard[]) => Promise<void>;
-  reloadSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>) => Promise<void>;
+  reloadSnippets: (projectId: string) => Promise<void>;
   // Unified extraction
-  unifiedExtract: (projectId: string, llmProvider: string, applicantName: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
+  unifiedExtract: (projectId: string, llmProvider: string, applicantName: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
   generateMergeSuggestions: (projectId: string, llmProvider: string, applicantName: string) => Promise<MergeSuggestion[]>;
   confirmMerges: (projectId: string, confirmations: Array<{suggestion_id: string; status: string}>) => Promise<void>;
-  applyMerges: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>) => Promise<void>;
+  applyMerges: (projectId: string) => Promise<void>;
   mergeSuggestions: MergeSuggestion[];
   loadMergeSuggestions: (projectId: string) => Promise<void>;
   isExtracting: boolean;
@@ -155,8 +83,37 @@ const getInitialWritingNodePositions = (): Map<string, Position> => {
 };
 
 export function WritingProvider({ children }: { children: ReactNode }) {
+  const { projectId: currentProjectId } = useProject();
+  const invalidate = useInvalidate();
+  // mutateAsync references are stable across renders (TanStack Query), so
+  // callbacks can depend on them without re-creating on every mutation state change.
+  const writeSection = useWriteSection().mutateAsync;
+  const analyzeImpact = useAnalyzeImpact().mutateAsync;
+  const extract = useExtract().mutateAsync;
+  const generateMergeSuggestionsM = useGenerateMergeSuggestions<MergeSuggestion>().mutateAsync;
+  const confirmMergesM = useConfirmMerges().mutateAsync;
+  const applyMergesM = useApplyMerges().mutateAsync;
+  const fetchMergeSuggestions = useFetchMergeSuggestions<MergeSuggestion>();
+
   const [writingEdges, setWritingEdges] = useState<WritingEdge[]>([]);
+
+  // Letter sections: server snapshot from ['sections', projectId], hydrated
+  // ONCE per project. Everything after that (edits, staleness, suggestions,
+  // regenerated splices) is local editing state layered on top -- a refetch
+  // must not clobber it, so we deliberately do not re-hydrate on invalidation.
   const [letterSections, setLetterSections] = useState<LetterSection[]>([]);
+  const sectionsQ = useSectionsQuery(currentProjectId);
+  const hydratedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (hydratedForRef.current !== currentProjectId) {
+      setLetterSections([]);
+      hydratedForRef.current = null;
+    }
+    if (sectionsQ.data && hydratedForRef.current !== currentProjectId) {
+      setLetterSections(sectionsFromAPI(sectionsQ.data));
+      hydratedForRef.current = currentProjectId;
+    }
+  }, [currentProjectId, sectionsQ.data]);
   const [writingNodePositions, setWritingNodePositions] = useState<Map<string, Position>>(getInitialWritingNodePositions);
 
   // Rewriting state — tracks which standard is currently being rewritten
@@ -272,40 +229,20 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         }));
 
         try {
-          const response = await apiClient.postJob<{
-            success: boolean;
-            section: string;
-            paragraph_text: string;
-            sentences: Array<{
-              text: string;
-              snippet_ids: string[];
-              subargument_id?: string | null;
-              argument_id?: string | null;
-              exhibit_refs?: string[];
-              sentence_type?: 'opening' | 'body' | 'closing';
-            }>;
-            provenance_index?: {
-              by_subargument: Record<string, number[]>;
-              by_argument: Record<string, number[]>;
-              by_snippet: Record<string, number[]>;
-            };
-            validation?: {
-              total_sentences: number;
-              traced_sentences: number;
-              warnings: string[];
-            };
-            updated_subargument_snippets?: Record<string, string[]>;
-          }>(`/write/v3/${projectId}/${section}`, {
+          const response = await writeSection({
+            projectId,
+            standardKey: section,
             provider: llmProvider,
             exploration_writing: explorationWritingRef.current,
-          }, {
-            onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
-            onProgress: (job) => setPipelineState(prev => ({
-              ...prev,
-              jobDetail: job.detail ?? undefined,
-              // whole-run progress = finished sections + this job's fraction
-              progress: Math.round(((i + (job.progress || 0)) / total) * 100),
-            })),
+            job: {
+              onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
+              onProgress: (job) => setPipelineState(prev => ({
+                ...prev,
+                jobDetail: job.detail ?? undefined,
+                // whole-run progress = finished sections + this job's fraction
+                progress: Math.round(((i + (job.progress || 0)) / total) * 100),
+              })),
+            },
           });
 
           if (response.success && response.paragraph_text) {
@@ -315,7 +252,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
             }
             const newSection: LetterSection = {
               id: `section-${section}`,
-              title: section.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+              title: sectionTitle(section),
               standardId: section,
               content: response.paragraph_text,
               isGenerated: true,
@@ -352,7 +289,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         jobDetail: undefined,
       }));
     }
-  }, []);
+  }, [writeSection]);
 
   // Mark a section as stale (content out of sync with writing tree changes)
   const markSectionStale = useCallback((standardKey: string) => {
@@ -369,27 +306,11 @@ export function WritingProvider({ children }: { children: ReactNode }) {
   ) => {
     console.log('[rewriteStandard] START, setting rewritingStandardKey =', standardKey);
     setRewritingStandardKey(standardKey);
-    let response;
+    let response: WriteV3Result;
     try {
-      response = await apiClient.postJob<{
-        success: boolean;
-        section: string;
-        paragraph_text: string;
-        sentences: Array<{
-          text: string;
-          snippet_ids: string[];
-          subargument_id?: string | null;
-          argument_id?: string | null;
-          exhibit_refs?: string[];
-          sentence_type?: 'opening' | 'body' | 'closing';
-        }>;
-        provenance_index?: {
-          by_subargument: Record<string, number[]>;
-          by_argument: Record<string, number[]>;
-          by_snippet: Record<string, number[]>;
-        };
-        updated_subargument_snippets?: Record<string, string[]>;
-      }>(`/write/v3/${projectId}/${standardKey}`, {
+      response = await writeSection({
+        projectId,
+        standardKey,
         provider: llmProvider,
         exploration_writing: explorationWritingRef.current,
       });
@@ -406,7 +327,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
       const newSection: LetterSection = {
         id: `section-${standardKey}`,
-        title: standardKey.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        title: sectionTitle(standardKey),
         standardId: standardKey,
         content: response.paragraph_text,
         isGenerated: true,
@@ -429,33 +350,17 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     }
     console.log('[rewriteStandard] DONE, clearing rewritingStandardKey');
     setRewritingStandardKey(null);
-  }, []);
+  }, [writeSection]);
 
-  const reloadSnippets = useCallback(async (
-    projectId: string,
-    setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>
-  ) => {
-    try {
-      const response = await apiClient.get<{
-        snippets: BackendSnippet[];
-      }>(`/extraction/${projectId}/snippets?limit=2000`);
-
-      if (response.snippets && response.snippets.length > 0) {
-        const converted = response.snippets.map(convertBackendSnippet);
-        setSnippets(converted);
-        console.log(`Reloaded ${converted.length} extracted snippets`);
-      }
-    } catch (err) {
-      console.error('Failed to reload snippets:', err);
-    }
-  }, []);
+  const reloadSnippets = useCallback(async (projectId: string) => {
+    await invalidate.snippets(projectId);
+  }, [invalidate]);
 
   // Unified extraction
   const unifiedExtract = useCallback(async (
     projectId: string,
     llmProvider: string,
     applicantName: string,
-    setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>,
     setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>
   ) => {
     setIsExtracting(true);
@@ -463,23 +368,18 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     setPipelineState(prev => ({ ...prev, stage: 'extracting', progress: 0 }));
 
     try {
-      const response = await apiClient.postJob<{
-        success: boolean;
-        exhibits_processed: number;
-        total_snippets: number;
-        total_entities: number;
-        total_relations: number;
-        error?: string;
-      }>(`/extraction/${projectId}/extract`, {
+      const response = await extract({
+        projectId,
         applicant_name: applicantName,
         provider: llmProvider,
-      }, {
-        onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
-        onProgress: (job) => {
-          setPipelineState(prev => ({ ...prev, jobDetail: job.detail ?? undefined, progress: Math.round((job.progress || 0) * 100) }));
-          // "Extracted A1 (3/12)" -> keep the numeric progress the UI already knows how to show
-          const m = /\((\d+)\/(\d+)\)/.exec(job.detail || '');
-          if (m) setExtractionProgress({ current: Number(m[1]), total: Number(m[2]) });
+        job: {
+          onSubmitted: (job) => setPipelineState(prev => ({ ...prev, jobId: job.id, jobDetail: job.detail ?? undefined })),
+          onProgress: (job) => {
+            setPipelineState(prev => ({ ...prev, jobDetail: job.detail ?? undefined, progress: Math.round((job.progress || 0) * 100) }));
+            // "Extracted A1 (3/12)" -> keep the numeric progress the UI already knows how to show
+            const m = /\((\d+)\/(\d+)\)/.exec(job.detail || '');
+            if (m) setExtractionProgress({ current: Number(m[1]), total: Number(m[2]) });
+          },
         },
       });
 
@@ -491,17 +391,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           snippetCount: response.total_snippets,
         }));
 
-        const snippetsResponse = await apiClient.get<{
-          project_id: string;
-          total: number;
-          snippets: UnifiedSnippet[];
-        }>(`/extraction/${projectId}/snippets?limit=2000`);
-
-        if (snippetsResponse.snippets) {
-          const converted = snippetsResponse.snippets.map(convertUnifiedSnippet);
-          setSnippets(converted);
-          console.log(`Loaded ${converted.length} unified extraction snippets`);
-        }
+        // ['snippets'] and ['arguments'] are invalidated by the mutation; the
+        // contexts re-hydrate from the refetch.
       } else {
         throw new Error(response.error || 'Extraction failed');
       }
@@ -516,7 +407,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       setIsExtracting(false);
       setExtractionProgress(null);
     }
-  }, []);
+  }, [extract]);
 
   // Generate merge suggestions
   const generateMergeSuggestions = useCallback(async (
@@ -526,15 +417,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
   ): Promise<MergeSuggestion[]> => {
     setIsMerging(true);
     try {
-      const response = await apiClient.post<{
-        success: boolean;
-        suggestion_count: number;
-        suggestions: MergeSuggestion[];
-      }>(`/extraction/${projectId}/merge-suggestions/generate`, {
-        applicant_name: applicantName,
-        provider: llmProvider,
-      });
-
+      const response = await generateMergeSuggestionsM({ projectId, applicant_name: applicantName, provider: llmProvider });
       if (response.success) {
         setMergeSuggestions(response.suggestions);
         console.log(`Generated ${response.suggestion_count} merge suggestions`);
@@ -547,22 +430,17 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsMerging(false);
     }
-  }, []);
+  }, [generateMergeSuggestionsM]);
 
   // Load existing merge suggestions
   const loadMergeSuggestions = useCallback(async (projectId: string) => {
     try {
-      const response = await apiClient.get<{
-        project_id: string;
-        suggestions: MergeSuggestion[];
-        status: { pending: number; accepted: number; rejected: number; applied: number };
-      }>(`/extraction/${projectId}/merge-suggestions`);
-
+      const response = await fetchMergeSuggestions(projectId);
       setMergeSuggestions(response.suggestions);
     } catch (err) {
       console.error('Failed to load merge suggestions:', err);
     }
-  }, []);
+  }, [fetchMergeSuggestions]);
 
   // Confirm/reject merge suggestions
   const confirmMerges = useCallback(async (
@@ -570,56 +448,24 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     confirmations: Array<{suggestion_id: string; status: string}>
   ) => {
     try {
-      const response = await apiClient.post<{
-        success: boolean;
-        updated: number;
-      }>(`/extraction/${projectId}/merges/confirm`, confirmations);
-
+      const response = await confirmMergesM({ projectId, confirmations });
       if (response.success) {
-        // Reload suggestions to get updated statuses
-        const suggestionsResponse = await apiClient.get<{
-          project_id: string;
-          suggestions: MergeSuggestion[];
-          status: { pending: number; accepted: number; rejected: number; applied: number };
-        }>(`/extraction/${projectId}/merge-suggestions`);
-        setMergeSuggestions(suggestionsResponse.suggestions);
+        await loadMergeSuggestions(projectId);
         console.log(`Updated ${response.updated} merge confirmations`);
       }
     } catch (err) {
       console.error('Failed to confirm merges:', err);
       throw err;
     }
-  }, []);
+  }, [confirmMergesM, loadMergeSuggestions]);
 
   // Apply confirmed merges
-  const applyMerges = useCallback(async (
-    projectId: string,
-    setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>
-  ) => {
+  const applyMerges = useCallback(async (projectId: string) => {
     setIsMerging(true);
     try {
-      const response = await apiClient.post<{
-        success: boolean;
-        applied_count: number;
-        updated_snippets: number;
-        updated_relations: number;
-        error?: string;
-      }>(`/extraction/${projectId}/merges/apply`, {});
-
+      const response = await applyMergesM({ projectId });
       if (response.success) {
         console.log(`Applied ${response.applied_count} merges, updated ${response.updated_snippets} snippets`);
-
-        const snippetsResponse = await apiClient.get<{
-          project_id: string;
-          total: number;
-          snippets: UnifiedSnippet[];
-        }>(`/extraction/${projectId}/snippets?limit=2000`);
-
-        if (snippetsResponse.snippets) {
-          const converted = snippetsResponse.snippets.map(convertUnifiedSnippet);
-          setSnippets(converted);
-        }
-
         setMergeSuggestions([]);
       } else {
         throw new Error(response.error || 'Apply merges failed');
@@ -630,7 +476,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsMerging(false);
     }
-  }, []);
+  }, [applyMergesM]);
 
   // Regenerate a specific SubArgument's sentences in the Letter
   const regenerateSubArgumentInLetter = useCallback(async (
@@ -656,24 +502,11 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     const argId = arg.id;
 
     try {
-      const response = await apiClient.postJob<{
-        success: boolean;
-        sentences: Array<{
-          text: string;
-          snippet_ids: string[];
-          subargument_id: string | null;
-          argument_id: string | null;
-          exhibit_refs: string[];
-          sentence_type: 'opening' | 'body' | 'closing';
-        }>;
-        provenance_index: {
-          by_subargument: Record<string, number[]>;
-          by_argument: Record<string, number[]>;
-          by_snippet: Record<string, number[]>;
-        };
-      }>(`/write/v3/${projectId}/${standardKey}`, {
-        subargument_ids: [subArgumentId],
+      const response = await writeSection({
+        projectId,
+        standardKey,
         provider: llmProvider,
+        subargument_ids: [subArgumentId],
       });
 
       if (!response.success || !response.sentences) {
@@ -773,7 +606,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to regenerate SubArgument:', error);
     }
-  }, []);
+  }, [writeSection]);
 
   // Remove sub-argument sentences from letter (with cascade visualization)
   const removeSubArgumentFromLetter = useCallback((
@@ -809,15 +642,8 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       const standardKey = parentArg?.standardKey;
 
       if (standardKey) {
-        apiClient.post<{
-          success: boolean;
-          suggestions: Array<{
-            sentence_index: number;
-            original_text: string;
-            suggested_text: string;
-            reason: string;
-          }>;
-        }>(`/write/v3/${projectId}/analyze-impact`, {
+        analyzeImpact({
+          projectId,
           standard_key: standardKey,
           change_type: 'deletion',
           affected_subargument_id: subArgumentId,
@@ -857,7 +683,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         });
       }
     }
-  }, []);
+  }, [analyzeImpact]);
 
   // Accept a single suggestion
   const acceptSuggestion = useCallback((sectionId: string, sentenceIndex: number) => {
@@ -964,7 +790,10 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       // Save to backend asynchronously
       const committedSection = updated.find(s => s.id === sectionId);
       if (committedSection?.standardId && projectId) {
-        apiClient.post(`/write/v3/${projectId}/${committedSection.standardId}`, {
+        writeSection({
+          projectId,
+          standardKey: committedSection.standardId,
+          provider: 'deepseek',
           additional_instructions: '__commit_only__',
         }).catch(err => {
           console.warn('Failed to persist committed changes:', err);
@@ -973,7 +802,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
       return updated;
     });
-  }, []);
+  }, [writeSection]);
 
   // Dismiss all changes (revert to clean state without applying)
   const dismissChanges = useCallback((sectionId: string) => {

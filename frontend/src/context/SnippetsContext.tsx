@@ -1,5 +1,7 @@
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useEffect, type ReactNode } from 'react';
 import type { Connection, Snippet, SelectionState, BoundingBox } from '../types';
+import { snippetFromAPI, useSnippetsQuery } from '../api';
+import { useProject } from './ProjectContext';
 
 // ============================================
 // SnippetsContext
@@ -29,8 +31,19 @@ export interface SnippetsContextType {
 const SnippetsContext = createContext<SnippetsContextType | undefined>(undefined);
 
 export function SnippetsProvider({ children }: { children: ReactNode }) {
-  // Start with empty snippets - will be loaded from backend via DataLoader
+  const { projectId } = useProject();
+  // Local working copy, hydrated from the ['snippets', projectId] query (M11).
+  // Manual snippet creation (addSnippet) layers on top until the next refetch.
   const [snippets, setSnippets] = useState<Snippet[]>([]);
+  const snippetsQ = useSnippetsQuery(projectId);
+  useEffect(() => {
+    if (snippetsQ.data) {
+      setSnippets(snippetsQ.data.snippets.map(snippetFromAPI));
+    } else if (!snippetsQ.isLoading) {
+      setSnippets([]);
+    }
+  }, [snippetsQ.data, snippetsQ.isLoading]);
+  useEffect(() => { setSnippets([]); }, [projectId]);
   // Start with empty connections
   const [connections, setConnections] = useState<Connection[]>([]);
 

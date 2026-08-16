@@ -6,7 +6,7 @@ import { useLegalStandards } from '../hooks/useLegalStandards';
 
 import type { Snippet } from '../types';
 import { getStandardKeyColor, STANDARD_KEY_TO_ID } from '../constants/colors';
-import apiClient from '../services/api';
+import { useExtract } from '../api';
 import { logInteraction } from '../services/interactionLogger';
 
 // Default color for unassigned snippets
@@ -509,7 +509,8 @@ function DocumentGroup({ document, snippets, filteredSnippets, isEditMode, selec
 
 export function EvidenceCardPool() {
   const { t } = useTranslation();
-  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId, markSectionStale, reloadSnippets } = useApp();
+  const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, saveSubArgument, projectId, markSectionStale, reloadSnippets } = useApp();
+  const extract = useExtract().mutateAsync;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -585,14 +586,11 @@ export function EvidenceCardPool() {
 
     // Persist to backend
     try {
-      await apiClient.put(
-        `/arguments/${projectId}/subarguments/${focusedSubArgument.id}`,
-        {
-          snippet_ids: snippetIds,
-          pending_snippet_ids: [],
-          needs_snippet_confirmation: false,
-        }
-      );
+      await saveSubArgument(focusedSubArgument.id, {
+        snippetIds,
+        pendingSnippetIds: [],
+        needsSnippetConfirmation: false,
+      }, projectId);
       console.log('[EvidenceCardPool] SubArgument snippets saved to backend');
     } catch (error) {
       console.error('[EvidenceCardPool] Failed to save snippets to backend:', error);
@@ -603,7 +601,7 @@ export function EvidenceCardPool() {
     if (parentArg?.standardKey) {
       markSectionStale(parentArg.standardKey);
     }
-  }, [focusedSubArgument, selectedSnippetsForEdit, updateSubArgument, projectId, arguments_, markSectionStale]);
+  }, [focusedSubArgument, selectedSnippetsForEdit, updateSubArgument, saveSubArgument, projectId, arguments_, markSectionStale]);
 
   // Cancel edit mode
   const handleCancelEdit = useCallback(() => {
@@ -791,10 +789,7 @@ export function EvidenceCardPool() {
     if (!projectId) return;
     setIsExtracting(true);
     try {
-      const result = await apiClient.postJob<{
-        success: boolean;
-        total_snippets: number;
-      }>(`/extraction/${projectId}/extract`, {});
+      const result = await extract({ projectId });
       if (result.success) {
         await reloadSnippets();
       }
@@ -803,7 +798,7 @@ export function EvidenceCardPool() {
     } finally {
       setIsExtracting(false);
     }
-  }, [projectId, reloadSnippets]);
+  }, [projectId, reloadSnippets, extract]);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">

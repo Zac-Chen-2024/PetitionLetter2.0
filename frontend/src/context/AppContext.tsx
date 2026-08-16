@@ -264,13 +264,13 @@ export function useApp() {
   }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards]);
 
   const reloadSnippets = useCallback(async () => {
-    return writing.reloadSnippets(project.projectId, snippets.setSnippets);
-  }, [writing.reloadSnippets, project.projectId, snippets.setSnippets]);
+    return writing.reloadSnippets(project.projectId);
+  }, [writing.reloadSnippets, project.projectId]);
 
   // Unified extraction operations: bind projectId, llmProvider, and setters
   const unifiedExtract = useCallback(async (applicantName: string) => {
-    return writing.unifiedExtract(project.projectId, project.llmProvider, applicantName, snippets.setSnippets, project.setPipelineState);
-  }, [writing.unifiedExtract, project.projectId, project.llmProvider, snippets.setSnippets, project.setPipelineState]);
+    return writing.unifiedExtract(project.projectId, project.llmProvider, applicantName, project.setPipelineState);
+  }, [writing.unifiedExtract, project.projectId, project.llmProvider, project.setPipelineState]);
 
   const generateMergeSuggestions = useCallback(async (applicantName: string): Promise<MergeSuggestion[]> => {
     return writing.generateMergeSuggestions(project.projectId, project.llmProvider, applicantName);
@@ -281,8 +281,8 @@ export function useApp() {
   }, [writing.confirmMerges, project.projectId]);
 
   const applyMerges = useCallback(async () => {
-    return writing.applyMerges(project.projectId, snippets.setSnippets);
-  }, [writing.applyMerges, project.projectId, snippets.setSnippets]);
+    return writing.applyMerges(project.projectId);
+  }, [writing.applyMerges, project.projectId]);
 
   const loadMergeSuggestions = useCallback(async () => {
     return writing.loadMergeSuggestions(project.projectId);
@@ -302,7 +302,7 @@ export function useApp() {
     // ProjectContext
     projectId: project.projectId,
     setProjectId: project.setProjectId,
-    isLoading: project.isLoading,
+    isLoading: project.isLoading || args.isLoading,
     loadError: project.loadError,
     llmProvider: project.llmProvider,
     setLlmProvider: project.setLlmProvider,
@@ -344,6 +344,7 @@ export function useApp() {
     subArguments: args.subArguments,
     addSubArgument,
     updateSubArgument: args.updateSubArgument,
+    saveSubArgument: args.saveSubArgument,
     removeSubArgument,
     regenerateSubArgument,
     mergeSubArguments,

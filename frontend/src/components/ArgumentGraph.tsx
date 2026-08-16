@@ -2,11 +2,11 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { logInteraction } from '../services/interactionLogger';
+import { useInferArgumentTitle, useInferRelationship, useRecommendSnippets } from '../api';
 import { useApp } from '../context/AppContext';
 import { useLegalStandards } from '../hooks/useLegalStandards';
 import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
 import toast from 'react-hot-toast';
-import { apiClient } from '../services/api';
 import StandardActionModal from './StandardActionModal';
 import { Portal } from './Portal';
 import type { Position, Argument, SubArgument } from '../types';
@@ -623,18 +623,17 @@ function SubArgumentNodeComponent({
   };
 
   // Handle AI title generation
+  const inferRelationship = useInferRelationship().mutateAsync;
   const handleAITitle = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isGeneratingAITitle || !projectId) return;
     setIsGeneratingAITitle(true);
     try {
-      const response = await apiClient.post<{ success: boolean; relationship: string }>(
-        `/arguments/${projectId}/infer-relationship`,
-        {
-          argument_id: node.data.argumentId,
-          subargument_title: node.data.title || editTitle || 'merged sub-argument',
-        }
-      );
+      const response = await inferRelationship({
+        projectId,
+        argument_id: node.data.argumentId,
+        subargument_title: node.data.title || editTitle || 'merged sub-argument',
+      });
       if (response.success && response.relationship) {
         const newTitle = response.relationship;
         setEditTitle(newTitle);
@@ -1239,6 +1238,9 @@ function StandardMinimap({ standardNodes, onNavigate }: {
 export function ArgumentGraph() {
   const { t } = useTranslation();
   const legalStandards = useLegalStandards();
+  const inferRelationshipMain = useInferRelationship().mutateAsync;
+  const recommendSnippets = useRecommendSnippets().mutateAsync;
+  const inferArgumentTitle = useInferArgumentTitle().mutateAsync;
   const {
     arguments: contextArguments,
     subArguments: contextSubArguments,
@@ -1251,6 +1253,7 @@ export function ArgumentGraph() {
     updateSubArgumentPosition,
     setSelectedSnippetId,
     updateSubArgument,
+    saveSubArgument,
     regenerateSubArgument,
     removeSubArgument,
     addSubArgument,
@@ -1413,25 +1416,10 @@ export function ArgumentGraph() {
     try {
       const [relationshipResponse, snippetsResponse] = await Promise.all([
         // 1. Infer relationship
-        apiClient.post<{ success: boolean; relationship: string }>(
-          `/arguments/${projectId}/infer-relationship`,
-          {
-            argument_id: subArg.argumentId,
-            subargument_title: newTitle,
-          }
-        ),
+        inferRelationshipMain({ projectId, argument_id: subArg.argumentId, subargument_title: newTitle }),
         // 2. Recommend snippets
-        apiClient.post<{
-          success: boolean;
-          recommended_snippets: Array<{
-            snippet_id: string;
-            text: string;
-            exhibit_id: string;
-            page: number;
-            relevance_score: number;
-            reason: string;
-          }>;
-        }>(`/arguments/${projectId}/recommend-snippets`, {
+        recommendSnippets({
+          projectId,
           argument_id: subArg.argumentId,
           title: newTitle,
           description: subArg.purpose || undefined,
@@ -1461,18 +1449,18 @@ export function ArgumentGraph() {
       }
 
       // Persist to backend - save title, relationship, and pending snippets
-      await apiClient.put(`/arguments/${projectId}/subarguments/${subArgumentId}`, {
+      await saveSubArgument(subArgumentId, {
         title: newTitle,
         relationship,
-        pending_snippet_ids: pendingSnippetIds,
-        needs_snippet_confirmation: needsSnippetConfirmation,
-      });
+        pendingSnippetIds,
+        needsSnippetConfirmation,
+      }, projectId);
       console.log('[ArgumentGraph] SubArgument title/relationship/pendingSnippets saved to backend');
 
     } catch (error) {
       console.error('Failed to infer relationship or recommend snippets:', error);
     }
-  }, [updateSubArgument, contextSubArguments, projectId]);
+  }, [updateSubArgument, saveSubArgument, contextSubArguments, projectId, inferRelationshipMain, recommendSnippets]);
 
   // Handle sub-argument regenerate
   const handleSubArgumentRegenerate = useCallback(async (subArgumentId: string) => {
@@ -1577,10 +1565,7 @@ export function ArgumentGraph() {
     if (aiTitleArgId || !projectId) return;
     setAiTitleArgId(argumentId);
     try {
-      const response = await apiClient.post<{ success: boolean; title: string }>(
-        `/arguments/${projectId}/infer-argument-title`,
-        { argument_id: argumentId, provider: llmProvider }
-      );
+      const response = await inferArgumentTitle({ projectId, argument_id: argumentId, provider: llmProvider });
       if (response.success && response.title) {
         updateArgument(argumentId, { title: response.title });
         toast.success('Title generated');
@@ -1590,7 +1575,7 @@ export function ArgumentGraph() {
     } finally {
       setAiTitleArgId(null);
     }
-  }, [aiTitleArgId, projectId, llmProvider, updateArgument]);
+  }, [aiTitleArgId, projectId, llmProvider, updateArgument, inferArgumentTitle]);
 
   // Handle rewrite Argument (regenerate all sub-arguments' letter content)
   const [rewritingArgId, setRewritingArgId] = useState<string | null>(null);

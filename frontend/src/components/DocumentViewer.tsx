@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useApp } from '../context/AppContext';
-import { apiClient, BACKEND_URL } from '../services/api';
+import { BACKEND_URL } from '../services/api';
+import { useExhibitsQuery } from '../api';
 import { withToken } from '../services/auth';
 import { logThrottled } from '../services/interactionLogger';
 import type { Snippet, BoundingBox, MaterialType } from '../types';
@@ -447,33 +448,22 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
 
 
-  // Fetch exhibits from backend
+  // Exhibits come from the ['exhibits', projectId] query (M11)
+  const exhibitsQ = useExhibitsQuery(projectId);
   useEffect(() => {
-    async function loadExhibits() {
-      setIsLoading(true);
-      try {
-        const response = await apiClient.get<{
-          project_id: string;
-          total: number;
-          exhibits: Exhibit[];
-        }>(`/documents/${projectId}/exhibits`);
-
-        if (response.exhibits) {
-          setExhibits(response.exhibits);
-          // Auto-select first exhibit if none selected
-          if (!selectedDocumentId && response.exhibits.length > 0) {
-            setSelectedDocumentId(`doc_${response.exhibits[0].id}`);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load exhibits:', err);
-      } finally {
-        setIsLoading(false);
+    setIsLoading(exhibitsQ.isLoading);
+    if (exhibitsQ.data?.exhibits) {
+      const list = exhibitsQ.data.exhibits;
+      setExhibits(list);
+      // Auto-select first exhibit if none selected
+      if (!selectedDocumentId && list.length > 0) {
+        setSelectedDocumentId(`doc_${list[0].id}`);
       }
+    } else if (exhibitsQ.error) {
+      console.error('Failed to load exhibits:', exhibitsQ.error);
     }
-
-    loadExhibits();
-  }, [projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exhibitsQ.data, exhibitsQ.isLoading, exhibitsQ.error]);
 
   // Group exhibits by category
   const exhibitsByCategory = exhibits.reduce((acc, exhibit) => {
