@@ -10,7 +10,8 @@ Extraction Router - 统一提取 API
 这将替代旧的 analysis router 的提取功能。
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.ids import validate_path_params
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -26,7 +27,7 @@ from ..services.entity_merger import (
     get_merge_status,
 )
 
-router = APIRouter(prefix="/api/extraction", tags=["extraction"])
+router = APIRouter(prefix="/api/extraction", tags=["extraction"], dependencies=[Depends(validate_path_params)])
 
 
 # ==================== Request/Response Models ====================
@@ -82,8 +83,8 @@ async def extract_project(
 
         return result
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 # ==================== Snippet Query Endpoints ====================
@@ -171,8 +172,8 @@ async def generate_merge_suggestions(
             "suggestions": suggestions
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/merge-suggestions")

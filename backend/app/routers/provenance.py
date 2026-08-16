@@ -4,7 +4,8 @@ Provenance Router - 溯源 API
 提供句子 ↔ snippet 的双向溯源能力
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from app.core.ids import validate_path_params
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
@@ -16,7 +17,7 @@ from app.services.provenance_engine import (
 )
 from app.services.petition_writer import load_all_constrained_writing
 
-router = APIRouter(prefix="/api/provenance", tags=["Provenance"])
+router = APIRouter(prefix="/api/provenance", tags=["Provenance"], dependencies=[Depends(validate_path_params)])
 
 
 # ==================== Request/Response Models ====================
@@ -109,8 +110,8 @@ async def get_sentence_provenance(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/reverse", response_model=ReverseProvenanceResponse)
@@ -146,8 +147,8 @@ async def get_reverse_provenance(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/bbox")
@@ -184,8 +185,8 @@ async def get_snippets_bbox(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/summary/{section}")
@@ -210,8 +211,8 @@ async def get_provenance_summary(
             **result
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/all-summaries")
@@ -236,8 +237,8 @@ async def get_all_provenance_summaries(project_id: str):
             "section_count": len(summaries)
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/section/{section}/all-sentences")
@@ -284,5 +285,5 @@ async def get_section_all_sentences_provenance(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise

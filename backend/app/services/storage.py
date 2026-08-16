@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
+from ..core.ids import is_safe_id
+
 # 数据存储根目录 (backend/data)
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
@@ -19,8 +21,19 @@ def ensure_dirs():
 
 
 def get_project_dir(project_id: str) -> Path:
-    """获取项目目录"""
-    return PROJECTS_DIR / project_id
+    """获取项目目录
+
+    Second line of defence after router-level ID validation: the resolved
+    path must stay inside PROJECTS_DIR, otherwise a bad project_id such as
+    ".." could point at (and delete) the whole data directory.
+    """
+    if not is_safe_id(project_id):
+        raise ValueError(f"Invalid project_id: {project_id!r}")
+    target = PROJECTS_DIR / project_id
+    # Belt and braces: a safe id can never escape, but assert it anyway.
+    if target.parent != PROJECTS_DIR:
+        raise ValueError(f"Invalid project_id: {project_id!r}")
+    return target
 
 
 def get_project_file(project_id: str, filename: str) -> Path:

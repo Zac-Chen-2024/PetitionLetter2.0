@@ -4,7 +4,8 @@
 支持受益人姓名等元数据更新 + 项目类型（EB-1A / NIW）
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.ids import validate_path_params
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -17,7 +18,7 @@ from app.services.standards_registry import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depends(validate_path_params)])
 
 
 class CreateProjectRequest(BaseModel):

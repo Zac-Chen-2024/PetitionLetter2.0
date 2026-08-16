@@ -6,10 +6,13 @@ DeepSeek 和 OpenAI 都是 OpenAI 兼容 API，合并为统一接口。
 """
 
 import json
+import logging
 import re
 import httpx
 from typing import Dict, Optional
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 # 默认配置
@@ -108,7 +111,15 @@ async def _call_api(
             headers=headers,
         )
         if response.status_code != 200:
-            raise Exception(f"{provider.capitalize()} API error {response.status_code}: {response.text}")
+            # Log the upstream body for debugging, but keep it out of the
+            # exception message: that message may end up in an API response.
+            logger.error(
+                "%s API error %s: %s",
+                provider, response.status_code, response.text[:500],
+            )
+            raise Exception(
+                f"{provider.capitalize()} API error {response.status_code}"
+            )
         result = response.json()
 
     return result.get("choices", [{}])[0].get("message", {}).get("content", "")

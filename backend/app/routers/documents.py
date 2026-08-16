@@ -10,14 +10,15 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.ids import validate_path_params
 from fastapi.responses import FileResponse
 
 from app.services import storage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(validate_path_params)])
 
 
 def _get_source_path(project_id: str) -> Path:

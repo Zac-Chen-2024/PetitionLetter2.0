@@ -5,7 +5,8 @@ Writing Router - 写作 API
 /api/write/v3 端点 - SubArgument 感知写作（完整溯源链）
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.ids import validate_path_params
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
@@ -28,7 +29,7 @@ from app.services.snippet_registry import (
 )
 from app.services.snippet_linker import load_links
 
-router = APIRouter(prefix="/api/write/v2", tags=["Writing V2"])
+router = APIRouter(prefix="/api/write/v2", tags=["Writing V2"], dependencies=[Depends(validate_path_params)])
 
 
 # ==================== Request/Response Models ====================
@@ -102,8 +103,8 @@ async def write_petition_v2(
             version_id=version_id
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/sections")
@@ -122,8 +123,8 @@ async def get_all_sections(project_id: str):
             "sections": sections,
             "section_count": len(sections)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/section/{section}")
@@ -146,8 +147,8 @@ async def get_section(project_id: str, section: str, version_id: str = None):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/snippets")
@@ -169,8 +170,8 @@ async def get_project_snippets(project_id: str):
             "snippets": snippets,
             "stats": stats
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/snippets/by-standard/{standard_key}")
@@ -184,8 +185,8 @@ async def get_snippets_for_standard(project_id: str, standard_key: str):
             "snippets": snippets,
             "count": len(snippets)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.post("/{project_id}/snippets/map")
@@ -218,8 +219,8 @@ async def map_snippet_to_standard(
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/links")
@@ -238,8 +239,8 @@ async def get_snippet_links(project_id: str):
             "links": links,
             "link_count": len(links)
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/standards")
@@ -268,7 +269,7 @@ from app.services.petition_writer_v3 import (
     analyze_change_impact,
 )
 
-router_v3 = APIRouter(prefix="/api/write/v3", tags=["Writing V3"])
+router_v3 = APIRouter(prefix="/api/write/v3", tags=["Writing V3"], dependencies=[Depends(validate_path_params)])
 
 
 class WriteV3Request(BaseModel):
@@ -369,8 +370,8 @@ async def get_all_v3_sections(project_id: str):
             "section_count": len(sections),
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router_v3.post("/{project_id}/{standard_key}", response_model=WriteV3Response)
@@ -431,8 +432,8 @@ async def write_petition_v3(
             updated_subargument_snippets=result.get("updated_subargument_snippets")
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class AnalyzeImpactRequest(BaseModel):
@@ -462,7 +463,7 @@ async def analyze_writing_impact(project_id: str, request: AnalyzeImpactRequest)
             "success": True,
             "suggestions": result.get("suggestions", [])
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 

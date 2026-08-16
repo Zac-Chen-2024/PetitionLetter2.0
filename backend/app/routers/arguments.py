@@ -11,7 +11,8 @@ Endpoints:
 - POST /api/arguments/{project_id}/infer-relationship - 推断关系
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.ids import validate_path_params
 from typing import List, Dict, Optional
 from pydantic import BaseModel
 
@@ -26,7 +27,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/arguments", tags=["arguments"])
+router = APIRouter(prefix="/api/arguments", tags=["arguments"], dependencies=[Depends(validate_path_params)])
 
 
 # ============================================
@@ -99,8 +100,8 @@ async def generate_arguments(
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class RegenerateStandardRequest(BaseModel):
@@ -282,8 +283,8 @@ async def recommend_snippets(
             total_available=len(recommended)
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class CreateArgumentRequest(BaseModel):
@@ -306,8 +307,8 @@ async def create_argument_endpoint(
             title=request.title,
         )
         return {"success": True, "argument": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class MoveSubArgumentsRequest(BaseModel):
@@ -332,9 +333,9 @@ async def move_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Move sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Move sub-arguments failed")
+        raise
 
 
 class MergeSubArgumentsRequest(BaseModel):
@@ -371,9 +372,9 @@ async def merge_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Merge sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Merge sub-arguments failed")
+        raise
 
 
 class ConsolidateSubArgumentsRequest(BaseModel):
@@ -411,9 +412,9 @@ async def consolidate_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Consolidate sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Consolidate sub-arguments failed")
+        raise
 
 
 @router.post("/{project_id}/subarguments")
@@ -449,8 +450,8 @@ async def create_new_subargument(
             "subargument": new_subarg
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class InferRelationshipRequest(BaseModel):
@@ -771,8 +772,8 @@ async def infer_subargument_relationship(
             "relationship": relationship
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class InferArgumentTitleRequest(BaseModel):
@@ -795,5 +796,5 @@ async def infer_argument_title_endpoint(
             provider=request.provider
         )
         return {"success": True, "title": title}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
