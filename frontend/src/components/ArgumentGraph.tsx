@@ -15,7 +15,7 @@ import type { Position, Argument, SubArgument } from '../types';
 // Types for internal use
 // ============================================
 
-interface ArgumentNode {
+export interface ArgumentNode {
   id: string;
   type: 'argument';
   position: Position;
@@ -29,7 +29,7 @@ interface ArgumentNode {
   };
 }
 
-interface StandardNode {
+export interface StandardNode {
   id: string;
   type: 'standard';
   position: Position;
@@ -41,7 +41,7 @@ interface StandardNode {
   };
 }
 
-interface SubArgumentNode {
+export interface SubArgumentNode {
   id: string;
   type: 'subargument';
   position: Position;
