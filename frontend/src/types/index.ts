@@ -397,7 +397,7 @@ export interface LetterSection {
 
 export type ProjectType = 'EB-1A' | 'NIW' | 'L-1A';
 
-export type LLMProvider = 'deepseek' | 'openai';
+export type LLMProvider = 'deepseek' | 'openai' | 'anthropic';
 
 export interface LLMProviderInfo {
   id: LLMProvider;
@@ -417,7 +417,7 @@ const ARGUMENT_CLAIM_TYPES: readonly string[] = [
 
 const VIEW_MODES: readonly string[] = ['line', 'sankey'];
 const ARGUMENT_VIEW_MODES: readonly string[] = ['list', 'graph'];
-const LLM_PROVIDER_IDS: readonly string[] = ['deepseek', 'openai'];
+const LLM_PROVIDER_IDS: readonly string[] = ['deepseek', 'openai', 'anthropic'];
 const MATERIAL_TYPES: readonly string[] = [
   'salary', 'leadership', 'contribution', 'award',
   'membership', 'publication', 'judging', 'other',

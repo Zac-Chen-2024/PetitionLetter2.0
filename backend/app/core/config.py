@@ -12,8 +12,17 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_api_base: str = "https://api.openai.com/v1"
 
-    # LLM Provider: "deepseek" (default) or "openai"
+    # Anthropic API (native Messages API via the official SDK)
+    anthropic_api_key: str = ""
+    anthropic_api_base: str = ""
+
+    # LLM Provider: "deepseek" (default), "openai" or "anthropic"
     llm_provider: str = "deepseek"
+
+    # Content-addressed LLM response cache (data/llm_cache). Dev: on; prod: off.
+    llm_cache_enabled: bool = False
+    # Per-call JSONL traces (data/traces/{date}.jsonl)
+    llm_trace_enabled: bool = True
 
     # CORS allow-list, comma-separated, e.g.
     #   CORS_ORIGINS=http://localhost:5173,https://petition.example.com
@@ -47,7 +56,8 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def api_key_for(self, provider: str) -> str:
-        return {"deepseek": self.deepseek_api_key, "openai": self.openai_api_key}.get(provider, "")
+        return {"deepseek": self.deepseek_api_key, "openai": self.openai_api_key,
+                "anthropic": self.anthropic_api_key}.get(provider, "")
 
     def validate_llm_config(self) -> None:
         """Fail fast at startup if the default provider has no key.
@@ -55,8 +65,8 @@ class Settings(BaseSettings):
         Requests may still override `provider`; a missing key for that
         provider surfaces as a 400 at request time (see llm_client).
         """
-        if self.llm_provider not in ("deepseek", "openai"):
-            raise SystemExit(f"LLM_PROVIDER must be 'deepseek' or 'openai', got {self.llm_provider!r}")
+        if self.llm_provider not in ("deepseek", "openai", "anthropic"):
+            raise SystemExit(f"LLM_PROVIDER must be 'deepseek', 'openai' or 'anthropic', got {self.llm_provider!r}")
         if not self.api_key_for(self.llm_provider):
             raise SystemExit(
                 f"{self.llm_provider.upper()}_API_KEY is not set (LLM_PROVIDER={self.llm_provider}). "

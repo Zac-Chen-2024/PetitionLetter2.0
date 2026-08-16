@@ -68,7 +68,7 @@ def test_cors_allowlist(client):
     assert ok.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
-def test_missing_provider_key_is_a_400_not_500(client, monkeypatch):
+async def test_missing_provider_key_is_a_400_not_500(client, monkeypatch):
     """A request that picks a provider without a configured key gets a clear 400."""
     import pytest
 
@@ -80,11 +80,8 @@ def test_missing_provider_key_is_a_400_not_500(client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "")
 
     # 1. the client raises ConfigError before any network call
-    async def _run():
-        await call_llm_text("hi", provider="openai")
-    import asyncio
     with pytest.raises(ConfigError):
-        asyncio.get_event_loop().run_until_complete(_run())
+        await call_llm_text("hi", provider="openai")
 
     # 2. the app maps ConfigError -> 400 with the message intact
     async def _boom():

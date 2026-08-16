@@ -10,6 +10,7 @@ import type { LLMProvider, ProjectType } from '../types';
 const LLM_PROVIDERS: { id: LLMProvider; name: string }[] = [
   { id: 'deepseek', name: 'DeepSeek' },
   { id: 'openai', name: 'OpenAI' },
+  { id: 'anthropic', name: 'Anthropic' },
 ];
 
 const LogoIcon = () => (

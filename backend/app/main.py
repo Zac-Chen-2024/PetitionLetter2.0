@@ -40,6 +40,9 @@ async def lifespan(app: FastAPI):
     logger.info("Loaded %d prompt templates from %s", len(prompts), prompts[0].path.parent.parent if prompts else "-")
     logger.info("EB-1A Petition API starting (provider=%s, auth_disabled=%s)", settings.llm_provider, settings.auth_disabled)
     yield
+    # Close the shared HTTP client used by the LLM providers.
+    from app.services.llm_client import close_clients
+    await close_clients()
     logger.info("EB-1A Petition API shutting down")
 
 
