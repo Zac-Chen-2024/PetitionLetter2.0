@@ -26,10 +26,9 @@ from ..core.atomic_io import write_json
 from ..core.config import settings
 from .llm_client import call_llm
 from .snippet_registry import build_registry_from_combined_extraction
+from .storage import project_path
 
 # 数据目录
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
 
 
 # ==================== Data Models ====================
@@ -1284,14 +1283,14 @@ def format_blocks_for_llm(pages: List[Dict]) -> Tuple[str, Dict]:
 
 def get_extraction_dir(project_id: str) -> Path:
     """获取提取结果目录"""
-    extraction_dir = PROJECTS_DIR / project_id / "extraction"
+    extraction_dir = project_path(project_id, "extraction")
     extraction_dir.mkdir(parents=True, exist_ok=True)
     return extraction_dir
 
 
 def get_entities_dir(project_id: str) -> Path:
     """获取实体目录"""
-    entities_dir = PROJECTS_DIR / project_id / "entities"
+    entities_dir = project_path(project_id, "entities")
     entities_dir.mkdir(parents=True, exist_ok=True)
     return entities_dir
 
@@ -1319,7 +1318,7 @@ async def extract_exhibit_unified(
         提取结果 dict
     """
     # 1. 加载文档
-    doc_path = PROJECTS_DIR / project_id / "documents" / f"{exhibit_id}.json"
+    doc_path = project_path(project_id, "documents", f"{exhibit_id}.json")
     if not doc_path.exists():
         raise FileNotFoundError(f"Document not found: {doc_path}")
 
@@ -1668,7 +1667,7 @@ async def extract_all_unified(
     Returns:
         提取结果汇总
     """
-    documents_dir = PROJECTS_DIR / project_id / "documents"
+    documents_dir = project_path(project_id, "documents")
 
     if not documents_dir.exists():
         return {
@@ -1767,7 +1766,7 @@ async def extract_all_unified(
     build_registry_from_combined_extraction(project_id)
 
     # 同时保存到 snippets 目录（兼容现有代码）
-    snippets_dir = PROJECTS_DIR / project_id / "snippets"
+    snippets_dir = project_path(project_id, "snippets")
     snippets_dir.mkdir(parents=True, exist_ok=True)
     snippets_file = snippets_dir / "extracted_snippets.json"
 
@@ -1814,7 +1813,7 @@ def load_exhibit_extraction(project_id: str, exhibit_id: str) -> Optional[Dict]:
 def get_extraction_status(project_id: str) -> Dict:
     """获取提取状态"""
     extraction_dir = get_extraction_dir(project_id)
-    documents_dir = PROJECTS_DIR / project_id / "documents"
+    documents_dir = project_path(project_id, "documents")
 
     # 统计已提取的 exhibits
     extracted_exhibits = []

@@ -13,16 +13,12 @@ from typing import Dict, List, Optional, Set
 from ..core.atomic_io import read_json, update_json, write_json
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
-
-# 数据存储根目录
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
-
+from .storage import project_path
 
 # ==================== 数据加载 ====================
 
 def _legal_arguments_file(project_id: str) -> Path:
-    return PROJECTS_DIR / project_id / "arguments" / "legal_arguments.json"
+    return project_path(project_id, "arguments", "legal_arguments.json")
 
 
 _EMPTY_LEGAL_ARGS = {"arguments": [], "sub_arguments": []}
@@ -95,7 +91,7 @@ def remove_standard(project_id: str, standard_key: str) -> Dict:
     update_legal_arguments(project_id, _mutate)
 
     # Delete writing_v3 files for this standard
-    writing_dir = PROJECTS_DIR / project_id / "writing_v3"
+    writing_dir = project_path(project_id, "writing_v3")
     deleted_files = []
     if writing_dir.exists():
         for f in writing_dir.glob(f"writing_{standard_key}_*.json"):

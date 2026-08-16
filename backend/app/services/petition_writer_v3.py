@@ -19,7 +19,6 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..core.atomic_io import write_json
@@ -27,6 +26,7 @@ from ..core.text import text_similarity as _text_similarity
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
+from .storage import project_path
 from .writing_strategies import get_writing_strategy
 
 # Labels that LLMs sometimes leak from the argumentation-method prompt
@@ -174,8 +174,6 @@ def _build_snippet_lookup(snippet_registry: List[Dict]) -> Dict:
 # 常量定义
 # ============================================
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
 
 
 def _load_snippet_source(project_id: str) -> List[Dict]:
@@ -184,7 +182,7 @@ def _load_snippet_source(project_id: str) -> List[Dict]:
     前端始终从 extraction 端点加载 snippet（snp_ 格式 ID），
     所以 writing pipeline 也必须优先使用同一数据源，确保全链路 ID 一致。
     """
-    combined_file = PROJECTS_DIR / project_id / "extraction" / "combined_extraction.json"
+    combined_file = project_path(project_id, "extraction", "combined_extraction.json")
     if combined_file.exists():
         with open(combined_file, 'r', encoding='utf-8') as f:
             snippets = json.load(f).get("snippets", [])
@@ -530,7 +528,7 @@ def _load_exhibit_json(project_id: str, exhibit_id: str) -> Optional[Dict]:
     if cache_key in _exhibit_cache:
         return _exhibit_cache[cache_key]
 
-    path = PROJECTS_DIR / project_id / "documents" / f"{exhibit_id}.json"
+    path = project_path(project_id, "documents", f"{exhibit_id}.json")
     if not path.exists():
         logger.warning(f"Exhibit file not found: {path}")
         return None
@@ -635,7 +633,7 @@ def load_exhibit_pages_for_argument(
 
 def load_legal_arguments(project_id: str) -> Optional[Dict]:
     """加载 legal_arguments.json"""
-    legal_file = PROJECTS_DIR / project_id / "arguments" / "legal_arguments.json"
+    legal_file = project_path(project_id, "arguments", "legal_arguments.json")
     if legal_file.exists():
         with open(legal_file, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -2287,7 +2285,7 @@ def save_writing_v3(
     result: Dict
 ) -> str:
     """保存 V3 写作结果"""
-    project_dir = PROJECTS_DIR / project_id
+    project_dir = project_path(project_id)
     writing_dir = project_dir / "writing_v3"
     writing_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2311,7 +2309,7 @@ def load_latest_writing_v3(
     section: str
 ) -> Optional[Dict]:
     """加载最新的 V3 写作结果"""
-    writing_dir = PROJECTS_DIR / project_id / "writing_v3"
+    writing_dir = project_path(project_id, "writing_v3")
     if not writing_dir.exists():
         return None
 

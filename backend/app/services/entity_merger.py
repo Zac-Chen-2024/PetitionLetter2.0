@@ -21,7 +21,8 @@ from typing import Dict, List, Optional
 
 from ..core.atomic_io import update_json, write_json
 from .llm_client import call_llm
-from .unified_extractor import PROJECTS_DIR, get_entities_dir, get_extraction_dir, load_combined_extraction
+from .storage import project_path
+from .unified_extractor import get_entities_dir, get_extraction_dir, load_combined_extraction
 
 # ==================== Data Models ====================
 
@@ -384,7 +385,7 @@ def apply_entity_merges(project_id: str) -> Dict:
     write_json(combined_file, combined)
 
     # 8. 同步更新 snippets 文件
-    snippets_dir = PROJECTS_DIR / project_id / "snippets"
+    snippets_dir = project_path(project_id, "snippets")
     snippets_file = snippets_dir / "extracted_snippets.json"
 
     if snippets_file.exists():

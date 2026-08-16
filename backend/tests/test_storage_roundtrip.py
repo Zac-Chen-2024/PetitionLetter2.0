@@ -3,6 +3,8 @@ Save/load pairs of the storage layer. These are the safety net for M3
 (atomic write replacement) and M4 (path consolidation): both are mechanical
 refactors whose only real risk is a missed call site.
 """
+import json
+
 from app.services import storage
 from app.services.petition_writer_v3 import load_latest_writing_v3, save_writing_v3
 from app.services.snippet_recommender import load_legal_arguments, save_legal_arguments
@@ -91,3 +93,28 @@ def test_concurrent_subargument_creation_loses_nothing(tmp_data_dir):
     data = load_legal_arguments(pid)
     assert len(data["sub_arguments"]) == 30
     assert len(data["arguments"][0]["sub_argument_ids"]) == 30
+
+
+def test_resolve_source_path_falls_back_to_source_data_dir(tmp_data_dir, tmp_path, monkeypatch):
+    """metadata.json holds a Windows path from another machine; resolve by folder name."""
+    from app.core.config import settings
+
+    src_root = tmp_path / "srcdata"
+    (src_root / "eb1a" / "Dehuan Liu" / "PDF").mkdir(parents=True)
+    monkeypatch.setattr(settings, "source_data_dir", str(src_root))
+
+    pdir = tmp_data_dir / "projects" / "dehuan_liu"
+    pdir.mkdir()
+    (pdir / "metadata.json").write_text(
+        json.dumps({"source_path": "F:\\\\work\\\\data\\\\eb1a\\\\Dehuan Liu"}), encoding="utf-8"
+    )
+    assert storage.resolve_source_path("dehuan_liu") == src_root / "eb1a" / "Dehuan Liu"
+
+    # an existing absolute path wins
+    (pdir / "metadata.json").write_text(json.dumps({"source_path": str(src_root)}), encoding="utf-8")
+    assert storage.resolve_source_path("dehuan_liu") == src_root
+
+    # nothing resolvable -> None (router turns this into 404)
+    (pdir / "metadata.json").write_text(json.dumps({"source_path": "/nowhere/Nobody"}), encoding="utf-8")
+    assert storage.resolve_source_path("dehuan_liu") is None
+    assert storage.resolve_source_path("no_such_project") is None

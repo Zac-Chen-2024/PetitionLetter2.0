@@ -18,6 +18,7 @@ from app.services.petition_writer_v3 import (
     save_writing_v3,
     write_petition_section_v3,
 )
+from app.services.storage import project_path
 
 router = APIRouter(prefix="/api/write/v3", tags=["Writing V3"], dependencies=[Depends(validate_path_params)])
 
@@ -78,9 +79,7 @@ async def get_all_v3_sections(project_id: str):
     """
     try:
         # Dynamically discover standard_keys from saved writing_v3 files
-        from pathlib import Path
-        projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-        writing_dir = projects_dir / project_id / "writing_v3"
+        writing_dir = project_path(project_id, "writing_v3")
         standard_keys = set()
         if writing_dir.exists():
             for f in writing_dir.glob("*.json"):

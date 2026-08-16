@@ -2,38 +2,22 @@
 Shared pytest fixtures.
 
 `tmp_data_dir` redirects the storage layer to a throw-away directory so that
-tests never touch backend/data/.
-
-NOTE (until M4 path consolidation lands): several live modules still carry
-their own module-level PROJECTS_DIR constant, so the fixture patches each of
-them. After M4 only `storage` needs patching -- shrink this list then.
+tests never touch backend/data/. Since M4 (path consolidation) every module
+resolves paths through storage.data_dir()/projects_dir()/project_path(), which
+read settings.data_dir -- so patching that one setting is enough.
 """
 import json
 
 import pytest
 
-# Modules that (pre-M4) define their own DATA_DIR / PROJECTS_DIR constants.
-_PATH_MODULES = [
-    "app.services.storage",
-    "app.services.snippet_registry",
-    "app.services.snippet_recommender",
-    "app.services.petition_writer_v3",
-    "app.services.unified_extractor",
-]
-
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
-    import importlib
+    from app.core.config import settings
 
     data = tmp_path / "data"
     (data / "projects").mkdir(parents=True)
-    for name in _PATH_MODULES:
-        mod = importlib.import_module(name)
-        if hasattr(mod, "DATA_DIR"):
-            monkeypatch.setattr(mod, "DATA_DIR", data)
-        if hasattr(mod, "PROJECTS_DIR"):
-            monkeypatch.setattr(mod, "PROJECTS_DIR", data / "projects")
+    monkeypatch.setattr(settings, "data_dir", str(data))
     return data
 
 

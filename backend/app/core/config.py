@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     # Logging level for the application logger ("DEBUG" / "INFO" / ...)
     log_level: str = "INFO"
 
+    # Root data directory. Empty -> backend/data. Docker sets it explicitly;
+    # tests point it at a temp dir.
+    data_dir: str = ""
+
+    # Root of the ORIGINAL case material (PDF/<letter>/<exhibit>.pdf ...) that
+    # metadata.json.source_path points into. Empty -> <repo>/data. Docker sets
+    # /app/data. Used only as a fallback when the stored absolute path is not
+    # present on this machine (paths were recorded on a Windows dev box).
+    source_data_dir: str = ""
+
     @property
     def cors_origin_list(self) -> List[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

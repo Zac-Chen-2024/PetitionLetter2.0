@@ -8,37 +8,112 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..core.atomic_io import update_json, write_json
+from ..core.config import settings
 from ..core.ids import is_safe_id
 
-# 数据存储根目录 (backend/data)
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
+# ---------------------------------------------------------------------------
+# Data-root resolution -- the ONE place that knows where data lives.
+#
+# Everything below (and every other module) must go through data_dir() /
+# projects_dir() / project_path(). They are functions, not constants, so that
+# (a) tests can point them at a temp dir via settings.data_dir and (b) M5 can
+# scope projects_dir() per workspace without touching call sites.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"  # backend/data
+
+
+def data_dir() -> Path:
+    """Root data directory (backend/data unless DATA_DIR is set)."""
+    if settings.data_dir:
+        return Path(settings.data_dir)
+    return _DEFAULT_DATA_DIR
+
+
+def projects_dir() -> Path:
+    """Directory that holds one sub-directory per project."""
+    return data_dir() / "projects"
 
 
 def ensure_dirs():
     """确保数据目录存在"""
-    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    projects_dir().mkdir(parents=True, exist_ok=True)
 
 
 def get_project_dir(project_id: str) -> Path:
     """获取项目目录
 
     Second line of defence after router-level ID validation: the resolved
-    path must stay inside PROJECTS_DIR, otherwise a bad project_id such as
+    path must stay inside projects_dir(), otherwise a bad project_id such as
     ".." could point at (and delete) the whole data directory.
     """
     if not is_safe_id(project_id):
         raise ValueError(f"Invalid project_id: {project_id!r}")
-    target = PROJECTS_DIR / project_id
+    base = projects_dir()
+    target = base / project_id
     # Belt and braces: a safe id can never escape, but assert it anyway.
-    if target.parent != PROJECTS_DIR:
+    if target.parent != base:
         raise ValueError(f"Invalid project_id: {project_id!r}")
     return target
+
+
+def project_path(project_id: str, *parts: str) -> Path:
+    """Path inside a project: project_path(pid, "arguments", "legal_arguments.json")."""
+    return get_project_dir(project_id).joinpath(*parts)
 
 
 def get_project_file(project_id: str, filename: str) -> Path:
     """获取项目文件路径"""
     return get_project_dir(project_id) / filename
+
+
+_DEFAULT_SOURCE_DATA_DIR = _DEFAULT_DATA_DIR.parent.parent / "data"  # <repo>/data
+
+
+def source_data_dir() -> Path:
+    """Root of the original case material (PDFs), see settings.source_data_dir."""
+    if settings.source_data_dir:
+        return Path(settings.source_data_dir)
+    return _DEFAULT_SOURCE_DATA_DIR
+
+
+def resolve_source_path(project_id: str) -> Optional[Path]:
+    """Locate the project's original-material directory.
+
+    metadata.json.source_path is an absolute path recorded on whichever
+    machine created the project. If it exists here, use it. Otherwise look
+    for a directory with the same basename under source_data_dir(), one or
+    two levels deep (data/<Person> or data/<category>/<Person>). Nothing is
+    rewritten on disk (the old Docker entrypoint used to patch metadata.json
+    at startup; a read-time resolver is workspace-safe and side-effect free).
+    """
+    metadata_file = get_project_file(project_id, "metadata.json")
+    if not metadata_file.exists():
+        return None
+    try:
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            source_path = json.load(f).get("source_path", "")
+    except Exception:
+        return None
+    if not source_path:
+        return None
+
+    recorded = Path(source_path)
+    if recorded.is_dir():
+        return recorded
+
+    # Windows paths on a POSIX host: PurePath.name would keep the backslashes.
+    person = source_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    root = source_data_dir()
+    if not root.is_dir():
+        return None
+    direct = root / person
+    if direct.is_dir():
+        return direct
+    for sub in root.iterdir():
+        if sub.is_dir() and (sub / person).is_dir():
+            return sub / person
+    return None
 
 
 # ==================== 项目类型辅助函数 ====================
@@ -78,8 +153,8 @@ def _generate_project_number(project_type: str) -> str:
 
     # Count existing projects of this type for the current year
     count = 0
-    if PROJECTS_DIR.exists():
-        for item in PROJECTS_DIR.iterdir():
+    if projects_dir().exists():
+        for item in projects_dir().iterdir():
             if item.is_dir():
                 meta_file = item / "meta.json"
                 if meta_file.exists():
@@ -121,7 +196,7 @@ def list_projects() -> List[Dict]:
     ensure_dirs()
     projects = []
 
-    for item in PROJECTS_DIR.iterdir():
+    for item in projects_dir().iterdir():
         if item.is_dir():
             meta_file = item / "meta.json"
             if meta_file.exists():
@@ -1237,7 +1312,7 @@ def get_full_project_data(project_id: str) -> Optional[Dict]:
 
 def get_style_templates_dir() -> Path:
     """获取样式模板存储目录（全局，不按项目分）"""
-    templates_dir = DATA_DIR / "style_templates"
+    templates_dir = data_dir() / "style_templates"
     templates_dir.mkdir(parents=True, exist_ok=True)
     return templates_dir
 

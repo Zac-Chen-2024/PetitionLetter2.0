@@ -5,7 +5,6 @@ Original main.py is NOT modified; dev workflow (`python run.py`) is unaffected.
 Works in both Docker (/app/data) and portable (../data relative to script) modes.
 """
 
-import json
 import logging
 from pathlib import Path
 
@@ -16,58 +15,21 @@ from fastapi.responses import FileResponse
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Fix source_path in project metadata
-# Local dev uses absolute Windows paths (e.g. F:\...\data\eb1a\Dehuan Liu).
-# In Docker the PDFs live at /app/data/<category>/<PersonName>.
-# In portable mode they live at <script>/../data/<category>/<PersonName>.
-# Scan all projects at startup and rewrite source_path so PDF serving works.
+# Data locations
+# Local dev recorded absolute (Windows) source_path values in metadata.json.
+# Since M4 the backend resolves them at read time via
+# storage.resolve_source_path(), searching settings.source_data_dir by the
+# person-folder name -- so nothing is patched on disk here anymore. We only
+# make sure the two roots point at the right place for Docker / portable mode.
 # ---------------------------------------------------------------------------
+from app.core.config import settings  # noqa: E402
+
 _docker_data = Path("/app/data")
 _portable_data = Path(__file__).resolve().parent.parent / "data"
-DATA_ROOT = _docker_data if _docker_data.is_dir() else _portable_data
-
-PROJECTS_DIR = Path(__file__).resolve().parent / "data" / "projects"
-
-
-def _find_person_dir(person_name: str) -> Path | None:
-    """Search DATA_ROOT for a directory matching person_name, one or two levels deep."""
-    # Direct child: data/<PersonName>
-    direct = DATA_ROOT / person_name
-    if direct.is_dir():
-        return direct
-    # One level deep: data/<category>/<PersonName>
-    for subdir in DATA_ROOT.iterdir():
-        if subdir.is_dir():
-            candidate = subdir / person_name
-            if candidate.is_dir():
-                return candidate
-    return None
-
-
-def _fix_source_paths():
-    if not PROJECTS_DIR.is_dir() or not DATA_ROOT.is_dir():
-        return
-    for meta_file in PROJECTS_DIR.glob("*/metadata.json"):
-        try:
-            with open(meta_file, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            old_path = meta.get("source_path", "")
-            if not old_path:
-                continue
-            # Extract the person folder name from the original path
-            # e.g. "F:\...\data\eb1a\Dehuan Liu" → "Dehuan Liu"
-            person_name = Path(old_path).name
-            found = _find_person_dir(person_name)
-            if found and str(Path(old_path)) != str(found):
-                meta["source_path"] = str(found)
-                with open(meta_file, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, ensure_ascii=False, indent=2)
-                logger.info("Patched source_path: %s -> %s", old_path, found)
-        except Exception as e:
-            logger.warning("Failed to patch %s: %s", meta_file, e)
-
-
-_fix_source_paths()
+if not settings.source_data_dir:
+    settings.source_data_dir = str(_docker_data if _docker_data.is_dir() else _portable_data)
+if not settings.data_dir:
+    settings.data_dir = str(Path(__file__).resolve().parent / "data")
 
 # ---------------------------------------------------------------------------
 # SPA static file serving

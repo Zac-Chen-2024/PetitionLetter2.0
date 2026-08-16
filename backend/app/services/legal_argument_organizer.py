@@ -13,11 +13,11 @@ import json
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from ..core.atomic_io import write_json
 from .llm_client import call_llm
+from .storage import project_path
 
 # ==================== EB-1A 法律条例定义 ====================
 
@@ -1469,8 +1469,7 @@ async def _group_snippets_by_standard_topdown(
     # Save intermediate pickup results for evaluation
     if project_id:
         try:
-            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-            args_dir = projects_dir / project_id / "arguments"
+            args_dir = project_path(project_id, "arguments")
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "topdown_pickup.json"
             write_json(pickup_file, {
@@ -1752,8 +1751,7 @@ async def _niw_group_snippets_by_prong_topdown(
 
     if project_id:
         try:
-            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-            args_dir = projects_dir / project_id / "arguments"
+            args_dir = project_path(project_id, "arguments")
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "niw_topdown_pickup.json"
             write_json(pickup_file, {
@@ -2280,11 +2278,9 @@ async def full_legal_pipeline(
             "stats": {...}
         }
     """
-    from pathlib import Path
 
     # 加载 snippets
-    projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-    project_dir = projects_dir / project_id
+    project_dir = project_path(project_id)
 
     combined_file = project_dir / "extraction" / "combined_extraction.json"
     enriched_file = project_dir / "enriched" / "enriched_snippets.json"
@@ -2410,8 +2406,7 @@ async def regenerate_standard_pipeline(
     from .subargument_generator import subdivide_argument
 
     # --- 加载 snippets (复用 full_legal_pipeline 的逻辑) ---
-    projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-    project_dir = projects_dir / project_id
+    project_dir = project_path(project_id)
 
     combined_file = project_dir / "extraction" / "combined_extraction.json"
     enriched_file = project_dir / "enriched" / "enriched_snippets.json"
