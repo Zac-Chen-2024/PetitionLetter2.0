@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..core.atomic_io import write_json
 from ..core.text import text_similarity as _text_similarity
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
@@ -2216,18 +2217,20 @@ async def write_petition_section_v3(
             logger.info(f"Exploration writing: discovered new snippets for {len(new_snippets_map)} subarguments")
             # Persist to legal_arguments.json
             try:
-                from .snippet_recommender import load_legal_arguments, save_legal_arguments
-                legal_data = load_legal_arguments(project_id)
+                from .snippet_recommender import update_legal_arguments
+                def _mutate(legal_data):
 
-                for sa_data in legal_data.get("sub_arguments", []):
-                    sa_id = sa_data.get("id", "")
-                    if sa_id in new_snippets_map:
-                        existing_ids = set(sa_data.get("snippet_ids", []))
-                        for new_sid in new_snippets_map[sa_id]:
-                            if new_sid not in existing_ids:
-                                sa_data.setdefault("snippet_ids", []).append(new_sid)
+                    for sa_data in legal_data.get("sub_arguments", []):
+                        sa_id = sa_data.get("id", "")
+                        if sa_id in new_snippets_map:
+                            existing_ids = set(sa_data.get("snippet_ids", []))
+                            for new_sid in new_snippets_map[sa_id]:
+                                if new_sid not in existing_ids:
+                                    sa_data.setdefault("snippet_ids", []).append(new_sid)
 
-                save_legal_arguments(project_id, legal_data)
+                    return legal_data
+
+                update_legal_arguments(project_id, _mutate)
                 logger.info("Persisted new snippet associations to legal_arguments.json")
             except Exception as e:
                 logger.warning(f"Failed to persist exploration snippets: {e}")
@@ -2298,8 +2301,7 @@ def save_writing_v3(
     }
 
     filename = f"writing_{section}_{version_id}.json"
-    with open(writing_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(writing_dir / filename, data)
 
     return version_id
 

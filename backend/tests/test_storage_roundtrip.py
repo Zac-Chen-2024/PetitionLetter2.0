@@ -68,3 +68,26 @@ def test_writing_v3_roundtrip_latest_wins(tmp_data_dir, monkeypatch):
     assert load_latest_writing_v3(pid, "awards")["paragraph_text"] == "second"
     # other sections are isolated
     assert load_latest_writing_v3(pid, "membership") is None
+
+
+def test_concurrent_subargument_creation_loses_nothing(tmp_data_dir):
+    """Rapid UI actions fire overlapping requests; every created SubArgument must survive."""
+    import threading
+
+    from app.services.snippet_recommender import create_subargument
+
+    pid = "proj-3"
+    save_legal_arguments(pid, {"arguments": [{"id": "arg-1", "standard_key": "awards", "sub_argument_ids": []}],
+                              "sub_arguments": []})
+
+    def worker(i):
+        create_subargument(pid, "arg-1", f"t{i}", "", "", [])
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(30)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    data = load_legal_arguments(pid)
+    assert len(data["sub_arguments"]) == 30
+    assert len(data["arguments"][0]["sub_argument_ids"]) == 30

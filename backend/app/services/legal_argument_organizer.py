@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from ..core.atomic_io import write_json
 from .llm_client import call_llm
 
 # ==================== EB-1A 法律条例定义 ====================
@@ -1472,13 +1473,12 @@ async def _group_snippets_by_standard_topdown(
             args_dir = projects_dir / project_id / "arguments"
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "topdown_pickup.json"
-            with open(pickup_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "total_applicant_snippets": len(applicant_snippets),
-                    "standards_count": len(legal_stds),
-                    "pickup_by_standard": pickup_report,
-                }, f, ensure_ascii=False, indent=2)
+            write_json(pickup_file, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "total_applicant_snippets": len(applicant_snippets),
+                "standards_count": len(legal_stds),
+                "pickup_by_standard": pickup_report,
+            })
             print(f"[TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
             print(f"[TopDown] Warning: could not save pickup results: {e}")
@@ -1756,13 +1756,12 @@ async def _niw_group_snippets_by_prong_topdown(
             args_dir = projects_dir / project_id / "arguments"
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "niw_topdown_pickup.json"
-            with open(pickup_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "total_snippets": len(snippets),
-                    "prongs_count": len(NIW_LEGAL_STANDARDS),
-                    "pickup_by_prong": pickup_report,
-                }, f, ensure_ascii=False, indent=2)
+            write_json(pickup_file, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "total_snippets": len(snippets),
+                "prongs_count": len(NIW_LEGAL_STANDARDS),
+                "pickup_by_prong": pickup_report,
+            })
             print(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
             print(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
@@ -2389,8 +2388,7 @@ async def full_legal_pipeline(
     # 保存结果
     output_file = project_dir / "arguments" / "legal_arguments.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    write_json(output_file, result)
 
     print(f"\n[LegalPipeline] Results saved to {output_file}")
 
@@ -2408,7 +2406,7 @@ async def regenerate_standard_pipeline(
     按单个 standard 重新生成 Arguments + SubArguments，
     只替换该 standard 下的数据，其余保持不动。
     """
-    from .snippet_recommender import load_legal_arguments, save_legal_arguments
+    from .snippet_recommender import update_legal_arguments
     from .subargument_generator import subdivide_argument
 
     # --- 加载 snippets (复用 full_legal_pipeline 的逻辑) ---
@@ -2529,36 +2527,41 @@ async def regenerate_standard_pipeline(
     new_arguments = [a.to_dict() for a in arguments]
 
     # --- 合并到现有 legal_arguments.json ---
-    existing = load_legal_arguments(project_id)
+    by_standard = None
+    old_arg_ids = None
+    def _mutate(existing):
+        nonlocal by_standard, old_arg_ids
 
-    # 删除旧的该 standard 下的 arguments 和关联的 sub_arguments
-    old_arg_ids = {
-        a["id"] for a in existing.get("arguments", [])
-        if (a.get("standard_key") or a.get("standard")) == standard_key
-    }
-    existing["arguments"] = [
-        a for a in existing.get("arguments", [])
-        if a["id"] not in old_arg_ids
-    ]
-    existing["sub_arguments"] = [
-        sa for sa in existing.get("sub_arguments", [])
-        if sa.get("argument_id") not in old_arg_ids
-    ]
+        # 删除旧的该 standard 下的 arguments 和关联的 sub_arguments
+        old_arg_ids = {
+            a["id"] for a in existing.get("arguments", [])
+            if (a.get("standard_key") or a.get("standard")) == standard_key
+        }
+        existing["arguments"] = [
+            a for a in existing.get("arguments", [])
+            if a["id"] not in old_arg_ids
+        ]
+        existing["sub_arguments"] = [
+            sa for sa in existing.get("sub_arguments", [])
+            if sa.get("argument_id") not in old_arg_ids
+        ]
 
-    # 插入新的
-    existing["arguments"].extend(new_arguments)
-    existing["sub_arguments"].extend(all_sub_arguments)
+        # 插入新的
+        existing["arguments"].extend(new_arguments)
+        existing["sub_arguments"].extend(all_sub_arguments)
 
-    # 更新 stats
-    by_standard = {}
-    for a in existing["arguments"]:
-        std = a.get("standard_key") or a.get("standard", "")
-        by_standard[std] = by_standard.get(std, 0) + 1
-    existing.setdefault("stats", {})["by_standard"] = by_standard
-    existing["stats"]["argument_count"] = len(existing["arguments"])
-    existing["stats"]["sub_argument_count"] = len(existing["sub_arguments"])
+        # 更新 stats
+        by_standard = {}
+        for a in existing["arguments"]:
+            std = a.get("standard_key") or a.get("standard", "")
+            by_standard[std] = by_standard.get(std, 0) + 1
+        existing.setdefault("stats", {})["by_standard"] = by_standard
+        existing["stats"]["argument_count"] = len(existing["arguments"])
+        existing["stats"]["sub_argument_count"] = len(existing["sub_arguments"])
 
-    save_legal_arguments(project_id, existing)
+        return existing
+
+    existing = update_legal_arguments(project_id, _mutate)
     print(f"[RegenerateStandard] Merged and saved. Removed {len(old_arg_ids)} old args, added {len(new_arguments)} new args.")
 
     return {

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ..core.atomic_io import write_json
 from ..core.config import settings
 from .llm_client import call_llm
 from .snippet_registry import build_registry_from_combined_extraction
@@ -1636,8 +1637,7 @@ async def extract_exhibit_unified(
     # 保存到文件
     extraction_dir = get_extraction_dir(project_id)
     extraction_file = extraction_dir / f"{exhibit_id}_extraction.json"
-    with open(extraction_file, 'w', encoding='utf-8') as f:
-        json.dump(extraction_result, f, ensure_ascii=False, indent=2)
+    write_json(extraction_file, extraction_result)
 
     print(f"[UnifiedExtractor] {exhibit_id}: {len(processed_snippets)} snippets, {len(processed_entities)} entities, {len(processed_relations)} relations")
 
@@ -1761,8 +1761,7 @@ async def extract_all_unified(
     # 保存合并结果
     extraction_dir = get_extraction_dir(project_id)
     combined_file = extraction_dir / "combined_extraction.json"
-    with open(combined_file, 'w', encoding='utf-8') as f:
-        json.dump(combined_result, f, ensure_ascii=False, indent=2)
+    write_json(combined_file, combined_result)
 
     # 同步到 snippet registry（provenance_engine 等读取）
     build_registry_from_combined_extraction(project_id)
@@ -1781,8 +1780,7 @@ async def extract_all_unified(
         "snippets": all_snippets
     }
 
-    with open(snippets_file, 'w', encoding='utf-8') as f:
-        json.dump(snippets_data, f, ensure_ascii=False, indent=2)
+    write_json(snippets_file, snippets_data)
 
     print(f"[UnifiedExtractor] Complete: {successful}/{total_exhibits} exhibits, {len(all_snippets)} snippets, {len(all_entities)} entities")
 

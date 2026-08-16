@@ -6,13 +6,11 @@ Snippet Recommender - 根据标题/描述为新 SubArgument 推荐相关 Snippet
 2. LLM 精排：语义相关性评分
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-import portalocker
-
+from ..core.atomic_io import read_json, update_json, write_json
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 
@@ -23,32 +21,33 @@ PROJECTS_DIR = DATA_DIR / "projects"
 
 # ==================== 数据加载 ====================
 
-def load_legal_arguments(project_id: str) -> Dict:
-    """加载 legal_arguments.json（共享读锁）"""
-    args_file = PROJECTS_DIR / project_id / "arguments" / "legal_arguments.json"
-    if not args_file.exists():
-        return {"arguments": [], "sub_arguments": []}
+def _legal_arguments_file(project_id: str) -> Path:
+    return PROJECTS_DIR / project_id / "arguments" / "legal_arguments.json"
 
-    with open(args_file, 'r', encoding='utf-8') as f:
-        portalocker.lock(f, portalocker.LOCK_SH)
-        try:
-            return json.load(f)
-        finally:
-            portalocker.unlock(f)
+
+_EMPTY_LEGAL_ARGS = {"arguments": [], "sub_arguments": []}
+
+
+def load_legal_arguments(project_id: str) -> Dict:
+    """加载 legal_arguments.json"""
+    data = read_json(_legal_arguments_file(project_id))
+    if data is None:
+        return {"arguments": [], "sub_arguments": []}
+    return data
 
 
 def save_legal_arguments(project_id: str, data: Dict):
-    """保存 legal_arguments.json（排他写锁）"""
-    args_dir = PROJECTS_DIR / project_id / "arguments"
-    args_dir.mkdir(parents=True, exist_ok=True)
-    args_file = args_dir / "legal_arguments.json"
+    """保存 legal_arguments.json（原子写）"""
+    write_json(_legal_arguments_file(project_id), data)
 
-    with open(args_file, 'w', encoding='utf-8') as f:
-        portalocker.lock(f, portalocker.LOCK_EX)
-        try:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        finally:
-            portalocker.unlock(f)
+
+def update_legal_arguments(project_id: str, mutator) -> Dict:
+    """锁内 read → mutator(data) → write。所有读-改-写都应走这里，避免并发丢更新。"""
+    return update_json(
+        _legal_arguments_file(project_id),
+        mutator,
+        default={"arguments": [], "sub_arguments": []},
+    )
 
 
 def get_assigned_snippet_ids(project_id: str) -> Set[str]:
@@ -66,29 +65,34 @@ def get_assigned_snippet_ids(project_id: str) -> Set[str]:
 def remove_standard(project_id: str, standard_key: str) -> Dict:
     """移除一个 Standard 下的所有 Arguments 和 SubArguments，清理 writing_v3 文件"""
 
-    legal_args = load_legal_arguments(project_id)
-    arguments = legal_args.get("arguments", [])
-    sub_arguments = legal_args.get("sub_arguments", [])
+    matched_arg_ids = None
+    matched_subarg_ids = None
+    def _mutate(legal_args):
+        nonlocal matched_arg_ids, matched_subarg_ids
+        arguments = legal_args.get("arguments", [])
+        sub_arguments = legal_args.get("sub_arguments", [])
 
-    # Find arguments belonging to this standard
-    matched_arg_ids = set()
-    matched_subarg_ids = set()
-    for arg in arguments:
-        if arg.get("standard_key") == standard_key:
-            matched_arg_ids.add(arg["id"])
-            for sa_id in arg.get("sub_argument_ids", []):
-                matched_subarg_ids.add(sa_id)
+        # Find arguments belonging to this standard
+        matched_arg_ids = set()
+        matched_subarg_ids = set()
+        for arg in arguments:
+            if arg.get("standard_key") == standard_key:
+                matched_arg_ids.add(arg["id"])
+                for sa_id in arg.get("sub_argument_ids", []):
+                    matched_subarg_ids.add(sa_id)
 
-    # Also collect sub_arguments whose argument_id matches
-    for sa in sub_arguments:
-        if sa.get("argument_id") in matched_arg_ids:
-            matched_subarg_ids.add(sa["id"])
+        # Also collect sub_arguments whose argument_id matches
+        for sa in sub_arguments:
+            if sa.get("argument_id") in matched_arg_ids:
+                matched_subarg_ids.add(sa["id"])
 
-    # Filter out
-    legal_args["arguments"] = [a for a in arguments if a["id"] not in matched_arg_ids]
-    legal_args["sub_arguments"] = [sa for sa in sub_arguments if sa["id"] not in matched_subarg_ids]
+        # Filter out
+        legal_args["arguments"] = [a for a in arguments if a["id"] not in matched_arg_ids]
+        legal_args["sub_arguments"] = [sa for sa in sub_arguments if sa["id"] not in matched_subarg_ids]
 
-    save_legal_arguments(project_id, legal_args)
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     # Delete writing_v3 files for this standard
     writing_dir = PROJECTS_DIR / project_id / "writing_v3"
@@ -337,25 +341,29 @@ def create_argument(
     """手动创建 Argument 并持久化到 legal_arguments.json"""
     import uuid
 
-    legal_args = load_legal_arguments(project_id)
+    new_arg = None
+    def _mutate(legal_args):
+        nonlocal new_arg
 
-    new_arg = {
-        "id": f"arg-{uuid.uuid4().hex[:8]}",
-        "standard": standard_key,
-        "standard_key": standard_key,
-        "title": title,
-        "rationale": "",
-        "snippet_ids": [],
-        "evidence_strength": "moderate",
-        "sub_argument_ids": [],
-        "subject": "",
-        "confidence": 0.5,
-        "is_ai_generated": False,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+        new_arg = {
+            "id": f"arg-{uuid.uuid4().hex[:8]}",
+            "standard": standard_key,
+            "standard_key": standard_key,
+            "title": title,
+            "rationale": "",
+            "snippet_ids": [],
+            "evidence_strength": "moderate",
+            "sub_argument_ids": [],
+            "subject": "",
+            "confidence": 0.5,
+            "is_ai_generated": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    legal_args.setdefault("arguments", []).append(new_arg)
-    save_legal_arguments(project_id, legal_args)
+        legal_args.setdefault("arguments", []).append(new_arg)
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return new_arg
 
@@ -379,36 +387,40 @@ def create_subargument(
     import uuid
 
     # 加载现有数据
-    legal_args = load_legal_arguments(project_id)
+    new_subarg = None
+    def _mutate(legal_args):
+        nonlocal new_subarg
 
-    # 生成新 SubArgument
-    new_subarg = {
-        "id": f"subarg-{uuid.uuid4().hex[:8]}",
-        "argument_id": argument_id,
-        "title": title,
-        "purpose": purpose,
-        "relationship": relationship,
-        "snippet_ids": snippet_ids,
-        "is_ai_generated": False,  # 用户手动创建
-        "status": "draft",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+        # 生成新 SubArgument
+        new_subarg = {
+            "id": f"subarg-{uuid.uuid4().hex[:8]}",
+            "argument_id": argument_id,
+            "title": title,
+            "purpose": purpose,
+            "relationship": relationship,
+            "snippet_ids": snippet_ids,
+            "is_ai_generated": False,  # 用户手动创建
+            "status": "draft",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
 
-    # 添加到 sub_arguments 列表
-    if "sub_arguments" not in legal_args:
-        legal_args["sub_arguments"] = []
-    legal_args["sub_arguments"].append(new_subarg)
+        # 添加到 sub_arguments 列表
+        if "sub_arguments" not in legal_args:
+            legal_args["sub_arguments"] = []
+        legal_args["sub_arguments"].append(new_subarg)
 
-    # 更新父 Argument 的 sub_argument_ids
-    for arg in legal_args.get("arguments", []):
-        if arg["id"] == argument_id:
-            if "sub_argument_ids" not in arg:
-                arg["sub_argument_ids"] = []
-            arg["sub_argument_ids"].append(new_subarg["id"])
-            break
+        # 更新父 Argument 的 sub_argument_ids
+        for arg in legal_args.get("arguments", []):
+            if arg["id"] == argument_id:
+                if "sub_argument_ids" not in arg:
+                    arg["sub_argument_ids"] = []
+                arg["sub_argument_ids"].append(new_subarg["id"])
+                break
 
-    # 保存
-    save_legal_arguments(project_id, legal_args)
+        # 保存
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return new_subarg
 
@@ -450,80 +462,84 @@ def merge_subarguments(
         raise ValueError("At least 2 sub-arguments are required for merging")
 
     # 加载数据
-    legal_args = load_legal_arguments(project_id)
-    sub_arguments = legal_args.get("sub_arguments", [])
-    arguments = legal_args.get("arguments", [])
+    new_arg = None
+    def _mutate(legal_args):
+        nonlocal new_arg
+        sub_arguments = legal_args.get("sub_arguments", [])
+        arguments = legal_args.get("arguments", [])
 
-    # 找到所有源 sub-args
-    source_subargs = []
-    for sa_id in subargument_ids:
-        found = next((sa for sa in sub_arguments if sa.get("id") == sa_id), None)
-        if not found:
-            raise ValueError(f"SubArgument not found: {sa_id}")
-        source_subargs.append(found)
+        # 找到所有源 sub-args
+        source_subargs = []
+        for sa_id in subargument_ids:
+            found = next((sa for sa in sub_arguments if sa.get("id") == sa_id), None)
+            if not found:
+                raise ValueError(f"SubArgument not found: {sa_id}")
+            source_subargs.append(found)
 
-    # 收集涉及的 argument_ids → 找到 standard_key
-    old_argument_ids = set(sa.get("argument_id") for sa in source_subargs)
-    arg_map = {a["id"]: a for a in arguments}
+        # 收集涉及的 argument_ids → 找到 standard_key
+        old_argument_ids = set(sa.get("argument_id") for sa in source_subargs)
+        arg_map = {a["id"]: a for a in arguments}
 
-    standard_keys = set()
-    for aid in old_argument_ids:
-        arg = arg_map.get(aid)
-        if arg:
-            standard_keys.add(arg.get("standard_key"))
+        standard_keys = set()
+        for aid in old_argument_ids:
+            arg = arg_map.get(aid)
+            if arg:
+                standard_keys.add(arg.get("standard_key"))
 
-    if len(standard_keys) != 1:
-        raise ValueError("All sub-arguments must belong to the same standard")
-    standard_key = standard_keys.pop()
+        if len(standard_keys) != 1:
+            raise ValueError("All sub-arguments must belong to the same standard")
+        standard_key = standard_keys.pop()
 
-    # 获取 subject（从第一个 argument 拿）
-    first_arg = arg_map.get(next(iter(old_argument_ids)))
-    subject = first_arg.get("subject", "") if first_arg else ""
+        # 获取 subject（从第一个 argument 拿）
+        first_arg = arg_map.get(next(iter(old_argument_ids)))
+        subject = first_arg.get("subject", "") if first_arg else ""
 
-    # 收集所有 snippet_ids（去重，保持顺序）
-    seen: Set[str] = set()
-    all_snippet_ids: List[str] = []
-    for sa in source_subargs:
-        for snip_id in sa.get("snippet_ids", []):
-            if snip_id not in seen:
-                seen.add(snip_id)
-                all_snippet_ids.append(snip_id)
+        # 收集所有 snippet_ids（去重，保持顺序）
+        seen: Set[str] = set()
+        all_snippet_ids: List[str] = []
+        for sa in source_subargs:
+            for snip_id in sa.get("snippet_ids", []):
+                if snip_id not in seen:
+                    seen.add(snip_id)
+                    all_snippet_ids.append(snip_id)
 
-    now_str = datetime.now(timezone.utc).isoformat()
+        now_str = datetime.now(timezone.utc).isoformat()
 
-    # 创建新 Argument
-    new_arg = {
-        "id": f"arg-{uuid.uuid4().hex[:8]}",
-        "standard": standard_key,
-        "standard_key": standard_key,
-        "title": merged_title,
-        "rationale": merged_purpose or f"Grouped from {len(subargument_ids)} sub-arguments",
-        "snippet_ids": all_snippet_ids,
-        "evidence_strength": "moderate",
-        "sub_argument_ids": list(subargument_ids),
-        "subject": subject,
-        "confidence": 0.8,
-        "is_ai_generated": False,
-        "created_at": now_str,
-    }
+        # 创建新 Argument
+        new_arg = {
+            "id": f"arg-{uuid.uuid4().hex[:8]}",
+            "standard": standard_key,
+            "standard_key": standard_key,
+            "title": merged_title,
+            "rationale": merged_purpose or f"Grouped from {len(subargument_ids)} sub-arguments",
+            "snippet_ids": all_snippet_ids,
+            "evidence_strength": "moderate",
+            "sub_argument_ids": list(subargument_ids),
+            "subject": subject,
+            "confidence": 0.8,
+            "is_ai_generated": False,
+            "created_at": now_str,
+        }
 
-    # 移动 sub-args: 更新 argument_id
-    moved_set = set(subargument_ids)
-    for sa in sub_arguments:
-        if sa["id"] in moved_set:
-            sa["argument_id"] = new_arg["id"]
+        # 移动 sub-args: 更新 argument_id
+        moved_set = set(subargument_ids)
+        for sa in sub_arguments:
+            if sa["id"] in moved_set:
+                sa["argument_id"] = new_arg["id"]
 
-    # 从旧 parent arguments 的 sub_argument_ids 中移除
-    for arg in arguments:
-        if arg["id"] in old_argument_ids:
-            old_ids = arg.get("sub_argument_ids", [])
-            arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in moved_set]
+        # 从旧 parent arguments 的 sub_argument_ids 中移除
+        for arg in arguments:
+            if arg["id"] in old_argument_ids:
+                old_ids = arg.get("sub_argument_ids", [])
+                arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in moved_set]
 
-    # 添加新 Argument
-    legal_args["arguments"].append(new_arg)
+        # 添加新 Argument
+        legal_args["arguments"].append(new_arg)
 
-    # 保存
-    save_legal_arguments(project_id, legal_args)
+        # 保存
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return {
         "success": True,
@@ -546,50 +562,52 @@ def move_subarguments(
     1. target argument 必须存在
     2. 所有 sub-args 必须与 target 属于同一个 standard_key
     """
-    legal_args = load_legal_arguments(project_id)
-    sub_arguments = legal_args.get("sub_arguments", [])
-    arguments = legal_args.get("arguments", [])
-    arg_map = {a["id"]: a for a in arguments}
+    def _mutate(legal_args):
+        sub_arguments = legal_args.get("sub_arguments", [])
+        arguments = legal_args.get("arguments", [])
+        arg_map = {a["id"]: a for a in arguments}
 
-    # 验证 target argument 存在
-    target_arg = arg_map.get(target_argument_id)
-    if not target_arg:
-        raise ValueError(f"Target argument not found: {target_argument_id}")
+        # 验证 target argument 存在
+        target_arg = arg_map.get(target_argument_id)
+        if not target_arg:
+            raise ValueError(f"Target argument not found: {target_argument_id}")
 
-    target_standard = target_arg.get("standard_key")
+        target_standard = target_arg.get("standard_key")
 
-    # 找到所有源 sub-args 并验证 standard_key
-    moved_set = set(subargument_ids)
-    old_argument_ids: Set[str] = set()
-    for sa in sub_arguments:
-        if sa["id"] in moved_set:
-            parent = arg_map.get(sa.get("argument_id"))
-            if parent and parent.get("standard_key") != target_standard:
-                raise ValueError(
-                    f"SubArgument {sa['id']} belongs to standard "
-                    f"'{parent.get('standard_key')}', cannot move to '{target_standard}'"
-                )
-            old_argument_ids.add(sa.get("argument_id", ""))
+        # 找到所有源 sub-args 并验证 standard_key
+        moved_set = set(subargument_ids)
+        old_argument_ids: Set[str] = set()
+        for sa in sub_arguments:
+            if sa["id"] in moved_set:
+                parent = arg_map.get(sa.get("argument_id"))
+                if parent and parent.get("standard_key") != target_standard:
+                    raise ValueError(
+                        f"SubArgument {sa['id']} belongs to standard "
+                        f"'{parent.get('standard_key')}', cannot move to '{target_standard}'"
+                    )
+                old_argument_ids.add(sa.get("argument_id", ""))
 
-    # 更新 sub-args 的 argument_id
-    for sa in sub_arguments:
-        if sa["id"] in moved_set:
-            sa["argument_id"] = target_argument_id
+        # 更新 sub-args 的 argument_id
+        for sa in sub_arguments:
+            if sa["id"] in moved_set:
+                sa["argument_id"] = target_argument_id
 
-    # 从旧 parent arguments 移除
-    for arg in arguments:
-        if arg["id"] in old_argument_ids:
-            old_ids = arg.get("sub_argument_ids", [])
-            arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in moved_set]
+        # 从旧 parent arguments 移除
+        for arg in arguments:
+            if arg["id"] in old_argument_ids:
+                old_ids = arg.get("sub_argument_ids", [])
+                arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in moved_set]
 
-    # 添加到 target argument
-    existing_ids = set(target_arg.get("sub_argument_ids", []))
-    target_arg.setdefault("sub_argument_ids", [])
-    for sid in subargument_ids:
-        if sid not in existing_ids:
-            target_arg["sub_argument_ids"].append(sid)
+        # 添加到 target argument
+        existing_ids = set(target_arg.get("sub_argument_ids", []))
+        target_arg.setdefault("sub_argument_ids", [])
+        for sid in subargument_ids:
+            if sid not in existing_ids:
+                target_arg["sub_argument_ids"].append(sid)
 
-    save_legal_arguments(project_id, legal_args)
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return {
         "success": True,
@@ -789,22 +807,24 @@ Generate a consolidated title, purpose, and relationship for the merged sub-argu
     )
 
     # Delete original sub-args: reload (create_subargument saved), then remove
-    legal_args = load_legal_arguments(project_id)
-    sub_arguments = legal_args.get("sub_arguments", [])
-    arguments = legal_args.get("arguments", [])
+    def _mutate(legal_args):
+        sub_arguments = legal_args.get("sub_arguments", [])
+        arguments = legal_args.get("arguments", [])
 
-    delete_set = set(subargument_ids)
+        delete_set = set(subargument_ids)
 
-    # Remove from sub_arguments list
-    legal_args["sub_arguments"] = [sa for sa in sub_arguments if sa["id"] not in delete_set]
+        # Remove from sub_arguments list
+        legal_args["sub_arguments"] = [sa for sa in sub_arguments if sa["id"] not in delete_set]
 
-    # Remove from parent arguments' sub_argument_ids
-    for arg in arguments:
-        old_ids = arg.get("sub_argument_ids", [])
-        if any(sid in delete_set for sid in old_ids):
-            arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in delete_set]
+        # Remove from parent arguments' sub_argument_ids
+        for arg in arguments:
+            old_ids = arg.get("sub_argument_ids", [])
+            if any(sid in delete_set for sid in old_ids):
+                arg["sub_argument_ids"] = [sid for sid in old_ids if sid not in delete_set]
 
-    save_legal_arguments(project_id, legal_args)
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return {
         "success": True,

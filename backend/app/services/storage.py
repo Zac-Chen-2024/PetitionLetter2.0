@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..core.atomic_io import update_json, write_json
 from ..core.ids import is_safe_id
 
 # 数据存储根目录 (backend/data)
@@ -174,12 +175,10 @@ def create_project(name: str, project_type: str = "EB-1A") -> Dict:
         "updatedAt": datetime.now(timezone.utc).isoformat()
     }
 
-    with open(project_dir / "meta.json", 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    write_json(project_dir / "meta.json", meta)
 
     # 初始化空的文档列表
-    with open(project_dir / "documents.json", 'w', encoding='utf-8') as f:
-        json.dump([], f, ensure_ascii=False, indent=2)
+    write_json(project_dir / "documents.json", [])
 
     return meta
 
@@ -227,20 +226,15 @@ def update_project_meta(project_id: str, updates: Dict) -> Optional[Dict]:
     if not meta_file.exists():
         return None
 
-    with open(meta_file, 'r', encoding='utf-8') as f:
-        meta = json.load(f)
+    def _mutate(meta):
+        # 更新提供的字段
+        for key, value in updates.items():
+            if value is not None:
+                meta[key] = value
+        meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        return meta
 
-    # 更新提供的字段
-    for key, value in updates.items():
-        if value is not None:
-            meta[key] = value
-
-    meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
-
-    with open(meta_file, 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
-    return meta
+    return update_json(meta_file, _mutate)
 
 
 # ==================== 文档管理 ====================
@@ -261,8 +255,7 @@ def save_documents(project_id: str, documents: List[Dict]):
     project_dir.mkdir(parents=True, exist_ok=True)
 
     docs_file = project_dir / "documents.json"
-    with open(docs_file, 'w', encoding='utf-8') as f:
-        json.dump(documents, f, ensure_ascii=False, indent=2)
+    write_json(docs_file, documents)
 
     # 更新项目修改时间
     _update_project_time(project_id)
@@ -270,21 +263,30 @@ def save_documents(project_id: str, documents: List[Dict]):
 
 def add_document(project_id: str, document: Dict) -> Dict:
     """添加文档"""
-    documents = get_documents(project_id)
-    documents.append(document)
-    save_documents(project_id, documents)
+    docs_file = get_project_file(project_id, "documents.json")
+    update_json(docs_file, lambda docs: [*docs, document], default=[])
+    _update_project_time(project_id)
     return document
 
 
 def update_document(project_id: str, doc_id: str, updates: Dict) -> Optional[Dict]:
     """更新文档"""
-    documents = get_documents(project_id)
-    for i, doc in enumerate(documents):
-        if doc.get('id') == doc_id:
-            documents[i].update(updates)
-            save_documents(project_id, documents)
-            return documents[i]
-    return None
+    docs_file = get_project_file(project_id, "documents.json")
+    updated: Optional[Dict] = None
+
+    def _mutate(documents):
+        nonlocal updated
+        for doc in documents:
+            if doc.get('id') == doc_id:
+                doc.update(updates)
+                updated = doc
+                break
+        return documents
+
+    update_json(docs_file, _mutate, default=[])
+    if updated is not None:
+        _update_project_time(project_id)
+    return updated
 
 
 # ==================== 分析结果 ====================
@@ -306,8 +308,7 @@ def save_analysis(project_id: str, analysis_data: Dict) -> str:
     }
 
     filename = f"analysis_{version_id}.json"
-    with open(analysis_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(analysis_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -373,8 +374,7 @@ def save_relationship(project_id: str, relationship_data: Dict) -> str:
     }
 
     filename = f"relationship_{version_id}.json"
-    with open(rel_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(rel_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -405,8 +405,7 @@ def save_quote_index_map(project_id: str, quote_index_map: Dict) -> str:
     }
 
     filename = f"quote_index_map_{version_id}.json"
-    with open(rel_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(rel_dir / filename, data)
 
     return version_id
 
@@ -565,8 +564,7 @@ def create_relationship_snapshot(
     snapshots_data["current_snap"] = snap_id
 
     # 保存快照元数据
-    with open(snapshots_file, 'w', encoding='utf-8') as f:
-        json.dump(snapshots_data, f, ensure_ascii=False, indent=2)
+    write_json(snapshots_file, snapshots_data)
 
     return snapshot
 
@@ -614,8 +612,7 @@ def rollback_to_snapshot(project_id: str, snapshot_id: str) -> Dict:
     snapshots_data["current_snap"] = snapshot_id
 
     # 保存快照元数据
-    with open(snapshots_file, 'w', encoding='utf-8') as f:
-        json.dump(snapshots_data, f, ensure_ascii=False, indent=2)
+    write_json(snapshots_file, snapshots_data)
 
     return {
         "snapshot_id": snapshot_id,
@@ -771,8 +768,7 @@ def save_writing(project_id: str, section: str, text: str, citations: List[Dict]
     }
 
     filename = f"writing_{section}_{version_id}.json"
-    with open(writing_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(writing_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -889,8 +885,7 @@ def save_chunks(project_id: str, document_id: str, chunks: List[Dict]) -> str:
     }
 
     filename = f"chunks_{document_id}.json"
-    with open(chunks_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(chunk_data, f, ensure_ascii=False, indent=2)
+    write_json(chunks_dir / filename, chunk_data)
 
     _update_project_time(project_id)
     return document_id
@@ -927,8 +922,7 @@ def save_l1_analysis(project_id: str, chunk_analyses: List[Dict]) -> str:
     }
 
     filename = f"l1_analysis_{version_id}.json"
-    with open(l1_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(analysis_data, f, ensure_ascii=False, indent=2)
+    write_json(l1_dir / filename, analysis_data)
 
     _update_project_time(project_id)
     return version_id
@@ -1041,8 +1035,7 @@ def save_l1_summary(project_id: str, summary: Dict) -> str:
     summary["version_id"] = version_id
 
     filename = f"l1_summary_{version_id}.json"
-    with open(l1_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    write_json(l1_dir / filename, summary)
 
     _update_project_time(project_id)
     return version_id
@@ -1219,13 +1212,10 @@ def _update_project_time(project_id: str):
     """更新项目修改时间"""
     meta_file = get_project_file(project_id, "meta.json")
     if meta_file.exists():
-        with open(meta_file, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
-
-        meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
-
-        with open(meta_file, 'w', encoding='utf-8') as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        def _touch(meta):
+            meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            return meta
+        update_json(meta_file, _touch)
 
 
 def get_full_project_data(project_id: str) -> Optional[Dict]:
@@ -1282,8 +1272,7 @@ def save_style_template(section: str, name: str, original_text: str, parsed_stru
     }
 
     filepath = section_dir / f"{template_id}.json"
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(template_data, f, ensure_ascii=False, indent=2)
+    write_json(filepath, template_data)
 
     return template_data
 
@@ -1403,8 +1392,7 @@ def save_ocr_page(project_id: str, document_id: str, page_number: int, page_resu
     """
     ocr_dir = get_ocr_pages_dir(project_id, document_id)
     filepath = ocr_dir / f"page_{page_number}.json"
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(page_result, f, ensure_ascii=False, indent=2)
+    write_json(filepath, page_result)
 
 
 def get_completed_pages(project_id: str, document_id: str) -> List[int]:
@@ -1496,8 +1484,7 @@ def update_style_template(template_id: str, updates: Dict) -> Optional[Dict]:
 
                 template['updated_at'] = datetime.now(timezone.utc).isoformat()
 
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(template, f, ensure_ascii=False, indent=2)
+                write_json(filepath, template)
 
                 return template
 
