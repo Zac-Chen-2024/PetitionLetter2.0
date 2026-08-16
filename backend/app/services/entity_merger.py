@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from ..core.atomic_io import update_json, write_json
+from ..core.prompt_loader import body as _prompt_body
 from .llm_client import call_llm
 from .storage import project_path
 from .unified_extractor import get_entities_dir, get_extraction_dir, load_combined_extraction
@@ -56,52 +57,9 @@ class MergeRecord:
 
 # ==================== LLM Prompts ====================
 
-MERGE_SUGGESTION_SYSTEM_PROMPT = """You are an expert at entity resolution and name matching.
+MERGE_SUGGESTION_SYSTEM_PROMPT = _prompt_body("entity_merger/merge_suggestion_system_prompt")
 
-Your task is to identify entities that refer to the SAME real-world person, organization, or thing, but with different names or spellings.
-
-RULES:
-1. Only merge entities that clearly refer to the SAME thing
-2. Consider:
-   - Name variations (formal vs informal): "Dr. John Smith" = "John Smith" = "J. Smith"
-   - Abbreviations: "Massachusetts Institute of Technology" = "MIT"
-   - Titles: "Professor John Smith" = "Dr. John Smith" = "John Smith"
-   - Nicknames: "[Full Name]" = "[Nickname]" = "Coach [Name]"
-3. DO NOT merge:
-   - Different people with similar names
-   - Parent and child organizations
-   - Different awards/publications with similar names
-
-The applicant's name is: {applicant_name}
-Pay special attention to variations of the applicant's name."""
-
-MERGE_SUGGESTION_USER_PROMPT = """Analyze these entities extracted from EB-1A petition documents and identify which ones refer to the SAME real-world entity.
-
-## Entities (grouped by type)
-
-{entities_text}
-
-## Instructions
-
-For each group of entities that should be merged:
-1. Choose the most formal/complete name as the PRIMARY entity
-2. List all other names as MERGE targets
-3. Explain WHY they are the same entity
-
-Return JSON format:
-{{
-  "merge_suggestions": [
-    {{
-      "primary_name": "The most formal name",
-      "merge_names": ["alias1", "alias2"],
-      "entity_type": "person|organization|...",
-      "reason": "Why these are the same",
-      "confidence": 0.9
-    }}
-  ]
-}}
-
-If no merges are needed, return {{"merge_suggestions": []}}"""
+MERGE_SUGGESTION_USER_PROMPT = _prompt_body("entity_merger/merge_suggestion_user_prompt")
 
 
 MERGE_SUGGESTION_SCHEMA = {

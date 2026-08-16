@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.errors import AppError
+from app.core.prompt_loader import validate_all as validate_prompts
 from app.core.workspace import WorkspaceMiddleware
 from app.routers.arguments import router as arguments_router
 from app.routers.documents import router as documents_router
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI):
     # calls the network; see conftest / SKIP_LLM_CONFIG_CHECK).
     if not settings.skip_llm_config_check:
         settings.validate_llm_config()
+    # Every prompt file must parse and declare exactly the variables it uses.
+    prompts = validate_prompts()
+    logger.info("Loaded %d prompt templates from %s", len(prompts), prompts[0].path.parent.parent if prompts else "-")
     logger.info("EB-1A Petition API starting (provider=%s, auth_disabled=%s)", settings.llm_provider, settings.auth_disabled)
     yield
     logger.info("EB-1A Petition API shutting down")

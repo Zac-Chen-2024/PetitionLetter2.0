@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from ..core.atomic_io import read_json, update_json, write_json
+from ..core.prompt_loader import body as _prompt_body
+from ..core.prompt_loader import render as _prompt_render
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .storage import project_path
@@ -252,37 +254,15 @@ async def llm_rank_snippets(
         )
         snippet_map[snippet_id] = snip
 
-    system_prompt = """You are an EB-1A immigration attorney selecting evidence for a legal argument.
+    system_prompt = _prompt_body("recommender/llm_rank_snippets_system_prompt")
 
-Your task is to rank candidate snippets by their relevance to a specific sub-argument.
-
-Respond in JSON format with the following structure:
-{
-  "ranked_snippets": [
-    {
-      "snippet_id": "snp_xxx",
-      "relevance_score": 0.95,
-      "reason": "Brief explanation of why this snippet is relevant"
-    }
-  ]
-}
-
-Only include snippets with relevance_score >= 0.5. Return at most the top 5 most relevant snippets."""
-
-    user_prompt = f"""## Context
-Standard: {standard_key}
-Main Argument: {argument_title}
-
-## Sub-Argument to Support
-Title: {title}
-Description: {description or 'N/A'}
-
-## Candidate Snippets
-{chr(10).join(snippets_formatted)}
-
-## Task
-Rank these snippets by their relevance to the sub-argument "{title}".
-Consider how well each snippet supports or provides evidence for this specific sub-argument."""
+    user_prompt = _prompt_render("recommender/llm_rank_snippets_user_prompt",
+        standard_key=standard_key,
+        argument_title=argument_title,
+        title=title,
+        description_or_n_a=description or 'N/A',
+        chr_10_join_snippets_formatted=chr(10).join(snippets_formatted),
+    )
 
     try:
         result = await call_llm(
@@ -640,20 +620,7 @@ async def infer_relationship(
     standard_key = argument_info.get("standard_key", "")
 
     # 与 subargument_generator.py 的 prompt 风格保持一致
-    system_prompt = """You are an expert EB-1A immigration attorney.
-Your task is to describe how a sub-argument supports its parent argument.
-
-The relationship should be a short phrase (2-5 words) in English that explains
-how this sub-argument contributes to proving the main argument.
-
-Examples:
-- "Proves leadership role"
-- "Quantifies contributions"
-- "Demonstrates industry recognition"
-- "Shows organizational impact"
-- "Establishes expert status"
-
-Output ONLY the relationship phrase, nothing else."""
+    system_prompt = _prompt_body("recommender/infer_relationship_system_prompt")
 
     user_prompt = f"""Standard: {standard_key}
 Main Argument: {argument_title}
@@ -755,25 +722,13 @@ async def consolidate_subarguments(
     )
     target_title = target_arg.get("title", "")
 
-    system_prompt = """You are an expert EB-1A immigration attorney.
-Your task is to consolidate multiple sub-arguments into a single cohesive sub-argument.
+    system_prompt = _prompt_body("recommender/consolidate_subarguments_system_prompt")
 
-Respond in JSON format:
-{
-  "title": "A concise title (5-15 words) that captures the combined scope",
-  "purpose": "A brief description of the consolidated sub-argument's purpose (1-2 sentences)",
-  "relationship": "A short phrase (2-5 words) describing how this supports the parent argument"
-}
-
-Output ONLY valid JSON, nothing else."""
-
-    user_prompt = f"""Standard: {target_standard}
-Parent Argument: {target_title}
-
-Sub-arguments to consolidate:
-{source_info}
-
-Generate a consolidated title, purpose, and relationship for the merged sub-argument:"""
+    user_prompt = _prompt_render("recommender/consolidate_subarguments_user_prompt",
+        target_standard=target_standard,
+        target_title=target_title,
+        source_info=source_info,
+    )
 
     try:
         result = await call_llm(
@@ -863,21 +818,15 @@ async def infer_argument_title(
         if sa.get("id") in child_ids and sa.get("title")
     ]
 
-    system_prompt = """You are an expert EB-1A immigration attorney.
-Your task is to generate a concise, descriptive title for a legal argument group.
-The title should summarize what the sub-arguments collectively prove.
-
-Output ONLY the title (5-15 words), nothing else. Do not use quotes."""
+    system_prompt = _prompt_body("recommender/infer_argument_title_system_prompt")
 
     child_info = "\n".join(f"- {t}" for t in child_titles) if child_titles else "(no sub-arguments yet)"
 
-    user_prompt = f"""EB-1A Standard: {standard_key}
-Current title: {current_title or '(none)'}
-
-Sub-arguments under this argument:
-{child_info}
-
-Generate a concise title for this argument group:"""
+    user_prompt = _prompt_render("recommender/infer_argument_title_user_prompt",
+        standard_key=standard_key,
+        current_title_or_none=current_title or '(none)',
+        child_info=child_info,
+    )
 
     try:
         result = await call_llm_text(
