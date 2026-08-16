@@ -25,7 +25,7 @@ from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
 from .writing_strategies import get_writing_strategy
-from .provenance_engine import _text_similarity
+from ..core.text import text_similarity as _text_similarity
 import re
 
 # Labels that LLMs sometimes leak from the argumentation-method prompt

@@ -211,6 +211,12 @@ export function useApp() {
     return writing.rewriteStandard(standardKey, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated);
   }, [writing.rewriteStandard, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated]);
 
+  // regenerateStandard: re-run the organizer for one standard; its letter section becomes stale
+  const regenerateStandard = useCallback(async (standardKey: string) => {
+    await args.regenerateStandard(standardKey, project.projectId, project.llmProvider);
+    writing.markSectionStale(standardKey);
+  }, [args.regenerateStandard, project.projectId, project.llmProvider, writing.markSectionStale]);
+
   // removeStandard: delete all arguments/sub-args under a standard + remove letter section
   const removeStandard = useCallback(async (standardKey: string) => {
     await args.removeStandard(standardKey, project.projectId);
@@ -227,14 +233,6 @@ export function useApp() {
   }, [args.removeArgument, writing.setWritingEdges]);
 
   // Pipeline operations: bind projectId and setters
-  const extractSnippets = useCallback(async () => {
-    return writing.extractSnippets(project.projectId, snippets.setSnippets, project.setPipelineState);
-  }, [writing.extractSnippets, project.projectId, snippets.setSnippets, project.setPipelineState]);
-
-  const confirmAllMappings = useCallback(async () => {
-    return writing.confirmAllMappings(project.projectId, project.setPipelineState);
-  }, [writing.confirmAllMappings, project.projectId, project.setPipelineState]);
-
   const generatePetition = useCallback(async () => {
     return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards);
   }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards]);
@@ -333,6 +331,7 @@ export function useApp() {
     rewriteStandard,
     rewritingStandardKey: writing.rewritingStandardKey,
     removeStandard,
+    regenerateStandard,
 
     // UIContext
     focusState: ui.focusState,
@@ -393,8 +392,6 @@ export function useApp() {
     dismissChanges: writing.dismissChanges,
 
     // Pipeline (bound)
-    extractSnippets,
-    confirmAllMappings,
     generatePetition,
     reloadSnippets,
     canExtract,
@@ -414,8 +411,8 @@ export function useApp() {
   }), [
     project, snippets, args, ui, writing,
     generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits,
-    rewriteStandard, removeStandard,
-    removeArgument, commitChanges, extractSnippets, confirmAllMappings, generatePetition,
+    rewriteStandard, removeStandard, regenerateStandard,
+    removeArgument, commitChanges, generatePetition,
     reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges,
     applyMerges, loadMergeSuggestions, isElementHighlighted,
     canExtract, canConfirm, canGenerate,

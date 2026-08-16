@@ -6,6 +6,7 @@ import { UIProvider } from './UIContext';
 import { WritingProvider, useWriting } from './WritingContext';
 import { convertBackendArguments, convertBackendSubArguments } from './ArgumentsContext';
 import type { Snippet, LetterSection } from '../types';
+import { toProvenanceIndex } from '../types';
 import { apiClient } from '../services/api';
 
 // ============================================
@@ -149,11 +150,7 @@ function DataLoader({ children }: { children: ReactNode }) {
               isGenerated: true,
               order: i,
               sentences: s.sentences,
-              provenanceIndex: s.provenance_index ? {
-                bySubArgument: s.provenance_index.by_subargument || {},
-                byArgument: s.provenance_index.by_argument || {},
-                bySnippet: s.provenance_index.by_snippet || {},
-              } : undefined,
+              provenanceIndex: toProvenanceIndex(s.provenance_index),
             }));
             setLetterSections(converted);
             console.log(`Loaded ${converted.length} saved letter sections`);
@@ -304,22 +301,6 @@ function DataLoader({ children }: { children: ReactNode }) {
         // Load saved letter sections (V3) - legacy path
         await loadLetterSections();
 
-        if (!(response.snippets && response.snippets.length > 0)) {
-          // Fall back to raw OCR data if no extracted snippets
-          const rawResponse = await apiClient.get<{
-            project_id: string;
-            total: number;
-            snippets: BackendSnippet[];
-          }>(`/data/projects/${projectId}/snippets?limit=2000`);
-
-          if (cancelled) return;
-
-          if (rawResponse.snippets && rawResponse.snippets.length > 0) {
-            const converted = rawResponse.snippets.map(convertBackendSnippet);
-            setSnippets(converted);
-            console.log(`Loaded ${converted.length} raw OCR blocks from project ${projectId}`);
-          }
-        }
       } catch (err) {
         if (cancelled) return;
         console.error('Failed to load project data:', err);

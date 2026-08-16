@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
-import type { LLMProvider, LegalStandard, PipelineStage, PipelineState, ProjectType } from '../types';
+import type { LLMProvider, LegalStandard, PipelineState, ProjectType } from '../types';
 import { toLLMProvider } from '../types';
 import { apiClient } from '../services/api';
 import { legalStandards as defaultEB1AStandards } from '../data/legalStandards';

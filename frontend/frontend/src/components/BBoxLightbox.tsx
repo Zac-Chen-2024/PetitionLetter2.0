@@ -29,7 +29,7 @@ async function renderPageHighRes(pdfUrl: string, pageNumber: number): Promise<HT
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const ctx = canvas.getContext('2d')!;
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  await page.render({ canvasContext: ctx, canvas, viewport }).promise;
   pageCanvasCache.set(key, canvas);
   return canvas;
 }

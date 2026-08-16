@@ -130,9 +130,11 @@ backup/
 # ===================
 # 测试/调试脚本
 # ===================
-backend/test_*.py
+# Real tests live in backend/tests/ (tracked). Ad-hoc scratch scripts at
+# backend/ top level are not.
 backend/run_*.py
 !backend/run.py
+backend/debug_output/
 
 # ===================
 # 安全相关

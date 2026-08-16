@@ -8,8 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.routers.projects import router as projects_router
-from app.routers.writing import router as writing_router, router_v3 as writing_v3_router
-from app.routers.provenance import router as provenance_router
+from app.routers.writing import router as writing_router
 from app.routers.arguments import router as arguments_router
 from app.routers.extraction import router as extraction_router
 from app.routers.documents import router as documents_router
@@ -54,8 +53,6 @@ app.add_middleware(
 # Include routers (new frontend only)
 app.include_router(projects_router)
 app.include_router(writing_router)
-app.include_router(writing_v3_router)
-app.include_router(provenance_router)
 app.include_router(arguments_router)
 app.include_router(extraction_router)
 app.include_router(documents_router)
@@ -90,7 +87,7 @@ def root():
         "version": "2.0.0",
         "routers": [
             "projects", "documents", "extraction",
-            "arguments", "writing-v2", "writing-v3", "provenance"
+            "arguments", "writing-v3"
         ]
     }
 

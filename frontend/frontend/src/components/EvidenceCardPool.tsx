@@ -94,6 +94,9 @@ function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }
     subArguments,
     workMode,
   } = useApp();
+  // Needed by getSnippetColor for manual (drag-drop) mappings. Previously this
+  // referenced an out-of-scope variable and threw a ReferenceError at runtime.
+  const legalStandards = useLegalStandards();
 
   // Check if this snippet is already assembled into an argument
   const isAssembled = arguments_.some(arg => arg.snippetIds?.includes(snippet.id));
@@ -146,7 +149,7 @@ function EvidenceCard({ snippet, isEditMode, isSelectedForEdit, onToggleSelect }
     }
 
     return DEFAULT_SNIPPET_COLOR;
-  }, [snippet.id, arguments_, argumentMappings, focusState]);
+  }, [snippet.id, arguments_, argumentMappings, focusState, legalStandards]);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -505,7 +508,6 @@ function DocumentGroup({ document, snippets, filteredSnippets, isEditMode, selec
 
 export function EvidenceCardPool() {
   const { t } = useTranslation();
-  const legalStandards = useLegalStandards();
   const { focusState, snippetPositions, connections, viewMode, workMode, setSnippetPanelBounds, allSnippets, arguments: arguments_, argumentMappings, subArguments, updateSubArgument, projectId, markSectionStale, reloadSnippets } = useApp();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [containerRect, setContainerRect] = useState<DOMRect | null>(null);
@@ -524,9 +526,6 @@ export function EvidenceCardPool() {
     if (focusState.type !== 'subargument' || !focusState.id) return null;
     return subArguments.find(sa => sa.id === focusState.id) || null;
   }, [focusState, subArguments]);
-
-  // Check if focused SubArgument needs snippet confirmation
-  const needsSnippetConfirmation = focusedSubArgument?.needsSnippetConfirmation || false;
 
   // Auto-enter edit mode when focusing a SubArgument that needs confirmation
   useEffect(() => {

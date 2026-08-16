@@ -1,4 +1,4 @@
-import { Component, ReactNode } from 'react';
+import { Component, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
@@ -162,7 +162,7 @@ function MaterialsPage() {
 function AppContent() {
   return (
     <Routes>
-      <Route path="/mapping" element={<MappingPage />} />
+      <Route path="/mapping" element={<ErrorBoundary><MappingPage /></ErrorBoundary>} />
       <Route path="/materials" element={<MaterialsPage />} />
       <Route path="*" element={<Navigate to="/mapping" replace />} />
     </Routes>

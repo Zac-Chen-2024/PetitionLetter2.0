@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
-import type { LetterSection, SentenceWithProvenance, FocusState } from '../types';
+import type { LetterSection, SentenceWithProvenance } from '../types';
 
 // ============================================
 // Section Navigation Component
@@ -217,7 +217,6 @@ interface LetterSectionComponentProps {
 function LetterSectionComponent({
   section,
   isHighlighted,
-  onHover,
   onEdit,
   onRewrite,
   isRewriting,
@@ -565,13 +564,14 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
       const containerTop = container.getBoundingClientRect().top;
       let closest: { id: string; distance: number } | null = null;
 
-      sectionRefs.current.forEach((element, sectionId) => {
+      // for-of instead of forEach so TS control-flow can see the reassignment
+      for (const [sectionId, element] of sectionRefs.current) {
         const rect = element.getBoundingClientRect();
         const distance = Math.abs(rect.top - containerTop);
         if (!closest || distance < closest.distance) {
           closest = { id: sectionId, distance };
         }
-      });
+      }
 
       if (closest) {
         setActiveSection(closest.id);

@@ -11,6 +11,8 @@ interface StandardActionModalProps {
   onCancel: () => void;
   isRemoving: boolean;
   overlayStyle?: React.CSSProperties;
+  /** 'remove' (default) deletes the standard's arguments; 'regenerate' re-runs the organizer for it. */
+  mode?: 'remove' | 'regenerate';
 }
 
 export default function StandardActionModal({
@@ -22,8 +24,10 @@ export default function StandardActionModal({
   onCancel,
   isRemoving,
   overlayStyle,
+  mode = 'remove',
 }: StandardActionModalProps) {
   const { t } = useTranslation();
+  const isRegenerate = mode === 'regenerate';
 
   return (
     <Portal>
@@ -40,11 +44,13 @@ export default function StandardActionModal({
           <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
             <div className="flex items-center gap-2">
               {/* Warning icon */}
-              <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-5 h-5 flex-shrink-0 ${isRegenerate ? 'text-amber-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
               <h3 className="text-sm font-semibold text-slate-800">
-                {t('graph.removeStandard.title', 'Remove Standard')}
+                {isRegenerate
+                  ? t('graph.regenerateStandard.title', 'Regenerate Standard')
+                  : t('graph.removeStandard.title', 'Remove Standard')}
               </h3>
             </div>
           </div>
@@ -62,16 +68,24 @@ export default function StandardActionModal({
 
             {/* Description */}
             <p className="text-sm text-slate-600">
-              {t('graph.removeStandard.description', {
-                defaultValue: 'This will permanently remove {{argCount}} argument(s) and {{subArgCount}} sub-argument(s) under this standard, along with all associated letter content.',
-                argCount: argumentCount,
-                subArgCount: subArgumentCount,
-              })}
+              {isRegenerate
+                ? t('graph.regenerateStandard.description', {
+                    defaultValue: 'This will re-run the AI organizer for this standard only and replace its {{argCount}} argument(s) and {{subArgCount}} sub-argument(s). Other standards are not affected. The letter section will be marked stale.',
+                    argCount: argumentCount,
+                    subArgCount: subArgumentCount,
+                  })
+                : t('graph.removeStandard.description', {
+                    defaultValue: 'This will permanently remove {{argCount}} argument(s) and {{subArgCount}} sub-argument(s) under this standard, along with all associated letter content.',
+                    argCount: argumentCount,
+                    subArgCount: subArgumentCount,
+                  })}
             </p>
 
             {/* Warning */}
-            <p className="text-xs text-red-600 font-medium">
-              {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+            <p className={`text-xs font-medium ${isRegenerate ? 'text-amber-600' : 'text-red-600'}`}>
+              {isRegenerate
+                ? t('graph.regenerateStandard.warning', 'Manual edits to this standard\'s structure will be lost.')
+                : t('graph.removeStandard.warning', 'This action cannot be undone.')}
             </p>
           </div>
 
@@ -87,11 +101,19 @@ export default function StandardActionModal({
             <button
               onClick={onConfirm}
               disabled={isRemoving}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-red-400 disabled:cursor-not-allowed transition-colors"
+              className={`px-4 py-2 text-sm font-medium text-white rounded-lg disabled:cursor-not-allowed transition-colors ${
+                isRegenerate
+                  ? 'bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400'
+                  : 'bg-red-600 hover:bg-red-700 disabled:bg-red-400'
+              }`}
             >
-              {isRemoving
-                ? t('graph.removeStandard.removing', 'Removing...')
-                : t('graph.removeStandard.confirm', 'Remove')
+              {isRegenerate
+                ? (isRemoving
+                    ? t('graph.regenerateStandard.running', 'Regenerating...')
+                    : t('graph.regenerateStandard.confirm', 'Regenerate'))
+                : (isRemoving
+                    ? t('graph.removeStandard.removing', 'Removing...')
+                    : t('graph.removeStandard.confirm', 'Remove'))
               }
             </button>
           </div>

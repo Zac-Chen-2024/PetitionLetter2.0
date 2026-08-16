@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timezone
 
-from .snippet_registry import generate_snippet_id, save_registry
+from app.services.snippet_registry import generate_snippet_id, save_registry
 
 # 数据目录
 # BASE_DIR 指向 backend/, 项目根目录在上一级
-BASE_DIR = Path(__file__).parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
 PROJECT_ROOT = BASE_DIR.parent  # 项目根目录 (PetitionLetter/)
 DATA_DIR = PROJECT_ROOT / "data"  # 原始 OCR 数据目录
 PROJECTS_DIR = BASE_DIR / "data" / "projects"  # 项目数据存储在 backend/data/projects/

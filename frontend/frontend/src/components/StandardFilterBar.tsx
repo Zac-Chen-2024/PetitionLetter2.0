@@ -100,7 +100,6 @@ export default function StandardFilterBar() {
               borderColor: standard.color,
               borderWidth: '1px',
               borderStyle: 'solid',
-              ringColor: isFocused ? standard.color : undefined,
             }}
           >
             {/* 颜色指示器 */}

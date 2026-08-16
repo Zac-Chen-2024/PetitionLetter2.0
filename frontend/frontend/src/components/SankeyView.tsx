@@ -166,7 +166,7 @@ export function SankeyView() {
       <svg width={dimensions.width} height={dimensions.height} className="overflow-visible">
         {/* Links */}
         <g>
-          {links.map((link, i) => {
+          {links.map((link) => {
             const sourceNode = link.source as SNode & SankeyNodeData;
             const targetNode = link.target as SNode & SankeyNodeData;
             const highlighted = isLinkHighlighted(link);

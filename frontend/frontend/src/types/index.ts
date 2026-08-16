@@ -341,6 +341,26 @@ export interface ProvenanceIndex {
   bySnippet: Record<string, number[]>;      // snippet_id -> sentence indices
 }
 
+// Wire shape returned by the backend (snake_case)
+export interface ProvenanceIndexAPI {
+  by_subargument?: Record<string, number[]>;
+  by_argument?: Record<string, number[]>;
+  by_snippet?: Record<string, number[]>;
+}
+
+// Convert the API shape to the client shape. Every ingestion point MUST use
+// this: storing the snake_case object under `provenanceIndex` silently breaks
+// bySubArgument lookups (regenerate/remove of a SubArgument would then see an
+// empty index).
+export function toProvenanceIndex(api?: ProvenanceIndexAPI | null): ProvenanceIndex | undefined {
+  if (!api) return undefined;
+  return {
+    bySubArgument: api.by_subargument || {},
+    byArgument: api.by_argument || {},
+    bySnippet: api.by_snippet || {},
+  };
+}
+
 // Letter section for petition document (V3: with SubArgument mapping)
 export interface LetterSection {
   id: string;

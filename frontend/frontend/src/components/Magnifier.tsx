@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 interface MagnifierProps {
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   zoom?: number;      // 放大倍数，默认 3
   size?: number;      // 放大镜直径，默认 150
   enabled?: boolean;  // 是否启用，默认 true

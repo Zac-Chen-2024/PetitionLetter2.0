@@ -15,16 +15,6 @@ export interface Project {
   projectNumber?: string;
 }
 
-export interface Document {
-  id: string;
-  project_id: string;
-  file_name: string;
-  file_type: string;
-  page_count: number;
-  ocr_status: string;
-  exhibit_id?: string;
-}
-
 export const projectService = {
   /**
    * 获取所有项目列表
@@ -54,40 +44,6 @@ export const projectService = {
    */
   delete: (projectId: string) =>
     apiClient.delete<{ success: boolean }>(`/projects/${projectId}`),
-
-  /**
-   * 获取项目的所有文档
-   */
-  getDocuments: (projectId: string) =>
-    apiClient.get<Document[]>(`/projects/${projectId}/documents`),
-
-  /**
-   * 获取分析结果
-   */
-  getAnalysis: (projectId: string) =>
-    apiClient.get<{ version_id: string; results: unknown }>(`/projects/${projectId}/analysis`),
-
-  /**
-   * 获取关系分析结果
-   */
-  getRelationship: (projectId: string) =>
-    apiClient.get<{
-      version_id: string;
-      data: {
-        entities: Array<{
-          id: string;
-          name: string;
-          type: string;
-          quote_refs: number[];
-        }>;
-        relations: Array<{
-          from_entity: string;
-          to_entity: string;
-          relation_type: string;
-          quote_refs: number[];
-        }>;
-      };
-    }>(`/projects/${projectId}/relationship`),
 };
 
 export default projectService;

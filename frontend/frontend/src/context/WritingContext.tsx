@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react';
 import type { WritingEdge, LetterSection, Position, Snippet, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard } from '../types';
+import { toProvenanceIndex } from '../types';
 import { apiClient } from '../services/api';
 import { STANDARD_ID_TO_KEY } from '../constants/colors';
 
@@ -94,8 +95,6 @@ export interface WritingContextType {
   writingNodePositions: Map<string, Position>;
   updateWritingNodePosition: (id: string, position: Position) => void;
   // Pipeline operations take projectId & llmProvider as parameters
-  extractSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
-  confirmAllMappings: (projectId: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>) => Promise<void>;
   generatePetition: (projectId: string, llmProvider: string, setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>, arguments_?: Argument[], onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void, legalStandards?: LegalStandard[]) => Promise<void>;
   reloadSnippets: (projectId: string, setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>) => Promise<void>;
   // Unified extraction
@@ -224,73 +223,6 @@ export function WritingProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Pipeline methods
-  const extractSnippets = useCallback(async (
-    projectId: string,
-    setSnippets: React.Dispatch<React.SetStateAction<Snippet[]>>,
-    setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>
-  ) => {
-    setPipelineState(prev => ({ ...prev, stage: 'extracting', progress: 0 }));
-    try {
-      const response = await apiClient.post<{
-        success: boolean;
-        snippet_count: number;
-        by_standard: Record<string, number>;
-        message: string;
-      }>(`/extraction/${projectId}/extract`, { use_llm: false });
-
-      if (response.success) {
-        setPipelineState(prev => ({
-          ...prev,
-          stage: 'snippets_ready',
-          progress: 100,
-          snippetCount: response.snippet_count,
-        }));
-
-        const snippetsResponse = await apiClient.get<{
-          snippets: BackendSnippet[];
-        }>(`/extraction/${projectId}/snippets?limit=2000`);
-
-        if (snippetsResponse.snippets) {
-          const converted = snippetsResponse.snippets.map(convertBackendSnippet);
-          setSnippets(converted);
-        }
-      }
-    } catch (err) {
-      setPipelineState(prev => ({
-        ...prev,
-        stage: 'ocr_complete',
-        error: err instanceof Error ? err.message : 'Extraction failed',
-      }));
-    }
-  }, []);
-
-  const confirmAllMappings = useCallback(async (
-    projectId: string,
-    setPipelineState: React.Dispatch<React.SetStateAction<PipelineState>>
-  ) => {
-    setPipelineState(prev => ({ ...prev, stage: 'confirming' }));
-    try {
-      const response = await apiClient.post<{
-        success: boolean;
-        confirmed_count: number;
-      }>(`/extraction/${projectId}/snippets/confirm-all`, {});
-
-      if (response.success) {
-        setPipelineState(prev => ({
-          ...prev,
-          stage: 'mapping_confirmed',
-          confirmedMappings: response.confirmed_count,
-        }));
-      }
-    } catch (err) {
-      setPipelineState(prev => ({
-        ...prev,
-        stage: 'snippets_ready',
-        error: err instanceof Error ? err.message : 'Confirmation failed',
-      }));
-    }
-  }, []);
-
   const generatePetition = useCallback(async (
     projectId: string,
     llmProvider: string,
@@ -381,7 +313,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
               isGenerated: true,
               order: i,
               sentences: response.sentences,
-              provenanceIndex: response.provenance_index,
+              provenanceIndex: toProvenanceIndex(response.provenance_index),
             };
 
             // Incrementally add each section as it's generated
@@ -468,7 +400,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
         isGenerated: true,
         order: 0,
         sentences: response.sentences,
-        provenanceIndex: response.provenance_index,
+        provenanceIndex: toProvenanceIndex(response.provenance_index),
       };
 
       setLetterSections(prev => {
@@ -712,7 +644,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           subargument_id: string | null;
           argument_id: string | null;
           exhibit_refs: string[];
-          sentence_type: string;
+          sentence_type: 'opening' | 'body' | 'closing';
         }>;
         provenance_index: {
           by_subargument: Record<string, number[]>;
@@ -891,7 +823,12 @@ export function WritingProvider({ children }: { children: ReactNode }) {
               return {
                 ...section,
                 sentences: newSentences,
-                pendingSuggestions: response.suggestions,
+                pendingSuggestions: response.suggestions.map(s => ({
+                  sentenceIndex: s.sentence_index,
+                  originalText: s.original_text,
+                  suggestedText: s.suggested_text,
+                  reason: s.reason,
+                })),
               };
             }));
           }
@@ -1086,8 +1023,6 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     updateLetterSection,
     writingNodePositions,
     updateWritingNodePosition,
-    extractSnippets,
-    confirmAllMappings,
     generatePetition,
     reloadSnippets,
     unifiedExtract,
@@ -1110,7 +1045,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     rejectSuggestion,
     commitChanges,
     dismissChanges,
-  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, explorationWriting, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, extractSnippets, confirmAllMappings, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
+  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, explorationWriting, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
 
   return <WritingContext.Provider value={value}>{children}</WritingContext.Provider>;
 }

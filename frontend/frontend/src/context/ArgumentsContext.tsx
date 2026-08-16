@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react';
-import type { Argument, SubArgument, WritingEdge, Position, ArgumentStatus, ArgumentClaimType } from '../types';
+import type { Argument, SubArgument, WritingEdge, Position, ArgumentStatus } from '../types';
 import { toArgumentClaimType } from '../types';
 import { apiClient } from '../services/api';
 
@@ -102,6 +102,7 @@ export interface ArgumentsContextType {
   removeStandard: (standardKey: string, projectId: string) => Promise<void>;
   isGeneratingArguments: boolean;
   generateArguments: (projectId: string, llmProvider: string, forceReanalyze?: boolean, applicantName?: string) => Promise<void>;
+  regenerateStandard: (standardKey: string, projectId: string, llmProvider: string) => Promise<void>;
   generatedMainSubject: string | null;
 }
 
@@ -305,7 +306,7 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const regenerateSubArgument = useCallback(async (subArgumentId: string, projectId: string) => {
+  const regenerateSubArgument = useCallback(async (_subArgumentId: string, _projectId: string) => {
     console.warn('regenerateSubArgument should be called via useApp() facade which has access to WritingContext');
   }, []);
 
@@ -582,6 +583,67 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // AI Argument Generation
+  // Fetch the current arguments/sub-arguments from the backend and replace local state.
+  // Shared by generateArguments (full pipeline) and regenerateStandard (single standard).
+  const fetchArgumentsFromBackend = useCallback(async (projectId: string) => {
+    const response = await apiClient.get<{
+      project_id: string;
+      arguments: Array<{
+        id: string;
+        title: string;
+        subject: string;
+        snippet_ids: string[];
+        standard_key: string;
+        confidence: number;
+        created_at: string;
+        is_ai_generated: boolean;
+        sub_argument_ids?: string[];
+        exhibits?: string[];
+        layers?: {
+          claim: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
+          proof: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
+          significance: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
+          context: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
+        };
+        conclusion?: string;
+        completeness?: {
+          has_claim: boolean;
+          has_proof: boolean;
+          has_significance: boolean;
+          has_context: boolean;
+          score: number;
+        };
+      }>;
+      sub_arguments: Array<{
+        id: string;
+        argument_id: string;
+        title: string;
+        purpose: string;
+        relationship: string;
+        snippet_ids: string[];
+        pending_snippet_ids?: string[];
+        needs_snippet_confirmation?: boolean;
+        is_ai_generated: boolean;
+        status: string;
+        created_at: string;
+      }>;
+      main_subject: string | null;
+      generated_at: string;
+      stats: Record<string, unknown>;
+    }>(`/arguments/${projectId}`);
+
+    setGeneratedMainSubject(response.main_subject);
+
+    const convertedArguments = convertBackendArguments(response.arguments);
+    setArguments(convertedArguments);
+    console.log(`Generated ${convertedArguments.length} arguments for ${response.main_subject}`);
+
+    const subArgsData = response.sub_arguments || [];
+    const convertedSubArgs = convertBackendSubArguments(subArgsData);
+    setSubArguments(convertedSubArgs);
+    console.log(`Generated ${convertedSubArgs.length} sub-arguments`);
+  }, []);
+
   const generateArguments = useCallback(async (
     projectId: string,
     llmProvider: string,
@@ -600,69 +662,29 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
       });
 
       // Step 2: Fetch generated arguments and sub-arguments
-      const response = await apiClient.get<{
-        project_id: string;
-        arguments: Array<{
-          id: string;
-          title: string;
-          subject: string;
-          snippet_ids: string[];
-          standard_key: string;
-          confidence: number;
-          created_at: string;
-          is_ai_generated: boolean;
-          sub_argument_ids?: string[];
-          exhibits?: string[];
-          layers?: {
-            claim: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-            proof: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-            significance: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-            context: Array<{ text: string; exhibit_id: string; purpose: string; snippet_id: string }>;
-          };
-          conclusion?: string;
-          completeness?: {
-            has_claim: boolean;
-            has_proof: boolean;
-            has_significance: boolean;
-            has_context: boolean;
-            score: number;
-          };
-        }>;
-        sub_arguments: Array<{
-          id: string;
-          argument_id: string;
-          title: string;
-          purpose: string;
-          relationship: string;
-          snippet_ids: string[];
-          pending_snippet_ids?: string[];
-          needs_snippet_confirmation?: boolean;
-          is_ai_generated: boolean;
-          status: string;
-          created_at: string;
-        }>;
-        main_subject: string | null;
-        generated_at: string;
-        stats: Record<string, unknown>;
-      }>(`/arguments/${projectId}`);
-
-      setGeneratedMainSubject(response.main_subject);
-
-      const convertedArguments = convertBackendArguments(response.arguments);
-      setArguments(convertedArguments);
-      console.log(`Generated ${convertedArguments.length} arguments for ${response.main_subject}`);
-
-      const subArgsData = response.sub_arguments || [];
-      const convertedSubArgs = convertBackendSubArguments(subArgsData);
-      setSubArguments(convertedSubArgs);
-      console.log(`Generated ${convertedSubArgs.length} sub-arguments`);
+      await fetchArgumentsFromBackend(projectId);
     } catch (err) {
       console.error('Failed to generate arguments:', err);
       throw err;
     } finally {
       setIsGeneratingArguments(false);
     }
-  }, []);
+  }, [fetchArgumentsFromBackend]);
+
+  // Re-run the organizer pipeline for ONE standard only (cheaper than a full
+  // regenerate). Backend replaces that standard's arguments/sub-arguments and
+  // leaves the others untouched; we then reload everything from the backend.
+  const regenerateStandard = useCallback(async (
+    standardKey: string,
+    projectId: string,
+    llmProvider: string,
+  ) => {
+    await apiClient.post<{ success: boolean }>(`/arguments/${projectId}/regenerate-standard`, {
+      standard_key: standardKey,
+      provider: llmProvider,
+    });
+    await fetchArgumentsFromBackend(projectId);
+  }, [fetchArgumentsFromBackend]);
 
   const value = useMemo<ArgumentsContextType>(() => ({
     arguments: arguments_,
@@ -690,8 +712,9 @@ export function ArgumentsProvider({ children }: { children: ReactNode }) {
     moveToOverallMerits,
     isGeneratingArguments,
     generateArguments,
+    regenerateStandard,
     generatedMainSubject,
-  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits, generateArguments]);
+  }), [arguments_, argumentMappings, subArguments, isGeneratingArguments, generatedMainSubject, addArgument, updateArgument, removeArgument, updateArgumentPosition, addSnippetToArgument, removeSnippetFromArgument, addArgumentMapping, removeArgumentMapping, addSubArgument, updateSubArgument, removeSubArgument, regenerateSubArgument, removeStandard, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits, generateArguments, regenerateStandard]);
 
   return <ArgumentsContext.Provider value={value}>{children}</ArgumentsContext.Provider>;
 }

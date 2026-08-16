@@ -5,7 +5,6 @@ import { useProject } from '../context/ProjectContext';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { projectService, type Project } from '../services/projectService';
 import type { LLMProvider, ProjectType } from '../types';
-import { toLLMProvider } from '../types';
 
 // LLM Provider options
 const LLM_PROVIDERS: { id: LLMProvider; name: string }[] = [

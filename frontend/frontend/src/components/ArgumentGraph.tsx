@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useApp } from '../context/AppContext';
 import { useLegalStandards } from '../hooks/useLegalStandards';
 import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
@@ -112,7 +113,7 @@ function ArgumentNodeComponent({
 }: DraggableNodeProps & {
   node: ArgumentNode;
   onPositionReport?: (id: string, rect: DOMRect) => void;
-  t: (key: string, options?: Record<string, unknown>) => string;
+  t: TFunction;
   transformVersion?: number;  // Triggers position update when canvas transforms
   onAddSubArgument?: (argumentId: string) => void;
   onDelete?: (argumentId: string) => void;
@@ -328,13 +329,14 @@ function ArgumentNodeComponent({
 
 function StandardNodeComponent({
   node, isSelected, onSelect, onDrag, scale, t,
-  onRewrite, onRemove, onAddArgument, isRewriting, hasLetterContent,
+  onRewrite, onRemove, onRegenerate, onAddArgument, isRewriting, hasLetterContent,
   onContextMenu,
 }: DraggableNodeProps & {
   node: StandardNode;
-  t: (key: string, options?: Record<string, unknown>) => string;
+  t: TFunction;
   onRewrite?: (standardKey: string) => void;
   onRemove?: (standardKey: string) => void;
+  onRegenerate?: (standardKey: string) => void;
   onAddArgument?: (standardKey: string) => void;
   isRewriting?: boolean;
   hasLetterContent?: boolean;
@@ -447,6 +449,18 @@ function StandardNodeComponent({
                 )}
               </button>
             )}
+            {/* Regenerate arguments (single standard) button */}
+            {onRegenerate && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRegenerate(node.id); }}
+                className="p-1 rounded hover:bg-amber-100 transition-colors"
+                title={t('graph.standard.regenerate', 'Regenerate arguments for this standard')}
+              >
+                <svg className="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </button>
+            )}
             {/* Remove button */}
             {onRemove && (
               <button
@@ -466,11 +480,13 @@ function StandardNodeComponent({
             <span className="text-xs text-slate-400">{t('graph.legend.standard')}</span>
             {/* Letter content status indicator */}
             {hasLetterContent ? (
-              <svg className="w-3.5 h-3.5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20" title={t('graph.standard.written', 'Written')}>
+              <svg className="w-3.5 h-3.5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                <title>{t('graph.standard.written', 'Written')}</title>
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
             ) : (
-              <svg className="w-3.5 h-3.5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" title={t('graph.standard.pending', 'Not written')}>
+              <svg className="w-3.5 h-3.5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <title>{t('graph.standard.pending', 'Not written')}</title>
                 <circle cx="12" cy="12" r="9" strokeWidth={2} />
               </svg>
             )}
@@ -508,7 +524,7 @@ function SubArgumentNodeComponent({
   onContextMenu,
 }: DraggableNodeProps & {
   node: SubArgumentNode;
-  t: (key: string, options?: Record<string, unknown>) => string;
+  t: TFunction;
   onPositionReport?: (id: string, rect: DOMRect) => void;
   transformVersion?: number;  // Triggers position update when canvas transforms
   onRegenerate?: (subArgumentId: string) => void;
@@ -1243,6 +1259,7 @@ export function ArgumentGraph() {
     createArgument,
     rewriteStandard,
     removeStandard,
+    regenerateStandard,
     moveToOverallMerits,
     removeArgument,
     updateArgument,
@@ -1267,6 +1284,8 @@ export function ArgumentGraph() {
   const [rewritingStandardKey, setRewritingStandardKey] = useState<string | null>(null);
   const [removeModalStandardKey, setRemoveModalStandardKey] = useState<string | null>(null);
   const [isRemovingStandard, setIsRemovingStandard] = useState(false);
+  const [regenerateModalStandardKey, setRegenerateModalStandardKey] = useState<string | null>(null);
+  const [isRegeneratingStandard, setIsRegeneratingStandard] = useState(false);
   // SubArgument delete modal state
   const [deleteSubArgModalId, setDeleteSubArgModalId] = useState<string | null>(null);
   // Argument delete modal state
@@ -1613,6 +1632,20 @@ export function ArgumentGraph() {
       setIsRemovingStandard(false);
     }
   }, [removeModalStandardKey, removeStandard]);
+
+  const handleStandardRegenerateConfirm = useCallback(async () => {
+    if (!regenerateModalStandardKey) return;
+    setIsRegeneratingStandard(true);
+    try {
+      await regenerateStandard(regenerateModalStandardKey);
+      toast.success(`${regenerateModalStandardKey.replace(/_/g, ' ')} regenerated`);
+      setRegenerateModalStandardKey(null);
+    } catch {
+      toast.error('Failed to regenerate standard');
+    } finally {
+      setIsRegeneratingStandard(false);
+    }
+  }, [regenerateModalStandardKey, regenerateStandard]);
 
   // ==================== Context Menu & Overall Merits ====================
 
@@ -2319,6 +2352,7 @@ export function ArgumentGraph() {
                 t={t}
                 onRewrite={handleStandardRewrite}
                 onRemove={(key) => setRemoveModalStandardKey(key)}
+                onRegenerate={(key) => setRegenerateModalStandardKey(key)}
                 onAddArgument={handleAddArgument}
                 isRewriting={rewritingStandardKey === node.id}
                 hasLetterContent={generatedStandardIds.has(node.id)}
@@ -2415,6 +2449,29 @@ export function ArgumentGraph() {
             overlayStyle={modalOverlayStyle}
             onCancel={() => setRemoveModalStandardKey(null)}
             isRemoving={isRemovingStandard}
+          />
+        );
+      })()}
+
+      {/* Standard regenerate confirmation modal */}
+      {regenerateModalStandardKey && (() => {
+        const stdNode = standardNodes.find(n => n.id === regenerateModalStandardKey);
+        const argCount = contextArguments.filter(a => a.standardKey === regenerateModalStandardKey).length;
+        const subArgCount = contextSubArguments.filter(sa => {
+          const parentArg = contextArguments.find(a => a.id === sa.argumentId);
+          return parentArg?.standardKey === regenerateModalStandardKey;
+        }).length;
+        return (
+          <StandardActionModal
+            mode="regenerate"
+            standardName={stdNode?.data.name || regenerateModalStandardKey}
+            standardColor={stdNode?.data.color || '#94a3b8'}
+            argumentCount={argCount}
+            subArgumentCount={subArgCount}
+            onConfirm={handleStandardRegenerateConfirm}
+            overlayStyle={modalOverlayStyle}
+            onCancel={() => setRegenerateModalStandardKey(null)}
+            isRemoving={isRegeneratingStandard}
           />
         );
       })()}

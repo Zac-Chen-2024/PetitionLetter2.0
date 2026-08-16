@@ -55,38 +55,7 @@ const FolderIcon = () => (
   </svg>
 );
 
-// Category colors - simple A, B, C format
-const CATEGORY_COLORS: Record<string, string> = {
-  'A': '#3b82f6',
-  'B': '#10b981',
-  'C': '#f59e0b',
-  'D': '#8b5cf6',
-  'E': '#ec4899',
-  'F': '#06b6d4',
-  'G': '#6366f1',
-  'H': '#64748b',
-};
-
-// Extraction state for each category
-interface ExtractionState {
-  isExtracting: boolean;
-  progress: number;
-  error?: string;
-}
-
-// Extract icon - simple letter E
-const ExtractIcon = () => (
-  <span className="font-bold text-xs">E</span>
-);
-
 // Spinner icon for loading
-const SpinnerIcon = () => (
-  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-  </svg>
-);
-
 // Snippet bounding box overlay with position tracking
 function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pdfUrl: string; onClick: (e: React.MouseEvent) => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -109,8 +78,11 @@ function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pd
         const rect = ref.current.getBoundingClientRect();
         // Use right edge center as connection point
         updatePdfBboxPosition(snippet.id, {
+          id: snippet.id,
           x: rect.right,
           y: rect.top + rect.height / 2,
+          width: rect.width,
+          height: rect.height,
         });
       }
     };
@@ -201,7 +173,7 @@ function PDFViewer({
   exhibitId,
   snippets,
   isSelectMode,
-  onSelectionComplete,
+  onSelectionComplete: _onSelectionComplete,
   compact = false,
   scale: externalScale,
   onScaleChange,
@@ -215,9 +187,15 @@ function PDFViewer({
 
   // Use external scale if provided (compact mode), otherwise internal
   const scale = externalScale !== undefined ? externalScale : internalScale;
-  const setScale = onScaleChange || setInternalScale;
+  const setScale = useCallback(
+    (update: (s: number) => number) => {
+      if (onScaleChange) onScaleChange(update(scale));
+      else setInternalScale(update);
+    },
+    [onScaleChange, scale],
+  );
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [, setIsLoading] = useState(true);
   const [containerWidth, setContainerWidth] = useState<number>(0);
 
   // Number of pages to render at once for continuous scrolling
@@ -443,7 +421,7 @@ interface DocumentViewerProps {
 }
 
 export function DocumentViewer({ compact = false }: DocumentViewerProps) {
-  const { projectId, selectedDocumentId, setSelectedDocumentId, addSnippet, allSnippets, reloadSnippets } = useApp();
+  const { projectId, selectedDocumentId, setSelectedDocumentId, addSnippet, allSnippets } = useApp();
   const [exhibits, setExhibits] = useState<Exhibit[]>([]);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['A', 'B']));
   const [isLoading, setIsLoading] = useState(true);
@@ -454,43 +432,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
   } | null>(null);
   const [pdfScale, setPdfScale] = useState(1);
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
-
-  // Extraction state management
-  const [extractionStates, setExtractionStates] = useState<Record<string, ExtractionState>>({});
-
-  // Extract snippets for a specific category
-  const handleExtractCategory = async (category: string, exhibitIds: string[]) => {
-    setExtractionStates(prev => ({
-      ...prev,
-      [category]: { isExtracting: true, progress: 0 }
-    }));
-
-    try {
-      let completed = 0;
-      for (const exhibitId of exhibitIds) {
-        await apiClient.post(`/extraction/${projectId}/extract/${exhibitId}`, { use_llm: true });
-        completed++;
-        setExtractionStates(prev => ({
-          ...prev,
-          [category]: { isExtracting: true, progress: Math.round((completed / exhibitIds.length) * 100) }
-        }));
-      }
-
-      setExtractionStates(prev => ({
-        ...prev,
-        [category]: { isExtracting: false, progress: 100 }
-      }));
-
-      // Reload snippets after extraction
-      await reloadSnippets();
-    } catch (error) {
-      console.error('Extraction failed:', error);
-      setExtractionStates(prev => ({
-        ...prev,
-        [category]: { isExtracting: false, progress: 0, error: 'Extraction failed' }
-      }));
-    }
-  };
 
 
   // Fetch exhibits from backend
@@ -668,9 +609,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
             <div className="space-y-1">
               {Object.entries(exhibitsByCategory).map(([category, categoryExhibits]) => {
                 const isExpanded = expandedCategories.has(category);
-                const categoryColor = CATEGORY_COLORS[category] || '#64748b';
-                const extractState = extractionStates[category];
-                const isExtracting = extractState?.isExtracting || false;
 
                 return (
                   <div key={category}>
@@ -688,30 +626,6 @@ export function DocumentViewer({ compact = false }: DocumentViewerProps) {
                         <span className="text-xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                           {categoryExhibits.length}
                         </span>
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleExtractCategory(category, categoryExhibits.map(e => e.id));
-                        }}
-                        disabled={isExtracting}
-                        className={`
-                          flex items-center gap-1 px-1.5 py-1 text-xs rounded transition-colors
-                          ${isExtracting
-                            ? 'bg-slate-100 text-slate-500 cursor-not-allowed'
-                            : 'text-slate-500 hover:bg-slate-200 hover:text-slate-700'
-                          }
-                        `}
-                        title={`Extract snippets from Exhibit ${category}`}
-                      >
-                        {isExtracting ? (
-                          <>
-                            <SpinnerIcon />
-                            <span>{extractState?.progress || 0}%</span>
-                          </>
-                        ) : (
-                          <ExtractIcon />
-                        )}
                       </button>
                     </div>
 
