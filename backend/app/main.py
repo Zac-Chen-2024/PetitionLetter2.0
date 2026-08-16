@@ -11,6 +11,7 @@ from app.core.workspace import WorkspaceMiddleware
 from app.routers.arguments import router as arguments_router
 from app.routers.documents import router as documents_router
 from app.routers.extraction import router as extraction_router
+from app.routers.logs import router as logs_router
 from app.routers.projects import router as projects_router
 from app.routers.writing import router as writing_router
 
@@ -61,6 +62,7 @@ app.include_router(writing_router)
 app.include_router(arguments_router)
 app.include_router(extraction_router)
 app.include_router(documents_router)
+app.include_router(logs_router)
 
 
 # Global exception handler for unified error responses.
@@ -92,7 +94,7 @@ def root():
         "version": "2.0.0",
         "routers": [
             "projects", "documents", "extraction",
-            "arguments", "writing-v3"
+            "arguments", "writing-v3", "logs"
         ]
     }
 

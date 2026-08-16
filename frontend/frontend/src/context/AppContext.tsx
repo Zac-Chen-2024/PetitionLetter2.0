@@ -21,6 +21,7 @@ import { useArguments } from './ArgumentsContext';
 import { useUI } from './UIContext';
 import { useWriting } from './WritingContext';
 import { AppProviders } from './ContextProviders';
+import { logInteraction } from '../services/interactionLogger';
 
 // Re-export types that were previously exported from this file
 // Now defined in ../types/index.ts
@@ -54,6 +55,7 @@ export function useApp() {
   // generateArguments: original signature is (forceReanalyze?, applicantName?) => Promise<void>
   // ArgumentsContext signature is (projectId, llmProvider, forceReanalyze?, applicantName?) => Promise<void>
   const generateArguments = useCallback(async (forceReanalyze?: boolean, applicantName?: string) => {
+    logInteraction('generate_trigger', 'header', { kind: 'arguments', force: !!forceReanalyze });
     return args.generateArguments(project.projectId, project.llmProvider, forceReanalyze, applicantName);
   }, [args.generateArguments, project.projectId, project.llmProvider]);
 
@@ -66,6 +68,10 @@ export function useApp() {
     const result = await args.addSubArgument(subArgumentData, project.projectId);
     // Mark parent argument's standard section as stale
     const parentArg = args.arguments.find(a => a.id === subArgumentData.argumentId);
+    logInteraction('node_create', 'tree', {
+      level: 'subargument', id: result.id, argument_id: subArgumentData.argumentId,
+      standard_key: parentArg?.standardKey ?? null, snippet_count: subArgumentData.snippetIds?.length ?? 0,
+    });
     if (parentArg?.standardKey) {
       writing.markSectionStale(parentArg.standardKey);
     }
@@ -80,6 +86,7 @@ export function useApp() {
 
     // Delete the sub-argument (backend + frontend state)
     args.removeSubArgument(id, project.projectId);
+    logInteraction('node_delete', 'tree', { level: 'subargument', id, standard_key: standardKey ?? null });
 
     // Mark section as stale (user manually clicks Regenerate)
     if (standardKey) {
@@ -89,11 +96,13 @@ export function useApp() {
 
   // Change cascade: bind projectId for commitChanges
   const commitChanges = useCallback(async (sectionId: string) => {
+    logInteraction('generate_trigger', 'letter', { kind: 'commit_changes', section_id: sectionId });
     return writing.commitChanges(sectionId, project.projectId);
   }, [writing.commitChanges, project.projectId]);
 
   // regenerateSubArgument: original signature takes (subArgumentId) => Promise<void>
   const regenerateSubArgument = useCallback(async (subArgumentId: string) => {
+    logInteraction('generate_trigger', 'tree', { kind: 'subargument', id: subArgumentId });
     return writing.regenerateSubArgumentInLetter(subArgumentId, project.projectId, project.llmProvider, args.subArguments, args.arguments);
   }, [writing.regenerateSubArgumentInLetter, project.projectId, project.llmProvider, args.subArguments, args.arguments]);
 
@@ -115,6 +124,10 @@ export function useApp() {
     }
 
     const result = await args.mergeSubArguments(subArgumentIds, title, purpose, relationship, project.projectId);
+    logInteraction('node_merge', 'tree', {
+      kind: 'merge_to_new_argument', source_ids: subArgumentIds, new_argument_id: result.newArgument.id,
+      standard_key: result.newArgument.standardKey ?? null,
+    });
 
     // Mark the new argument's standard as stale
     if (result.newArgument.standardKey) {
@@ -145,6 +158,9 @@ export function useApp() {
     }
 
     await args.moveSubArguments(subArgumentIds, targetArgumentId, project.projectId);
+    logInteraction('node_move', 'tree', {
+      ids: subArgumentIds, target_argument_id: targetArgumentId, source_standard_keys: [...sourceStandardKeys],
+    });
 
     // Mark target standard as stale
     const targetArg = args.arguments.find(a => a.id === targetArgumentId);
@@ -172,6 +188,9 @@ export function useApp() {
     }
 
     const result = await args.consolidateSubArguments(subArgumentIds, targetArgumentId, project.projectId, project.llmProvider);
+    logInteraction('node_merge', 'tree', {
+      kind: 'consolidate', source_ids: subArgumentIds, target_argument_id: targetArgumentId,
+    });
 
     // Mark target standard as stale
     const targetArg = args.arguments.find(a => a.id === targetArgumentId);
@@ -188,6 +207,7 @@ export function useApp() {
 
   // createArgument: facade binds projectId
   const createArgument = useCallback(async (standardKey: string) => {
+    logInteraction('node_create', 'tree', { level: 'argument', standard_key: standardKey });
     return args.createArgument(standardKey, project.projectId);
   }, [args.createArgument, project.projectId]);
 
@@ -196,6 +216,7 @@ export function useApp() {
     level: 'standard' | 'argument' | 'subargument',
     targetId: string
   ) => {
+    logInteraction('node_move', 'tree', { kind: 'to_overall_merits', level, id: targetId });
     return args.moveToOverallMerits(level, targetId, project.projectId);
   }, [args.moveToOverallMerits, project.projectId]);
 
@@ -208,17 +229,20 @@ export function useApp() {
 
   // rewriteStandard: re-generate letter section for a single standard
   const rewriteStandard = useCallback(async (standardKey: string) => {
+    logInteraction('generate_trigger', 'tree', { kind: 'rewrite_section', standard_key: standardKey });
     return writing.rewriteStandard(standardKey, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated);
   }, [writing.rewriteStandard, project.projectId, project.llmProvider, handleSubArgSnippetsUpdated]);
 
   // regenerateStandard: re-run the organizer for one standard; its letter section becomes stale
   const regenerateStandard = useCallback(async (standardKey: string) => {
+    logInteraction('generate_trigger', 'tree', { kind: 'regenerate_standard', standard_key: standardKey });
     await args.regenerateStandard(standardKey, project.projectId, project.llmProvider);
     writing.markSectionStale(standardKey);
   }, [args.regenerateStandard, project.projectId, project.llmProvider, writing.markSectionStale]);
 
   // removeStandard: delete all arguments/sub-args under a standard + remove letter section
   const removeStandard = useCallback(async (standardKey: string) => {
+    logInteraction('node_delete', 'tree', { level: 'standard', standard_key: standardKey });
     await args.removeStandard(standardKey, project.projectId);
     writing.setLetterSections(prev => prev.filter(s => s.standardId !== standardKey));
   }, [args.removeStandard, project.projectId, writing.setLetterSections]);
@@ -227,6 +251,7 @@ export function useApp() {
   // ArgumentsContext only removes from arguments + argumentMappings
   // We also need to remove from writingEdges
   const removeArgument = useCallback((id: string) => {
+    logInteraction('node_delete', 'tree', { level: 'argument', id });
     args.removeArgument(id);
     // Also remove writing edges connected to this argument
     writing.setWritingEdges(prev => prev.filter(e => e.source !== id && e.target !== id));
@@ -234,6 +259,7 @@ export function useApp() {
 
   // Pipeline operations: bind projectId and setters
   const generatePetition = useCallback(async () => {
+    logInteraction('generate_trigger', 'header', { kind: 'petition_all' });
     return writing.generatePetition(project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards);
   }, [writing.generatePetition, project.projectId, project.llmProvider, project.setPipelineState, args.arguments, handleSubArgSnippetsUpdated, project.legalStandards]);
 

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { interactionLogger } from '../services/interactionLogger';
 import type { LLMProvider, LegalStandard, PipelineState, ProjectType } from '../types';
 import { toLLMProvider } from '../types';
 import { apiClient } from '../services/api';
@@ -65,6 +66,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setLlmProviderState(provider);
     localStorage.setItem(STORAGE_KEY_LLM_PROVIDER, provider);
   }, []);
+
+  // Keep the interaction logger's project_id in sync
+  useEffect(() => {
+    interactionLogger.setProjectId(projectId || null);
+  }, [projectId]);
 
   // Load project info + standards when projectId changes
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { logInteraction } from '../services/interactionLogger';
 import { useApp } from '../context/AppContext';
 import { useLegalStandards } from '../hooks/useLegalStandards';
 import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
@@ -1404,6 +1405,9 @@ export function ArgumentGraph() {
 
     // Update title first (frontend state)
     updateSubArgument(subArgumentId, { title: newTitle });
+    logInteraction('node_rename', 'tree', {
+      level: 'subargument', id: subArgumentId, title_len: newTitle.length, prev_title_len: subArg.title?.length ?? 0,
+    });
 
     // Run both API calls in parallel: infer relationship + recommend snippets
     try {

@@ -15,6 +15,22 @@ import {
 } from './components';
 import { LetterPanel } from './components/LetterPanel';
 import { TokenGate } from './components/TokenGate';
+import { logInteraction, type PanelName } from './services/interactionLogger';
+
+// panel_focus: fired when the user's attention moves to a panel (pointer down
+// or keyboard focus inside it). Consecutive events for the same panel are
+// collapsed so the stream is a sequence of panel *switches* -- the raw
+// material for time-allocation analysis (Doc/01 M6).
+let lastFocusedPanel: PanelName | null = null;
+function panelFocusProps(panel: PanelName) {
+  const fire = () => {
+    if (lastFocusedPanel === panel) return;
+    const from = lastFocusedPanel;
+    lastFocusedPanel = panel;
+    logInteraction('panel_focus', panel, { from });
+  };
+  return { onPointerDownCapture: fire, onFocusCapture: fire };
+}
 
 // Error Boundary for debugging
 interface ErrorBoundaryState {
@@ -70,22 +86,22 @@ function MappingPage() {
               {/* Panel: Evidence Cards + PDF Preview (split vertically) */}
               <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden flex flex-col relative z-0">
                 {/* Top: Evidence Cards (50%) */}
-                <div className="h-1/2 border-b border-slate-200 overflow-hidden">
+                <div className="h-1/2 border-b border-slate-200 overflow-hidden" {...panelFocusProps('evidence')}>
                   <EvidenceCardPool />
                 </div>
                 {/* Bottom: PDF Preview (50%) */}
-                <div className="h-1/2 overflow-hidden">
+                <div className="h-1/2 overflow-hidden" {...panelFocusProps('pdf')}>
                   <DocumentViewer compact />
                 </div>
               </div>
 
               {/* Panel: Writing Tree (flex) — z-0 caps internal stacking below ConnectionLines z-40 */}
-              <div className="flex-1 bg-white overflow-hidden relative z-0">
+              <div className="flex-1 bg-white overflow-hidden relative z-0" {...panelFocusProps('tree')}>
                 <ArgumentGraph />
               </div>
 
               {/* Panel: Letter Panel (480px) */}
-              <div className="w-[480px] flex-shrink-0 border-l border-slate-200 overflow-hidden relative z-0">
+              <div className="w-[480px] flex-shrink-0 border-l border-slate-200 overflow-hidden relative z-0" {...panelFocusProps('letter')}>
                 <LetterPanel className="h-full" />
               </div>
             </>
@@ -96,12 +112,12 @@ function MappingPage() {
         return (
           <>
             {/* Panel 2: Evidence Cards (25%) */}
-            <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden relative z-0">
+            <div className="w-[25%] flex-shrink-0 border-r border-slate-200 overflow-hidden relative z-0" {...panelFocusProps('evidence')}>
               <EvidenceCardPool />
             </div>
 
             {/* Panel 3: Writing Tree (50%) */}
-            <div className="w-[50%] flex-shrink-0 bg-white overflow-hidden relative z-0">
+            <div className="w-[50%] flex-shrink-0 bg-white overflow-hidden relative z-0" {...panelFocusProps('tree')}>
               <ArgumentGraph />
             </div>
           </>
@@ -112,13 +128,15 @@ function MappingPage() {
   return (
     <div className="flex flex-col h-screen bg-slate-100">
       {/* Header */}
-      <Header />
+      <div className="flex-shrink-0" {...panelFocusProps('header')}>
+        <Header />
+      </div>
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Panel 1: Document Viewer (25%) - only in Verify mode */}
         {workMode === 'verify' && (
-          <div className="w-[25%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0 transition-all duration-300">
+          <div className="w-[25%] flex-shrink-0 border-r border-slate-200 bg-white overflow-hidden relative z-0 transition-all duration-300" {...panelFocusProps('pdf')}>
             <DocumentViewer />
           </div>
         )}

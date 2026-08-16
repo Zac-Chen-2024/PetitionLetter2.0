@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { logInteraction } from '../services/interactionLogger';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../context/AppContext';
 import type { LetterSection, SentenceWithProvenance } from '../types';
@@ -275,6 +276,10 @@ function LetterSectionComponent({
             key={`ex-${keyIdx++}`}
             onClick={(e) => {
               e.stopPropagation();
+              logInteraction('citation_click', 'letter', {
+                exhibit_id: ex.id, page: ex.page ?? null, section_id: section.id, sentence_idx: sentenceIdx,
+                subargument_id: sentence.subargument_id ?? null, snippet_ids: sentence.snippet_ids ?? [],
+              });
               onExhibitClick?.(ex.id, ex.page, sentence.subargument_id, sentence.snippet_ids, section.id, sentenceIdx);
             }}
             className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer font-medium"
@@ -297,6 +302,11 @@ function LetterSectionComponent({
   }, [onExhibitClick]);
 
   const handleSave = () => {
+    // Only lengths are logged, never the letter text itself.
+    logInteraction('letter_edit', 'letter', {
+      section_id: section.id, standard_key: section.standardId ?? null,
+      prev_len: section.content.length, new_len: editContent.length, delta: editContent.length - section.content.length,
+    });
     onEdit(section.id, editContent);
     setIsEditing(false);
   };

@@ -3,6 +3,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { useApp } from '../context/AppContext';
 import { apiClient, BACKEND_URL } from '../services/api';
 import { withToken } from '../services/auth';
+import { logThrottled } from '../services/interactionLogger';
 import type { Snippet, BoundingBox, MaterialType } from '../types';
 import { SnippetCreationModal } from './SnippetCreationModal';
 import { Magnifier } from './Magnifier';
@@ -100,6 +101,9 @@ function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pd
 
   const handleMouseEnter = () => {
     if (!ref.current) return;
+    logThrottled(`bbox:${snippet.id}`, 500, 'bbox_hover', 'pdf', {
+      snippet_id: snippet.id, exhibit_id: snippet.exhibitId ?? null, page: snippet.page ?? null,
+    });
     setIsLeaving(false);
     setLightbox({ originRect: ref.current.getBoundingClientRect() });
   };
@@ -340,6 +344,13 @@ function PDFViewer({
       <div
         ref={containerRef}
         className="flex-1 overflow-auto bg-slate-300"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const ratio = el.scrollHeight > el.clientHeight ? el.scrollTop / (el.scrollHeight - el.clientHeight) : 0;
+          logThrottled(`pdf-scroll:${exhibitId}`, 1000, 'pdf_scroll', 'pdf', {
+            exhibit_id: exhibitId, scroll_ratio: Math.round(ratio * 1000) / 1000, num_pages: numPages,
+          });
+        }}
       >
         {/* 放大镜组件 */}
         <Magnifier containerRef={containerRef} zoom={2} size={200} enabled={magnifierEnabled} />

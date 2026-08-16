@@ -4,7 +4,7 @@
 
 export { default as apiClient, ApiError } from './api';
 export { default as projectService } from './projectService';
-export { interactionLogger, logInteraction } from './interactionLogger';
+export { interactionLogger, logInteraction, logThrottled } from './interactionLogger';
 
 // 类型导出
 export type { Project } from './projectService';

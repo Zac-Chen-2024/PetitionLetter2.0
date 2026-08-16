@@ -7,6 +7,7 @@ import { useLegalStandards } from '../hooks/useLegalStandards';
 import type { Snippet } from '../types';
 import { getStandardKeyColor, STANDARD_KEY_TO_ID } from '../constants/colors';
 import apiClient from '../services/api';
+import { logInteraction } from '../services/interactionLogger';
 
 // Default color for unassigned snippets
 const DEFAULT_SNIPPET_COLOR = '#94a3b8';  // slate-400
@@ -560,6 +561,18 @@ export function EvidenceCardPool() {
     if (!focusedSubArgument || !projectId) return;
 
     const snippetIds = Array.from(selectedSnippetsForEdit);
+
+    // Log the diff against what the SubArgument had before this edit
+    const before = new Set(focusedSubArgument.snippetIds || []);
+    const after = new Set(snippetIds);
+    const added = snippetIds.filter(id => !before.has(id));
+    const removed = [...before].filter(id => !after.has(id));
+    if (added.length) {
+      logInteraction('snippet_assign', 'evidence', { subargument_id: focusedSubArgument.id, snippet_ids: added, total_after: snippetIds.length });
+    }
+    if (removed.length) {
+      logInteraction('snippet_unassign', 'evidence', { subargument_id: focusedSubArgument.id, snippet_ids: removed, total_after: snippetIds.length });
+    }
 
     // Update local state first for immediate UI feedback
     updateSubArgument(focusedSubArgument.id, {
