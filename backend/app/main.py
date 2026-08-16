@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.errors import AppError
 from app.core.workspace import WorkspaceMiddleware
 from app.routers.arguments import router as arguments_router
 from app.routers.documents import router as documents_router
@@ -29,7 +30,11 @@ logger = logging.getLogger("app")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    logger.info("EB-1A Petition API starting (provider=%s)", settings.llm_provider)
+    # Fail fast on missing LLM credentials (skipped under pytest, which never
+    # calls the network; see conftest / SKIP_LLM_CONFIG_CHECK).
+    if not settings.skip_llm_config_check:
+        settings.validate_llm_config()
+    logger.info("EB-1A Petition API starting (provider=%s, auth_disabled=%s)", settings.llm_provider, settings.auth_disabled)
     yield
     logger.info("EB-1A Petition API shutting down")
 
@@ -63,6 +68,15 @@ app.include_router(arguments_router)
 app.include_router(extraction_router)
 app.include_router(documents_router)
 app.include_router(logs_router)
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    """AppError subclasses carry a client-safe message and a status code."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "error": exc.message, "detail": None},
+    )
 
 
 # Global exception handler for unified error responses.

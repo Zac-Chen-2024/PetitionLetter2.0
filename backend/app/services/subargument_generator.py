@@ -11,12 +11,15 @@ SubArgument Generator - 次级子论点生成器
 """
 
 import asyncio
+import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 from .llm_client import call_llm
+
+logger = logging.getLogger(__name__)
 
 # ==================== Prompt Templates ====================
 
@@ -236,7 +239,7 @@ async def subdivide_argument(
 
         raw_sub_args = result.get('sub_arguments', [])
         if not raw_sub_args:
-            print(f"[SubArgGenerator] LLM returned no sub-arguments for {argument_title}, using fallback")
+            logger.warning(f"[SubArgGenerator] LLM returned no sub-arguments for {argument_title}, using fallback")
             return [_create_single_subarg(argument_id, snippets, standard)]
 
         # Convert to GeneratedSubArgument
@@ -289,11 +292,11 @@ async def subdivide_argument(
             )
             sub_arguments.append(catch_all)
 
-        print(f"[SubArgGenerator] Subdivided '{argument_title}': {len(sub_arguments)} sub-arguments from {len(snippets)} snippets")
+        logger.info(f"[SubArgGenerator] Subdivided '{argument_title}': {len(sub_arguments)} sub-arguments from {len(snippets)} snippets")
         return sub_arguments
 
     except Exception as e:
-        print(f"[SubArgGenerator] Error subdividing {argument_title}: {e}")
+        logger.warning(f"[SubArgGenerator] Error subdividing {argument_title}: {e}")
         return [_create_single_subarg(argument_id, snippets, standard)]
 
 
@@ -403,5 +406,5 @@ async def generate_sub_arguments_for_composed(
             # Rate limiting
             await asyncio.sleep(0.2)
 
-    print(f"[SubArgGenerator] Generated {len(all_sub_arguments)} sub-arguments for {len(updated_arguments)} arguments")
+    logger.info(f"[SubArgGenerator] Generated {len(all_sub_arguments)} sub-arguments for {len(updated_arguments)} arguments")
     return updated_arguments, all_sub_arguments

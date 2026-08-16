@@ -13,6 +13,7 @@ from typing import Dict, Optional
 import httpx
 
 from ..core.config import settings
+from ..core.errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ async def _call_api(
     api_base = api_base.rstrip("/")
 
     if not api_key:
-        raise ValueError(
+        raise ConfigError(
             f"{provider.capitalize()} API key not configured. "
             f"Set {provider.upper()}_API_KEY in .env"
         )

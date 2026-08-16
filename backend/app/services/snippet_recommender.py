@@ -6,6 +6,7 @@ Snippet Recommender - 根据标题/描述为新 SubArgument 推荐相关 Snippet
 2. LLM 精排：语义相关性评分
 """
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -14,6 +15,8 @@ from ..core.atomic_io import read_json, update_json, write_json
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .storage import project_path
+
+logger = logging.getLogger(__name__)
 
 # ==================== 数据加载 ====================
 
@@ -311,7 +314,7 @@ Consider how well each snippet supports or provides evidence for this specific s
         return enriched_results
 
     except Exception as e:
-        print(f"LLM ranking failed: {e}")
+        logger.warning(f"LLM ranking failed: {e}")
         # 降级：返回前 N 个候选（无排序）
         return [
             {
@@ -677,7 +680,7 @@ What is the relationship? (2-5 words)"""
         return relationship
 
     except Exception as e:
-        print(f"Infer relationship failed: {e}")
+        logger.warning(f"Infer relationship failed: {e}")
         return "Supports main argument"  # 降级默认值
 
 
@@ -784,7 +787,7 @@ Generate a consolidated title, purpose, and relationship for the merged sub-argu
         new_purpose = result.get("purpose", "")
         new_relationship = result.get("relationship", "Combined evidence")
     except Exception as e:
-        print(f"LLM consolidation failed: {e}")
+        logger.warning(f"LLM consolidation failed: {e}")
         # Fallback: use title from the sub-arg with most snippets
         best = max(source_subargs, key=lambda sa: len(sa.get("snippet_ids", [])))
         new_title = best.get("title", "Consolidated sub-argument")
@@ -889,5 +892,5 @@ Generate a concise title for this argument group:"""
             return current_title or "Untitled Argument"
         return title
     except Exception as e:
-        print(f"Infer argument title failed: {e}")
+        logger.warning(f"Infer argument title failed: {e}")
         return current_title or "Untitled Argument"

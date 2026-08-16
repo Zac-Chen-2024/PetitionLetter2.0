@@ -59,7 +59,7 @@ python -m uvicorn app.main:app --reload --port 8000
 ##### Frontend (New Terminal)
 
 ```bash
-cd frontend/frontend
+cd frontend
 
 # Install dependencies
 npm install
@@ -92,11 +92,14 @@ PetitionLetter2.0/
 │   │   │   ├── snippet_recommender.py
 │   │   │   └── llm_client.py
 │   │   └── main.py
-│   ├── data/projects/         # Project data (auto-created)
-│   ├── requirements.txt
+│   ├── core/              # config, ids, atomic_io, workspace, errors
+│   ├── data/                  # workspaces/<ws>/projects/…, logs, traces (auto-created)
+│   ├── scripts/               # mint_token.py, migrate_to_workspaces.py, backup_data.sh, logs_summary.py
+│   ├── tests/                 # pytest suite (run: pytest -q)
+│   ├── requirements.txt / requirements-dev.txt
 │   └── .env.example
 │
-└── frontend/frontend/
+└── frontend/
     ├── src/
     │   ├── components/
     │   │   ├── ArgumentGraph.tsx      # Writing Tree
@@ -138,8 +141,8 @@ PDF Documents → OCR → Evidence Extraction → Argument Organization → Lett
 
 | Layer | Technology |
 |-------|------------|
-| **Backend** | FastAPI, Pydantic, PyMuPDF |
-| **Frontend** | React 18, TypeScript, Tailwind CSS, Vite |
+| **Backend** | FastAPI, Pydantic v2, portalocker |
+| **Frontend** | React 19, TypeScript, Tailwind CSS 4, Vite 7 |
 | **LLM** | DeepSeek API / OpenAI API |
 
 ### API Endpoints
@@ -155,16 +158,43 @@ PDF Documents → OCR → Evidence Extraction → Argument Organization → Lett
 
 ### Environment Variables
 
-Create `backend/.env`:
+Copy `backend/.env.example` to `backend/.env`; every key is documented there. The important ones:
 
 ```env
-# Required: At least one LLM provider
+LLM_PROVIDER=deepseek          # default provider; its key must be set or the server refuses to start
 DEEPSEEK_API_KEY=sk-xxx
 OPENAI_API_KEY=sk-xxx
-
-# Optional
-LLM_PROVIDER=deepseek  # or "openai"
+AUTH_DISABLED=true             # local dev. Set false on a server and mint tokens (below)
+CORS_ORIGINS=http://localhost:5173
 ```
+
+### Workspaces (multi-user deployment)
+
+One bearer token == one workspace == one participant. Projects, logs and jobs are stored under
+`backend/data/workspaces/<workspace>/`. With `AUTH_DISABLED=false`:
+
+```bash
+cd backend
+python scripts/mint_token.py --label P07        # prints a token; give the participant http://host/?token=<token>
+python scripts/mint_token.py --list
+```
+
+Existing data from before workspaces: `python scripts/migrate_to_workspaces.py --dry-run` then without `--dry-run`
+(makes a tar.gz backup first).
+
+### Backups
+
+`backend/scripts/backup_data.sh <DATA_DIR> <DEST>` tars `data/` (minus lock files / LLM cache) and copies or rsyncs it
+to `DEST`; wire it into cron daily (example inside the script).
+
+### Development
+
+```bash
+cd backend && pip install -r requirements-dev.txt && ruff check app tests scripts && pytest -q
+cd frontend && npm ci && npx tsc -b && npx eslint . && npm run build
+```
+
+CI (`.github/workflows/ci.yml`) runs exactly these on every push.
 
 ---
 
@@ -219,7 +249,7 @@ python -m uvicorn app.main:app --reload --port 8000
 
 ##### 前端（新开终端）
 ```bash
-cd frontend/frontend
+cd frontend
 npm install
 npm run dev
 ```
@@ -252,7 +282,7 @@ PetitionLetter2.0/
 │   ├── requirements.txt
 │   └── .env.example
 │
-└── frontend/frontend/         # 前端
+└── frontend/         # 前端
     ├── src/
     │   ├── components/
     │   │   ├── ArgumentGraph.tsx      # Writing Tree（论点图）
@@ -294,8 +324,8 @@ PDF 文档 → OCR 识别 → 证据提取 → 论点组织 → 文书生成
 
 | 层级 | 技术 |
 |------|------|
-| **后端** | FastAPI, Pydantic, PyMuPDF |
-| **前端** | React 18, TypeScript, Tailwind CSS, Vite |
+| **后端** | FastAPI, Pydantic v2, portalocker |
+| **前端** | React 19, TypeScript, Tailwind CSS 4, Vite 7 |
 | **LLM** | DeepSeek API / OpenAI API |
 
 ### 主要 API 端点

@@ -49,3 +49,11 @@ def victim_project(projects_root):
         encoding="utf-8",
     )
     return "victim"
+
+
+@pytest.fixture(autouse=True)
+def _skip_llm_config_check(monkeypatch):
+    """Tests never call an LLM; do not fail startup on missing keys."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "skip_llm_config_check", True)

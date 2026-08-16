@@ -60,10 +60,10 @@ xcopy /E /I /Q "%ROOT%\backend\app"  "%DIST%\backend\app"  >nul
 copy /Y "%ROOT%\backend\.env" "%DIST%\backend\.env" >nul 2>nul
 
 REM Copy only selected project data (4 demo cases)
-xcopy /E /I /Q "%ROOT%\backend\data\projects\yaruo_qu"    "%DIST%\backend\data\projects\yaruo_qu"    >nul
-xcopy /E /I /Q "%ROOT%\backend\data\projects\dehuan_liu"   "%DIST%\backend\data\projects\dehuan_liu"   >nul
-xcopy /E /I /Q "%ROOT%\backend\data\projects\chen_zhen"    "%DIST%\backend\data\projects\chen_zhen"    >nul
-xcopy /E /I /Q "%ROOT%\backend\data\projects\liu_donglan"  "%DIST%\backend\data\projects\liu_donglan"  >nul
+xcopy /E /I /Q "%ROOT%\backend\data\workspaces\default\projects\yaruo_qu"    "%DIST%\backend\data\workspaces\default\projects\yaruo_qu"    >nul
+xcopy /E /I /Q "%ROOT%\backend\data\workspaces\default\projects\dehuan_liu"   "%DIST%\backend\data\workspaces\default\projects\dehuan_liu"   >nul
+xcopy /E /I /Q "%ROOT%\backend\data\workspaces\default\projects\chen_zhen"    "%DIST%\backend\data\workspaces\default\projects\chen_zhen"    >nul
+xcopy /E /I /Q "%ROOT%\backend\data\workspaces\default\projects\liu_donglan"  "%DIST%\backend\data\workspaces\default\projects\liu_donglan"  >nul
 
 echo [6/7] Copying data (PDFs + OCR)...
 xcopy /E /I /Q "%ROOT%\data\eb1a" "%DIST%\data\eb1a" >nul

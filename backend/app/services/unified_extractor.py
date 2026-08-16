@@ -16,6 +16,7 @@ Unified Extractor - 统一的 Snippets + Entities + Relations 提取服务
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ from ..core.config import settings
 from .llm_client import call_llm
 from .snippet_registry import build_registry_from_combined_extraction
 from .storage import project_path
+
+logger = logging.getLogger(__name__)
 
 # 数据目录
 
@@ -1234,10 +1237,10 @@ Return JSON:
                     matched[idx] = block_id
                 except (ValueError, IndexError):
                     pass
-        print(f"[BlockVerify] {exhibit_id}: LLM matched {len(matched)}/{len(unmatched_snippets)} snippets")
+        logger.info(f"[BlockVerify] {exhibit_id}: LLM matched {len(matched)}/{len(unmatched_snippets)} snippets")
         return matched
     except Exception as e:
-        print(f"[BlockVerify] {exhibit_id}: LLM matching failed: {e}")
+        logger.warning(f"[BlockVerify] {exhibit_id}: LLM matching failed: {e}")
         return {}
 
 
@@ -1333,8 +1336,7 @@ async def extract_exhibit_unified(
             "exhibit_id": exhibit_id
         }
 
-    print(f"[UnifiedExtractor] Processing exhibit {exhibit_id} ({len(pages)} pages)...")
-
+    logger.info(f"[UnifiedExtractor] Processing exhibit {exhibit_id} ({len(pages)} pages)...")
     # 2. 格式化 blocks
     blocks_text, block_map = format_blocks_for_llm(pages)
 
@@ -1372,8 +1374,7 @@ async def extract_exhibit_unified(
         extraction_schema = UNIFIED_EXTRACTION_SCHEMA
 
     # 4. 调用 LLM
-    print(f"[UnifiedExtractor] Calling LLM ({provider}) for {exhibit_id} (project_type={project_type})...")
-
+    logger.info(f"[UnifiedExtractor] Calling LLM ({provider}) for {exhibit_id} (project_type={project_type})...")
     try:
         result = await call_llm(
             prompt=user_prompt,
@@ -1384,7 +1385,7 @@ async def extract_exhibit_unified(
             max_tokens=8000   # DeepSeek 限制 8192，使用 8000 留余量
         )
     except Exception as e:
-        print(f"[UnifiedExtractor] LLM error for {exhibit_id}: {e}")
+        logger.warning(f"[UnifiedExtractor] LLM error for {exhibit_id}: {e}")
         return {
             "success": False,
             "error": str(e),
@@ -1517,7 +1518,7 @@ async def extract_exhibit_unified(
             )
             if length_mismatch or content_mismatch:
                 reason = "length" if length_mismatch else "content"
-                print(f"[BlockVerify] {exhibit_id}: snippet text ({len(snippet_text)} chars) vs block {composite_id} ({len(block_text)} chars) {reason} mismatch, searching correct block...")
+                logger.info(f"[BlockVerify] {exhibit_id}: snippet text ({len(snippet_text)} chars) vs block {composite_id} ({len(block_text)} chars) {reason} mismatch, searching correct block...")
                 page_block = None  # 触发 Layer 2
 
         # Layer 2: 文本匹配 — 在所有 block 中搜索包含 snippet 文本的 block
@@ -1547,8 +1548,7 @@ async def extract_exhibit_unified(
             if best_match:
                 page_block = block_map[best_match]
                 composite_id = best_match
-                print(f"[BlockVerify] {exhibit_id}: text-matched to {best_match}")
-
+                logger.info(f"[BlockVerify] {exhibit_id}: text-matched to {best_match}")
         # Layer 3: 收集无法文本匹配的 snippet，等待批量 LLM 匹配
         if not page_block:
             pending_llm_match.append({
@@ -1564,7 +1564,7 @@ async def extract_exhibit_unified(
 
     # ── Layer 3: 批量 LLM 匹配 ──────────────────────────────────
     if pending_llm_match:
-        print(f"[BlockVerify] {exhibit_id}: {len(pending_llm_match)} snippets need LLM matching...")
+        logger.info(f"[BlockVerify] {exhibit_id}: {len(pending_llm_match)} snippets need LLM matching...")
         llm_results = await _llm_match_blocks(
             pending_llm_match, block_map, exhibit_id, provider
         )
@@ -1577,8 +1577,7 @@ async def extract_exhibit_unified(
                 if built:
                     processed_snippets.append(built)
             else:
-                print(f"[BlockVerify] {exhibit_id}: LLM could not match snippet (text: '{pending['text'][:60]}...'), skipping")
-
+                logger.info(f"[BlockVerify] {exhibit_id}: LLM could not match snippet (text: '{pending['text'][:60]}...'), skipping")
     # 7. 处理 entities - 添加 ID
     processed_entities = []
     for idx, item in enumerate(raw_entities):
@@ -1638,8 +1637,7 @@ async def extract_exhibit_unified(
     extraction_file = extraction_dir / f"{exhibit_id}_extraction.json"
     write_json(extraction_file, extraction_result)
 
-    print(f"[UnifiedExtractor] {exhibit_id}: {len(processed_snippets)} snippets, {len(processed_entities)} entities, {len(processed_relations)} relations")
-
+    logger.info(f"[UnifiedExtractor] {exhibit_id}: {len(processed_snippets)} snippets, {len(processed_entities)} entities, {len(processed_relations)} relations")
     return {
         "success": True,
         "exhibit_id": exhibit_id,
@@ -1678,8 +1676,7 @@ async def extract_all_unified(
     exhibit_files = list(documents_dir.glob("*.json"))
     total_exhibits = len(exhibit_files)
 
-    print(f"[UnifiedExtractor] Starting extraction for {total_exhibits} exhibits, applicant: {applicant_name}")
-
+    logger.info(f"[UnifiedExtractor] Starting extraction for {total_exhibits} exhibits, applicant: {applicant_name}")
     all_snippets = []
     all_entities = []
     all_relations = []
@@ -1710,10 +1707,10 @@ async def extract_all_unified(
                 return exhibit_id, result
             except Exception as e:
                 completed_count += 1
-                print(f"[UnifiedExtractor] Exception extracting {exhibit_id}: {e}")
+                logger.info(f"[UnifiedExtractor] Exception extracting {exhibit_id}: {e}")
                 return exhibit_id, {"success": False, "error": str(e)}
 
-    print(f"[UnifiedExtractor] Extracting {total_exhibits} exhibits with concurrency={CONCURRENCY}...")
+    logger.info(f"[UnifiedExtractor] Extracting {total_exhibits} exhibits with concurrency={CONCURRENCY}...")
     tasks = [_extract_one(ef) for ef in exhibit_files]
     results = await asyncio.gather(*tasks)
 
@@ -1730,8 +1727,7 @@ async def extract_all_unified(
                 all_relations.extend(extraction_data.get("relations", []))
         else:
             failed += 1
-            print(f"[UnifiedExtractor] Failed {exhibit_id}: {result.get('error')}")
-
+            logger.warning(f"[UnifiedExtractor] Failed {exhibit_id}: {result.get('error')}")
     if progress_callback:
         progress_callback(total_exhibits, total_exhibits, "Saving combined results...")
 
@@ -1781,8 +1777,7 @@ async def extract_all_unified(
 
     write_json(snippets_file, snippets_data)
 
-    print(f"[UnifiedExtractor] Complete: {successful}/{total_exhibits} exhibits, {len(all_snippets)} snippets, {len(all_entities)} entities")
-
+    logger.info(f"[UnifiedExtractor] Complete: {successful}/{total_exhibits} exhibits, {len(all_snippets)} snippets, {len(all_entities)} entities")
     return {
         "success": True,
         "exhibit_count": total_exhibits,

@@ -10,6 +10,7 @@ Legal Argument Organizer - LLM + 法律条例驱动的子论点组织器
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from typing import Any, Dict, List, Tuple
 from ..core.atomic_io import write_json
 from .llm_client import call_llm
 from .storage import project_path
+
+logger = logging.getLogger(__name__)
 
 # ==================== EB-1A 法律条例定义 ====================
 
@@ -796,8 +799,7 @@ async def organize_arguments_with_legal_framework(
     Returns:
         (arguments, filtered_snippets)
     """
-    print(f"[LegalOrganizer] Organizing {len(snippets)} snippets with {project_type} legal framework...")
-
+    logger.info(f"[LegalOrganizer] Organizing {len(snippets)} snippets with {project_type} legal framework...")
     # Select standards and prompts based on project type
     if project_type == "NIW":
         legal_stds = NIW_LEGAL_STANDARDS
@@ -862,9 +864,8 @@ async def organize_arguments_with_legal_framework(
         filtered_out = result.get('filtered_out', [])
         summary = result.get('summary', {})
 
-        print(f"[LegalOrganizer] LLM organized into {len(raw_arguments)} arguments")
-        print(f"[LegalOrganizer] Summary: {summary}")
-
+        logger.info(f"[LegalOrganizer] LLM organized into {len(raw_arguments)} arguments")
+        logger.info(f"[LegalOrganizer] Summary: {summary}")
         # 转换为 LegalArgument
         arguments = []
         for raw_arg in raw_arguments:
@@ -893,17 +894,16 @@ async def organize_arguments_with_legal_framework(
             covered_standards.add(canonical)
             covered_standards.add(arg.standard)  # also add the raw form
 
-        print(f"[LegalOrganizer] Covered standards: {covered_standards}")
+        logger.info(f"[LegalOrganizer] Covered standards: {covered_standards}")
         stds_with_evidence = [k for k, v in snippets_by_std.items() if v]
-        print(f"[LegalOrganizer] Standards with evidence: {stds_with_evidence}")
-
+        logger.info(f"[LegalOrganizer] Standards with evidence: {stds_with_evidence}")
         arg_counter = len(arguments)
         for std_key, std_snippets in snippets_by_std.items():
             if not std_snippets:
                 continue
             if std_key in covered_standards:
                 continue
-            print(f"[LegalOrganizer] FALLBACK: '{std_key}' has {len(std_snippets)} snippets but no LLM argument")
+            logger.warning(f"[LegalOrganizer] FALLBACK: '{std_key}' has {len(std_snippets)} snippets but no LLM argument")
             # This standard has evidence but no LLM argument — create a fallback
             arg_counter += 1
             std_info = legal_stds.get(std_key, {})
@@ -918,12 +918,11 @@ async def organize_arguments_with_legal_framework(
                 subject=applicant_name,
             )
             arguments.append(fallback_arg)
-            print(f"[LegalOrganizer] Added fallback argument for '{std_key}' with {len(snippet_ids)} snippets")
-
+            logger.warning(f"[LegalOrganizer] Added fallback argument for '{std_key}' with {len(snippet_ids)} snippets")
         return arguments, filtered_out
 
     except Exception as e:
-        print(f"[LegalOrganizer] Error: {e}")
+        logger.warning(f"[LegalOrganizer] Error: {e}")
         raise
 
 
@@ -1372,10 +1371,9 @@ Select snippets relevant to "{standard_info.get('name', standard_key)}" followin
                     if ids:
                         chains_data[chain_label] = ids
                 if chains_data:
-                    print(f"[TopDown] {standard_key}: recovered {len(chains_data)} chains from truncated response")
+                    logger.info(f"[TopDown] {standard_key}: recovered {len(chains_data)} chains from truncated response")
             except Exception as recover_err:
-                print(f"[TopDown] {standard_key}: recovery failed: {recover_err}")
-
+                logger.warning(f"[TopDown] {standard_key}: recovery failed: {recover_err}")
         selected_snippets = []
         for chain_label, snippet_ids in chains_data.items():
             for sid in snippet_ids:
@@ -1385,12 +1383,12 @@ Select snippets relevant to "{standard_info.get('name', standard_key)}" followin
                     snp_copy['_topdown_relevance'] = 'direct'
                     selected_snippets.append(snp_copy)
 
-        print(f"[TopDown] {standard_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+        logger.info(f"[TopDown] {standard_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
               f"{len(chains_data)} chains")
         return selected_snippets
 
     except Exception as e:
-        print(f"[TopDown] Error for {standard_key}: {e}, falling back to bottom-up mapping")
+        logger.warning(f"[TopDown] Error for {standard_key}: {e}, falling back to bottom-up mapping")
         return []  # caller handles fallback
 
 
@@ -1416,7 +1414,7 @@ async def _group_snippets_by_standard_topdown(
     # 使用全量 snippet
     _STANDARDS_NEED_ALL_SNIPPETS = {"leading_role", "display"}
 
-    print(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
+    logger.info(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
           f"with {len(applicant_snippets)} applicant snippets "
           f"(+{len(snippets) - len(applicant_snippets)} non-applicant for org-reputation standards)")
 
@@ -1437,7 +1435,7 @@ async def _group_snippets_by_standard_topdown(
 
     for std_key, result in zip(std_keys, results):
         if isinstance(result, Exception):
-            print(f"[TopDown] {std_key} FAILED: {result}")
+            logger.warning(f"[TopDown] {std_key} FAILED: {result}")
             raise RuntimeError(f"Top-down pickup failed for {std_key}: {result}")
         grouped[std_key] = result
 
@@ -1448,7 +1446,7 @@ async def _group_snippets_by_standard_topdown(
             chains = set(s.get('_topdown_chain', '') for s in snps)
             chains.discard('')
             chain_info = f", chains: {chains}" if chains else ""
-            print(f"[TopDown] {std_key}: {len(snps)} snippets{chain_info}")
+            logger.info(f"[TopDown] {std_key}: {len(snps)} snippets{chain_info}")
             pickup_report[std_key] = {
                 "count": len(snps),
                 "chains": sorted(chains),
@@ -1478,10 +1476,9 @@ async def _group_snippets_by_standard_topdown(
                 "standards_count": len(legal_stds),
                 "pickup_by_standard": pickup_report,
             })
-            print(f"[TopDown] Saved pickup results to {pickup_file}")
+            logger.info(f"[TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
-            print(f"[TopDown] Warning: could not save pickup results: {e}")
-
+            logger.warning(f"[TopDown] Warning: could not save pickup results: {e}")
     return grouped
 
 
@@ -1649,10 +1646,9 @@ Select snippets relevant to "{prong_info.get('name', prong_key)}" following the 
                     if ids:
                         chains_data[chain_label] = ids
                 if chains_data:
-                    print(f"[NIW-TopDown] {prong_key}: recovered {len(chains_data)} chains from truncated response")
+                    logger.info(f"[NIW-TopDown] {prong_key}: recovered {len(chains_data)} chains from truncated response")
             except Exception as recover_err:
-                print(f"[NIW-TopDown] {prong_key}: recovery failed: {recover_err}")
-
+                logger.warning(f"[NIW-TopDown] {prong_key}: recovery failed: {recover_err}")
         selected_snippets = []
         for chain_label, snippet_ids in chains_data.items():
             for sid in snippet_ids:
@@ -1662,12 +1658,12 @@ Select snippets relevant to "{prong_info.get('name', prong_key)}" following the 
                     snp_copy['_topdown_relevance'] = 'direct'
                     selected_snippets.append(snp_copy)
 
-        print(f"[NIW-TopDown] {prong_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+        logger.info(f"[NIW-TopDown] {prong_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
               f"{len(chains_data)} chains")
         return selected_snippets
 
     except Exception as e:
-        print(f"[NIW-TopDown] Error for {prong_key}: {e}")
+        logger.warning(f"[NIW-TopDown] Error for {prong_key}: {e}")
         return []  # caller handles fallback
 
 
@@ -1684,13 +1680,13 @@ async def _niw_group_snippets_by_prong_topdown(
 
     Returns {prong_key: [selected_snippets]}.
     """
-    print(f"[NIW-TopDown] Starting top-down pickup for 3 Dhanasar prongs "
+    logger.info(f"[NIW-TopDown] Starting top-down pickup for 3 Dhanasar prongs "
           f"with {len(snippets)} total snippets")
 
     grouped = {prong: [] for prong in NIW_LEGAL_STANDARDS.keys()}
 
     # Phase 1: Prong 1 & Prong 2 in parallel
-    print("[NIW-TopDown] Phase 1: Prong 1 & 2 in parallel...")
+    logger.info("[NIW-TopDown] Phase 1: Prong 1 & 2 in parallel...")
     p1_info = NIW_LEGAL_STANDARDS["prong1_merit"]
     p2_info = NIW_LEGAL_STANDARDS["prong2_positioned"]
     p1_task = _niw_topdown_pickup_for_prong("prong1_merit", p1_info, snippets, provider)
@@ -1700,12 +1696,12 @@ async def _niw_group_snippets_by_prong_topdown(
 
     for prong_key, result in zip(["prong1_merit", "prong2_positioned"], results_12):
         if isinstance(result, Exception):
-            print(f"[NIW-TopDown] {prong_key} FAILED: {result}")
+            logger.warning(f"[NIW-TopDown] {prong_key} FAILED: {result}")
             raise RuntimeError(f"NIW top-down pickup failed for {prong_key}: {result}")
         grouped[prong_key] = result
 
     # Phase 2: Build cross-prong context from Prong 1/2 results for Prong 3
-    print("[NIW-TopDown] Phase 2: Prong 3 with Prong 1/2 context...")
+    logger.info("[NIW-TopDown] Phase 2: Prong 3 with Prong 1/2 context...")
     cross_prong_lines = []
     for pk in ["prong1_merit", "prong2_positioned"]:
         snps = grouped[pk]
@@ -1742,7 +1738,7 @@ async def _niw_group_snippets_by_prong_topdown(
             chains = set(s.get('_topdown_chain', '') for s in snps)
             chains.discard('')
             chain_info = f", chains: {sorted(chains)}" if chains else ""
-            print(f"[NIW-TopDown] {prong_key}: {len(snps)} snippets{chain_info}")
+            logger.info(f"[NIW-TopDown] {prong_key}: {len(snps)} snippets{chain_info}")
             pickup_report[prong_key] = {
                 "count": len(snps),
                 "chains": sorted(chains),
@@ -1760,10 +1756,9 @@ async def _niw_group_snippets_by_prong_topdown(
                 "prongs_count": len(NIW_LEGAL_STANDARDS),
                 "pickup_by_prong": pickup_report,
             })
-            print(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
+            logger.info(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
-            print(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
-
+            logger.warning(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
     return grouped
 
 
@@ -1879,11 +1874,11 @@ async def niw_classify_other_snippets(
                 else:
                     result_map[sid] = 'prong2_positioned'  # default fallback
 
-            print(f"[NIW-v2] Classified batch {batch_start//batch_size + 1}: "
+            logger.info(f"[NIW-v2] Classified batch {batch_start//batch_size + 1}: "
                   f"{len(classifications)} snippets")
 
         except Exception as e:
-            print(f"[NIW-v2] Error classifying other snippets batch: {e}")
+            logger.warning(f"[NIW-v2] Error classifying other snippets batch: {e}")
             # Fallback: assign all to prong2
             for snp in batch:
                 sid = snp.get('snippet_id', snp.get('id', ''))
@@ -1896,8 +1891,7 @@ async def niw_classify_other_snippets(
     prong_counts = {}
     for prong in result_map.values():
         prong_counts[prong] = prong_counts.get(prong, 0) + 1
-    print(f"[NIW-v2] Other snippet classification: {prong_counts}")
-
+    logger.info(f"[NIW-v2] Other snippet classification: {prong_counts}")
     return result_map
 
 
@@ -1982,7 +1976,7 @@ async def niw_organize_per_prong(
             sub_argument_ids=[sa["id"] for sa in sub_arguments],
             subject=applicant_name,
         )
-        print(f"[NIW-v2] Prong3 template: {len(sub_arguments)} sub-args "
+        logger.info(f"[NIW-v2] Prong3 template: {len(sub_arguments)} sub-args "
               f"(snippet count {len(prong_snippets)} <= 3, using legal components)")
         return argument, sub_arguments
 
@@ -2034,8 +2028,7 @@ async def niw_organize_per_prong(
         )
 
         raw_sub_args = result.get('sub_arguments', [])
-        print(f"[NIW-v2] Prong {prong_key}: LLM returned {len(raw_sub_args)} sub-arguments")
-
+        logger.info(f"[NIW-v2] Prong {prong_key}: LLM returned {len(raw_sub_args)} sub-arguments")
         if not raw_sub_args:
             # Fallback: single sub-argument with all snippets
             raw_sub_args = [{
@@ -2074,8 +2067,7 @@ async def niw_organize_per_prong(
                      "relationship": single.get('relationship', f'Supports {prong_name}'),
                      "snippet_ids": all_sids[mid:]},
                 ]
-            print(f"[NIW-v2] Prong {prong_key}: forced split from 1 → {len(raw_sub_args)} sub-args (minimum floor)")
-
+            logger.info(f"[NIW-v2] Prong {prong_key}: forced split from 1 → {len(raw_sub_args)} sub-args (minimum floor)")
         # Convert sub-arguments, mapping simple IDs back to real IDs
         sub_arguments = []
         all_assigned_real_ids = set()
@@ -2112,7 +2104,7 @@ async def niw_organize_per_prong(
         all_real_ids = set(id_mapping.values())
         unassigned = all_real_ids - all_assigned_real_ids
         if unassigned:
-            print(f"[NIW-v2] Prong {prong_key}: {len(unassigned)} unassigned snippets, adding catch-all")
+            logger.info(f"[NIW-v2] Prong {prong_key}: {len(unassigned)} unassigned snippets, adding catch-all")
             catch_all = {
                 "id": f"subarg-{uuid.uuid4().hex[:8]}",
                 "argument_id": arg_id,
@@ -2142,12 +2134,12 @@ async def niw_organize_per_prong(
             subject=applicant_name,
         )
 
-        print(f"[NIW-v2] Prong {prong_key}: {len(sub_arguments)} sub-args, "
+        logger.info(f"[NIW-v2] Prong {prong_key}: {len(sub_arguments)} sub-args, "
               f"{len(all_snippet_ids)} snippets assigned")
         return argument, sub_arguments
 
     except Exception as e:
-        print(f"[NIW-v2] Error organizing prong {prong_key}: {e}")
+        logger.warning(f"[NIW-v2] Error organizing prong {prong_key}: {e}")
         # Fallback: single sub-argument
         all_ids = [snp.get('snippet_id', snp.get('id', '')) for snp in prong_snippets]
         sa_id = f"subarg-{uuid.uuid4().hex[:8]}"
@@ -2189,17 +2181,16 @@ async def niw_organize_arguments_v2(
     Returns:
         (arguments, sub_arguments, filtered_out)
     """
-    print(f"[NIW-v2] Starting with {len(snippets)} total snippets")
-
+    logger.info(f"[NIW-v2] Starting with {len(snippets)} total snippets")
     # Step 1: Top-down pickup — LLM selects per prong from full snippet pool
-    print("[NIW-v2] Step 1: Top-down Dhanasar pickup...")
+    logger.info("[NIW-v2] Step 1: Top-down Dhanasar pickup...")
     try:
         prong_buckets = await _niw_group_snippets_by_prong_topdown(
             snippets, provider, project_id=project_id
         )
     except RuntimeError as e:
         # Fallback to rule-based if top-down fails completely
-        print(f"[NIW-v2] Top-down pickup failed ({e}), falling back to rule-based mapping")
+        logger.warning(f"[NIW-v2] Top-down pickup failed ({e}), falling back to rule-based mapping")
         prong_buckets = {
             "prong1_merit": [],
             "prong2_positioned": [],
@@ -2216,10 +2207,9 @@ async def niw_organize_arguments_v2(
                 prong_buckets['prong2_positioned'].append(snp)
 
     prong_counts = {k: len(v) for k, v in prong_buckets.items()}
-    print(f"[NIW-v2] After pickup: {prong_counts}")
-
+    logger.info(f"[NIW-v2] After pickup: {prong_counts}")
     # Step 2: Per-prong organization (parallel)
-    print("[NIW-v2] Step 2: Organizing per prong...")
+    logger.info("[NIW-v2] Step 2: Organizing per prong...")
     filtered_out = []
     tasks = []
     active_prongs = []
@@ -2229,7 +2219,7 @@ async def niw_organize_arguments_v2(
             tasks.append(niw_organize_per_prong(prong_key, prong_snps, applicant_name, provider))
 
     if not tasks:
-        print("[NIW-v2] No snippets to organize!")
+        logger.info("[NIW-v2] No snippets to organize!")
         return [], [], filtered_out
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2239,7 +2229,7 @@ async def niw_organize_arguments_v2(
 
     for prong_key, result in zip(active_prongs, results):
         if isinstance(result, Exception):
-            print(f"[NIW-v2] Prong {prong_key} failed: {result}")
+            logger.warning(f"[NIW-v2] Prong {prong_key} failed: {result}")
             continue
         arg, sub_args = result
         arguments.append(arg)
@@ -2251,9 +2241,8 @@ async def niw_organize_arguments_v2(
         all_assigned_ids.update(a.snippet_ids)
     total_input = len(snippets)
     coverage = (len(all_assigned_ids) / total_input * 100) if total_input > 0 else 0
-    print(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
-    print(f"[NIW-v2] Coverage: {len(all_assigned_ids)}/{total_input} unique snippets ({coverage:.1f}%)")
-
+    logger.info(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+    logger.info(f"[NIW-v2] Coverage: {len(all_assigned_ids)}/{total_input} unique snippets ({coverage:.1f}%)")
     return arguments, all_sub_arguments, filtered_out
 
 
@@ -2305,8 +2294,7 @@ async def full_legal_pipeline(
                     d = json.load(fp)
                     snippets.extend(d.get("snippets", []))
 
-    print(f"[LegalPipeline] Loaded {len(snippets)} snippets")
-
+    logger.info(f"[LegalPipeline] Loaded {len(snippets)} snippets")
     # Resolve project_type from storage if not provided
     if not project_type or project_type == "EB-1A":
         try:
@@ -2317,26 +2305,25 @@ async def full_legal_pipeline(
 
     if project_type == "NIW":
         # NIW v2: top-down Dhanasar pickup + per-prong organize (one-step, no separate subdivide)
-        print("\n[NIW-v2] Running NIW v2 pipeline...")
+        logger.info("\n[NIW-v2] Running NIW v2 pipeline...")
         arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
             snippets, applicant_name, provider, project_id=project_id
         )
-        print(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+        logger.info(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
     else:
         # EB-1A: original two-step flow
         # Step 1: 组织子论点
-        print(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
+        logger.info(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
         arguments, filtered = await organize_arguments_with_legal_framework(
             snippets, applicant_name, provider, project_type, project_id=project_id
         )
 
-        print(f"[Step 1] Generated {len(arguments)} arguments")
-
+        logger.info(f"[Step 1] Generated {len(arguments)} arguments")
         # Build snippet lookup
         snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
 
         # Step 2: 划分次级子论点
-        print("\n[Step 2] Subdividing into sub-arguments...")
+        logger.info("\n[Step 2] Subdividing into sub-arguments...")
         all_sub_arguments = []
 
         from .subargument_generator import subdivide_argument
@@ -2359,8 +2346,7 @@ async def full_legal_pipeline(
 
             await asyncio.sleep(0.2)
 
-        print(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
-
+        logger.info(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
     # 统计
     by_standard = {}
     for arg in arguments:
@@ -2386,8 +2372,7 @@ async def full_legal_pipeline(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_file, result)
 
-    print(f"\n[LegalPipeline] Results saved to {output_file}")
-
+    logger.info(f"\n[LegalPipeline] Results saved to {output_file}")
     return result
 
 
@@ -2429,8 +2414,7 @@ async def regenerate_standard_pipeline(
                     d = json.load(fp)
                     snippets.extend(d.get("snippets", []))
 
-    print(f"[RegenerateStandard] Loaded {len(snippets)} snippets, target standard: {standard_key}")
-
+    logger.info(f"[RegenerateStandard] Loaded {len(snippets)} snippets, target standard: {standard_key}")
     # --- Resolve project_type ---
     if not project_type or project_type == "EB-1A":
         try:
@@ -2481,23 +2465,21 @@ async def regenerate_standard_pipeline(
                      f"Check that snippets have matching evidence_type."
         }
 
-    print(f"[RegenerateStandard] Found {len(target_snippets)} snippets for '{standard_key}'")
-
+    logger.info(f"[RegenerateStandard] Found {len(target_snippets)} snippets for '{standard_key}'")
     if project_type == "NIW":
         # NIW v2: use per-prong organizer directly (includes sub-argument generation)
         argument, all_sub_arguments = await niw_organize_per_prong(
             standard_key, target_snippets, applicant_name, provider
         )
         arguments = [argument]
-        print(f"[RegenerateStandard] NIW v2: {len(all_sub_arguments)} sub-arguments")
+        logger.info(f"[RegenerateStandard] NIW v2: {len(all_sub_arguments)} sub-arguments")
     else:
         # EB-1A: original two-step flow
         # --- Step 1: organize arguments (仅含该 standard 的 snippets) ---
         arguments, filtered = await organize_arguments_with_legal_framework(
             target_snippets, applicant_name, provider, project_type
         )
-        print(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
-
+        logger.info(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
         # --- Step 2: subdivide into sub-arguments ---
         snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
         all_sub_arguments = []
@@ -2517,8 +2499,7 @@ async def regenerate_standard_pipeline(
             all_sub_arguments.extend([asdict(sa) for sa in sub_args])
             await asyncio.sleep(0.2)
 
-        print(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
-
+        logger.info(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
     new_arguments = [a.to_dict() for a in arguments]
 
     # --- 合并到现有 legal_arguments.json ---
@@ -2557,8 +2538,7 @@ async def regenerate_standard_pipeline(
         return existing
 
     existing = update_legal_arguments(project_id, _mutate)
-    print(f"[RegenerateStandard] Merged and saved. Removed {len(old_arg_ids)} old args, added {len(new_arguments)} new args.")
-
+    logger.info(f"[RegenerateStandard] Merged and saved. Removed {len(old_arg_ids)} old args, added {len(new_arguments)} new args.")
     return {
         "success": True,
         "standard_key": standard_key,

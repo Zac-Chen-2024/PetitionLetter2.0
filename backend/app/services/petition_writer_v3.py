@@ -1427,8 +1427,7 @@ Text to translate:
         if llm_result and not _contains_non_ascii(llm_result):
             return llm_result.strip()
     except Exception as e:
-        print(f"[ensure_english] LLM translation failed: {e}")
-
+        logger.warning(f"[ensure_english] LLM translation failed: {e}")
     # Fallback: Remove remaining Chinese characters
     return _remove_remaining_chinese(text)
 

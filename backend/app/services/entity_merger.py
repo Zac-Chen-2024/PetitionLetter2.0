@@ -14,6 +14,7 @@ Entity Merger - 实体合并服务
 """
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ from ..core.atomic_io import update_json, write_json
 from .llm_client import call_llm
 from .storage import project_path
 from .unified_extractor import get_entities_dir, get_extraction_dir, load_combined_extraction
+
+logger = logging.getLogger(__name__)
 
 # ==================== Data Models ====================
 
@@ -155,8 +158,7 @@ async def suggest_entity_merges(
     if not entities:
         return []
 
-    print(f"[EntityMerger] Analyzing {len(entities)} entities for merges...")
-
+    logger.info(f"[EntityMerger] Analyzing {len(entities)} entities for merges...")
     # 2. 按类型分组实体
     entities_by_type = {}
     for e in entities:
@@ -184,8 +186,7 @@ async def suggest_entity_merges(
     system_prompt = MERGE_SUGGESTION_SYSTEM_PROMPT.format(applicant_name=applicant_name)
     user_prompt = MERGE_SUGGESTION_USER_PROMPT.format(entities_text=entities_text)
 
-    print(f"[EntityMerger] Calling LLM ({provider}) for merge suggestions...")
-
+    logger.info(f"[EntityMerger] Calling LLM ({provider}) for merge suggestions...")
     try:
         result = await call_llm(
             prompt=user_prompt,
@@ -196,7 +197,7 @@ async def suggest_entity_merges(
             max_tokens=4000
         )
     except Exception as e:
-        print(f"[EntityMerger] LLM error: {e}")
+        logger.warning(f"[EntityMerger] LLM error: {e}")
         return []
 
     # 5. 处理结果
@@ -231,8 +232,7 @@ async def suggest_entity_merges(
 
     write_json(suggestions_file, suggestions_data)
 
-    print(f"[EntityMerger] Generated {len(suggestions)} merge suggestions")
-
+    logger.info(f"[EntityMerger] Generated {len(suggestions)} merge suggestions")
     return suggestions
 
 
@@ -304,8 +304,7 @@ def apply_entity_merges(project_id: str) -> Dict:
         for old_name in merge.get("merge_entity_names", []):
             name_mapping[old_name] = primary_name
 
-    print(f"[EntityMerger] Applying {len(accepted_merges)} merges with {len(name_mapping)} name mappings")
-
+    logger.info(f"[EntityMerger] Applying {len(accepted_merges)} merges with {len(name_mapping)} name mappings")
     # 3. 加载合并后的提取结果
     combined = load_combined_extraction(project_id)
     if not combined:
@@ -425,8 +424,7 @@ def apply_entity_merges(project_id: str) -> Dict:
         "entities": new_entities
     })
 
-    print(f"[EntityMerger] Applied {len(accepted_merges)} merges, updated {snippets_updated} snippets, {relations_updated} relations")
-
+    logger.info(f"[EntityMerger] Applied {len(accepted_merges)} merges, updated {snippets_updated} snippets, {relations_updated} relations")
     return {
         "success": True,
         "merges_applied": len(accepted_merges),

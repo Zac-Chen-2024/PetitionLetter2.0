@@ -3,6 +3,7 @@
 将项目数据保存为本地 JSON 文件，类似日志系统
 """
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,6 +12,8 @@ from ..core.atomic_io import update_json, write_json
 from ..core.config import settings
 from ..core.ids import is_safe_id
 from ..core.workspace import current_workspace
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data-root resolution -- the ONE place that knows where data lives.
@@ -1093,7 +1096,7 @@ def load_l1_analysis(project_id: str, version_id: str = None) -> Optional[List[D
 
         except Exception as e:
             # 跳过无法读取的文件
-            print(f"[Storage] Warning: Failed to read {filepath}: {e}")
+            logger.warning(f"[Storage] Warning: Failed to read {filepath}: {e}")
             continue
 
     # 组装合并后的结果
