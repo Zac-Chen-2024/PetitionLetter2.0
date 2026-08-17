@@ -6,6 +6,7 @@ Snippet Recommender - 根据标题/描述为新 SubArgument 推荐相关 Snippet
 2. LLM 精排：语义相关性评分
 """
 
+import copy
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,11 +43,32 @@ def save_legal_arguments(project_id: str, data: Dict):
     write_json(_legal_arguments_file(project_id), data)
 
 
-def update_legal_arguments(project_id: str, mutator) -> Dict:
-    """锁内 read → mutator(data) → write。所有读-改-写都应走这里，避免并发丢更新。"""
+def _op_label(mutator) -> str:
+    """Undo label from the enclosing function name: 'merge_subarguments.<locals>._mutate' -> 'merge_subarguments'."""
+    name = getattr(mutator, "__qualname__", "") or "change"
+    return name.split(".<locals>")[0].split(".")[-1].lstrip("_") or "change"
+
+
+def update_legal_arguments(project_id: str, mutator, label: Optional[str] = None, record: bool = True) -> Dict:
+    """锁内 read → mutator(data) → write。所有读-改-写都应走这里，避免并发丢更新。
+
+    Every write that changes the document is snapshotted onto the undo stack
+    (M13; see services/history.py) unless ``record=False``.
+    """
+    from . import history
+
+    def _wrapped(data):
+        before = copy.deepcopy(data)
+        result = mutator(data)
+        if result is None:
+            result = data
+        if record and result != before:
+            history.record_change(project_id, label or _op_label(mutator), before)
+        return result
+
     return update_json(
         _legal_arguments_file(project_id),
-        mutator,
+        _wrapped,
         default={"arguments": [], "sub_arguments": []},
     )
 

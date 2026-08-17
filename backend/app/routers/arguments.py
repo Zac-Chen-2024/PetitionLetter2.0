@@ -11,6 +11,7 @@ Endpoints:
 - POST /api/arguments/{project_id}/infer-relationship - 推断关系
 """
 
+import copy
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -824,3 +825,50 @@ async def get_coverage(project_id: str):
     return {"success": True, "project_id": project_id,
             **compute_coverage(load_legal_arguments(project_id), _load_snippet_source(project_id))}
 
+
+
+# ============================================
+# Structural undo / redo (M13)
+# ============================================
+
+def _step_history(project_id: str, direction: str) -> Dict:
+    from ..core.atomic_io import update_json
+    from ..services import history
+    from ..services.snippet_recommender import _legal_arguments_file
+
+    outcome: Dict = {"applied": False}
+
+    def _mutate(data):
+        current = copy.deepcopy(data)
+        entry = history.step(project_id, direction, current)
+        if entry is None:
+            return data
+        outcome.update({
+            "applied": True,
+            "label": entry["label"],
+            "seq": entry["seq"],
+            "affected_standard_keys": history.affected_standards(current, entry["data"]),
+        })
+        return entry["data"]
+
+    update_json(_legal_arguments_file(project_id), _mutate, default={"arguments": [], "sub_arguments": []})
+    return {"success": True, "direction": direction, **outcome, **history.peek(project_id)}
+
+
+@router.get("/{project_id}/history")
+async def get_history(project_id: str):
+    """What undo / redo would do next (labels + depths)."""
+    from ..services import history
+    return {"success": True, **history.peek(project_id)}
+
+
+@router.post("/{project_id}/undo")
+async def undo_last_change(project_id: str):
+    """Restore the document as it was before the last structural change."""
+    return _step_history(project_id, "undo")
+
+
+@router.post("/{project_id}/redo")
+async def redo_last_change(project_id: str):
+    """Re-apply the last undone change."""
+    return _step_history(project_id, "redo")
