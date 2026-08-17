@@ -2254,19 +2254,29 @@ def save_writing_v3(
 
 def load_latest_writing_v3(
     project_id: str,
-    section: str
+    section: str,
+    full_only: bool = True,
 ) -> Optional[Dict]:
-    """加载最新的 V3 写作结果"""
+    """加载最新的 V3 写作结果
+
+    ``full_only`` (default) skips versions saved by a partial regeneration
+    (``subargument_ids`` requests, marked ``partial: true``): those hold only
+    the regenerated SubArgument's sentences and are not a complete section.
+    The complete section is what the client persists via PUT .../sentences
+    once the user accepts the regeneration (M13 diff view).
+    """
     writing_dir = project_path(project_id, "writing_v3")
     if not writing_dir.exists():
         return None
 
     files = sorted(writing_dir.glob(f"writing_{section}_*.json"), reverse=True)
-    if not files:
-        return None
-
-    with open(files[0], 'r', encoding='utf-8') as f:
-        return json.load(f)
+    for path in files:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if full_only and data.get("partial"):
+            continue
+        return data
+    return None
 
 
 # ============================================

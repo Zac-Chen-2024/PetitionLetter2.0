@@ -148,6 +148,13 @@ async def _run_write_v3(project_id: str, standard_key: str, req: "WriteV3Request
             error=result.get("error", "Unknown error")
         ).model_dump()
 
+    if req.subargument_ids:
+        # Partial regeneration: only the requested SubArguments' sentences.
+        # Persisted for audit, but never served as "the section" (see
+        # load_latest_writing_v3). The full spliced section is written by the
+        # client through PUT .../sentences on accept.
+        result["partial"] = True
+        result["subargument_ids"] = list(req.subargument_ids)
     save_writing_v3(project_id, standard_key, result)
 
     return WriteV3Response(
@@ -180,6 +187,41 @@ async def write_petition_v3(
         "write_v3", project_id, params,
         lambda job: _run_write_v3(project_id, standard_key, req, job=job),
     )
+
+
+class PutSentencesRequest(BaseModel):
+    """Client-side edited/accepted section (M13 diff view accept / revert)."""
+    sentences: List[SentenceWithProvenanceV3]
+    source: str = "user_commit"  # user_commit | user_revert | user_edit
+
+
+@router.put("/{project_id}/{standard_key}/sentences")
+async def put_section_sentences(project_id: str, standard_key: str, request: PutSentencesRequest):
+    """
+    Persist the section exactly as the user sees it (after accepting or
+    reverting a regeneration, or after manual sentence edits) as a new full
+    version. Rebuilds paragraph_text and provenance_index server-side.
+    """
+    from app.services.petition_writer_v3 import _build_provenance_from_sentences
+
+    sentences = [s.model_dump() for s in request.sentences]
+    paragraph_text = " ".join(s["text"] for s in sentences)
+    result = {
+        "success": True,
+        "section": standard_key,
+        "paragraph_text": paragraph_text,
+        "sentences": sentences,
+        "provenance_index": _build_provenance_from_sentences(sentences),
+        "validation": {
+            "total_sentences": len(sentences),
+            "traced_sentences": sum(1 for s in sentences if s.get("snippet_ids") or s.get("subargument_id")),
+            "warnings": [],
+        },
+        "source": request.source,
+    }
+    version_id = save_writing_v3(project_id, standard_key, result)
+    return {"success": True, "version_id": version_id, "section": standard_key,
+            "sentence_count": len(sentences)}
 
 
 class AnalyzeImpactRequest(BaseModel):

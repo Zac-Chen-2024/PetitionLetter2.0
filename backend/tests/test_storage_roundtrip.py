@@ -118,3 +118,43 @@ def test_resolve_source_path_falls_back_to_source_data_dir(tmp_data_dir, project
     (pdir / "metadata.json").write_text(json.dumps({"source_path": "/nowhere/Nobody"}), encoding="utf-8")
     assert storage.resolve_source_path("dehuan_liu") is None
     assert storage.resolve_source_path("no_such_project") is None
+
+
+def test_partial_writing_versions_are_skipped_by_default(tmp_data_dir, monkeypatch):
+    """A partial regeneration (subargument_ids) must never be served as the section (M13)."""
+    from datetime import datetime, timedelta, timezone
+
+    import app.services.petition_writer_v3 as pw
+
+    pid = "proj-3"
+    save_writing_v3(pid, "awards", {"paragraph_text": "full", "sentences": [{"text": "a"}]})
+
+    class _Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(timezone.utc) + timedelta(seconds=5)
+    monkeypatch.setattr(pw, "datetime", _Later)
+    save_writing_v3(pid, "awards", {"paragraph_text": "part", "sentences": [{"text": "b"}], "partial": True})
+
+    assert load_latest_writing_v3(pid, "awards")["paragraph_text"] == "full"
+    assert load_latest_writing_v3(pid, "awards", full_only=False)["paragraph_text"] == "part"
+
+
+def test_put_sentences_persists_full_version(client, victim_project):
+    """PUT .../sentences stores what the user sees and GET /sections serves it back."""
+    body = {"sentences": [
+        {"text": "Opening.", "snippet_ids": [], "sentence_type": "opening"},
+        {"text": "Body one [Exhibit A1, p.2].", "snippet_ids": ["s1"], "subargument_id": "sa-1", "argument_id": "arg-1"},
+        {"text": "Closing.", "snippet_ids": [], "sentence_type": "closing"},
+    ], "source": "user_commit"}
+    r = client.put(f"/api/write/v3/{victim_project}/awards/sentences", json=body)
+    assert r.status_code == 200 and r.json()["sentence_count"] == 3
+    r = client.get(f"/api/write/v3/{victim_project}/sections")
+    sections = r.json()["sections"]
+    assert len(sections) == 1
+    sec = sections[0]
+    assert sec["paragraph_text"] == "Opening. Body one [Exhibit A1, p.2]. Closing."
+    assert sec["provenance_index"]["by_subargument"] == {"sa-1": [1]}
+    assert sec["provenance_index"]["by_snippet"] == {"s1": [1]}
+    # path allow-list still applies
+    assert client.put(f"/api/write/v3/{victim_project}/..%2Fx/sentences", json=body).status_code in (400, 404, 422)

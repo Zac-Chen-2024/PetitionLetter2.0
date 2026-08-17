@@ -328,10 +328,11 @@ export interface SentenceWithProvenance {
   isEdited?: boolean;              // V3: Has been manually edited
   originalText?: string;           // V3: Original text before edit
 
-  // Change cascade tracking
-  changeStatus?: 'removed' | 'needs_adjustment' | 'suggested_replacement' | null;
+  // Change cascade tracking + regeneration diff (M13)
+  changeStatus?: 'removed' | 'needs_adjustment' | 'suggested_replacement' | 'added' | 'modified' | null;
   suggestedText?: string;          // LLM suggested replacement text
   changeReason?: string;           // Why this sentence needs adjustment
+  previousText?: string;           // M13: text before regeneration (changeStatus === 'modified')
 }
 
 // Provenance index for fast lookups
@@ -380,6 +381,16 @@ export interface LetterSection {
 
   // V3: UI state
   isExpanded?: boolean;
+
+  // M13: snapshot taken before the last regeneration so it can be reverted;
+  // cleared on accept. Present <=> the section shows a pending diff.
+  regenSnapshot?: {
+    sentences: SentenceWithProvenance[];
+    content: string;
+    provenanceIndex?: ProvenanceIndex;
+    subArgumentId: string | null;           // null = whole standard rewritten
+    at: number;                             // epoch ms
+  };
 
   // Change cascade tracking
   isStale?: boolean;                        // Has pending SubArgument changes
