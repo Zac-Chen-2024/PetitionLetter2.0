@@ -92,6 +92,7 @@ export interface FlowCanvasProps {
   onAddArgument: (standardKey: string) => void;
   onContextMenu: (e: React.MouseEvent, nodeType: 'standard' | 'argument' | 'subargument', nodeId: string, standardKey?: string) => void;
   onSubArgAITitle: (subArgumentId: string, argumentId: string, currentTitle: string) => Promise<string | null>;
+  onZoomChange?: (zoom: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +549,7 @@ const FlowCanvasInner = forwardRef<FlowCanvasApi, FlowCanvasProps>(function Flow
       onNodeContextMenu={onNodeContextMenu}
       onNodeDragStop={(_e, node) => props.onNodeDrag(node.id, node.position)}
       onSelectionDragStop={(_e, dragged) => dragged.forEach(n => props.onNodeDrag(n.id, n.position))}
+      onMove={(_e, vp) => props.onZoomChange?.(vp.zoom)}
       minZoom={0.2}
       maxZoom={2}
       defaultViewport={{ x: 40, y: 40, zoom: 0.7 }}

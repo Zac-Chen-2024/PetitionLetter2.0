@@ -3,6 +3,21 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { logInteraction } from '../services/interactionLogger';
 import { useInferArgumentTitle, useInferRelationship, useRecommendSnippets } from '../api';
+import { FlowCanvas, type FlowCanvasApi } from './ArgumentCanvas/FlowCanvas';
+
+// Canvas renderer flag (M12): ?canvas=v2 or localStorage pl_canvas=v2 selects the
+// react-flow renderer; default stays on the legacy hand-written canvas until
+// the parity checklist (Doc/14) is signed off.
+function useFlowCanvasFlag(): boolean {
+  return useMemo(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get('canvas');
+      if (q === 'v2') { localStorage.setItem('pl_canvas', 'v2'); return true; }
+      if (q === 'v1') { localStorage.removeItem('pl_canvas'); return false; }
+      return localStorage.getItem('pl_canvas') === 'v2';
+    } catch { return false; }
+  }, []);
+}
 import { useApp } from '../context/AppContext';
 import { useLegalStandards } from '../hooks/useLegalStandards';
 import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
@@ -1241,6 +1256,9 @@ export function ArgumentGraph() {
   const inferRelationshipMain = useInferRelationship().mutateAsync;
   const recommendSnippets = useRecommendSnippets().mutateAsync;
   const inferArgumentTitle = useInferArgumentTitle().mutateAsync;
+  const useFlow = useFlowCanvasFlag();
+  const flowApiRef = useRef<FlowCanvasApi>(null);
+  const [flowZoom, setFlowZoom] = useState(0.7);
   const {
     arguments: contextArguments,
     subArguments: contextSubArguments,
@@ -1577,6 +1595,18 @@ export function ArgumentGraph() {
     }
   }, [aiTitleArgId, projectId, llmProvider, updateArgument, inferArgumentTitle]);
 
+  // AI title for a SubArgument (used by the react-flow node; legacy node calls the API itself)
+  const handleSubArgAITitle = useCallback(async (_subArgumentId: string, argumentId: string, currentTitle: string): Promise<string | null> => {
+    if (!projectId) return null;
+    try {
+      const response = await inferRelationshipMain({ projectId, argument_id: argumentId, subargument_title: currentTitle });
+      return response.success && response.relationship ? response.relationship : null;
+    } catch (error) {
+      console.error('AI title generation failed:', error);
+      return null;
+    }
+  }, [projectId, inferRelationshipMain]);
+
   // Handle rewrite Argument (regenerate all sub-arguments' letter content)
   const [rewritingArgId, setRewritingArgId] = useState<string | null>(null);
   const handleArgumentRewrite = useCallback(async (argumentId: string) => {
@@ -1905,6 +1935,7 @@ export function ArgumentGraph() {
 
   // Handle zoom (toolbar +/- buttons) — zoom toward container center
   const handleZoom = useCallback((delta: number) => {
+    if (useFlow) { flowApiRef.current?.zoomBy(delta); return; }
     const container = containerRef.current;
     const oldScale = scaleRef.current;
     const oldOffset = offsetRef.current;
@@ -1924,14 +1955,15 @@ export function ArgumentGraph() {
       x: cx - (cx - oldOffset.x) * ratio,
       y: cy - (cy - oldOffset.y) * ratio,
     });
-  }, []);
+  }, [useFlow]);
 
   // Handle auto-arrange nodes
   const handleArrangeNodes = useCallback(() => {
     clearArgumentGraphPositions();
+    if (useFlow) { setTimeout(() => flowApiRef.current?.fitView(), 50); return; }
     setScale(0.7);
     setOffset({ x: 0, y: 0 });
-  }, [clearArgumentGraphPositions]);
+  }, [clearArgumentGraphPositions, useFlow]);
 
   // Handle mouse wheel zoom — zoom toward mouse cursor
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -2020,10 +2052,13 @@ export function ArgumentGraph() {
   // Navigate to a standard node from the minimap
   const handleNavigateToStandard = useCallback((standardId: string) => {
     const targetNode = standardNodes.find(n => n.id === standardId);
-    if (!targetNode || !containerRef.current) return;
+    if (!targetNode) return;
 
     // Clear focus state so the full tree is visible
     setFocusState({ type: 'none', id: null });
+
+    if (useFlow) { flowApiRef.current?.centerOn(targetNode.position.x, targetNode.position.y, 0.7); return; }
+    if (!containerRef.current) return;
 
     const containerRect = containerRef.current.getBoundingClientRect();
     const targetScale = 0.7;
@@ -2032,7 +2067,7 @@ export function ArgumentGraph() {
     const newOffsetX = (containerRect.width / 2) - (targetNode.position.x * targetScale);
     const newOffsetY = (containerRect.height / 2) - (targetNode.position.y * targetScale);
     setOffset({ x: newOffsetX, y: newOffsetY });
-  }, [standardNodes, setFocusState]);
+  }, [standardNodes, setFocusState, useFlow]);
 
   // Deferred center: set a pending node ID, effect will center once layout updates
   const pendingCenterNodeId = useRef<string | null>(null);
@@ -2043,12 +2078,14 @@ export function ArgumentGraph() {
 
   useEffect(() => {
     const nodeId = pendingCenterNodeId.current;
-    if (!nodeId || !containerRef.current) return;
+    if (!nodeId) return;
     const target = argumentNodes.find(n => n.id === nodeId)
       || subArgumentNodes.find(n => n.id === nodeId);
     if (!target) return;
 
     pendingCenterNodeId.current = null;
+    if (useFlow) { flowApiRef.current?.centerOn(target.position.x, target.position.y, 0.7); return; }
+    if (!containerRef.current) return;
     const containerRect = containerRef.current.getBoundingClientRect();
     const targetScale = 0.7;
     setScale(targetScale);
@@ -2056,7 +2093,7 @@ export function ArgumentGraph() {
       x: (containerRect.width / 2) - (target.position.x * targetScale),
       y: (containerRect.height / 2) - (target.position.y * targetScale),
     });
-  }, [argumentNodes, subArgumentNodes]);
+  }, [argumentNodes, subArgumentNodes, useFlow]);
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -2166,7 +2203,7 @@ export function ArgumentGraph() {
           <button onClick={() => handleZoom(0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom In">
             <ZoomInIcon />
           </button>
-          <span className="text-[10px] text-slate-500 text-center select-none">{Math.round(scale * 100)}%</span>
+          <span className="text-[10px] text-slate-500 text-center select-none">{Math.round((useFlow ? flowZoom : scale) * 100)}%</span>
           <button onClick={() => handleZoom(-0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom Out">
             <ZoomOutIcon />
           </button>
@@ -2216,140 +2253,192 @@ export function ArgumentGraph() {
           </div>
         </div>
 
-        {/* Canvas */}
-        <div
-          ref={containerRef}
-          className={`absolute inset-0 ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
-          onMouseDown={handleCanvasMouseDown}
-        >
-          {/* Grid background */}
-          <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 0 }}>
-            <defs>
-              <pattern
-                id="arg-grid"
-                width={40 * scale}
-                height={40 * scale}
-                patternUnits="userSpaceOnUse"
-                x={offset.x % (40 * scale)}
-                y={offset.y % (40 * scale)}
-              >
-                <path
-                  d={`M ${40 * scale} 0 L 0 0 0 ${40 * scale}`}
-                  fill="none"
-                  stroke="#e2e8f0"
-                  strokeWidth="1"
-                />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#arg-grid)" />
-          </svg>
-
-          {/* Transformed content */}
-          <div
-            style={{
-              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-              transformOrigin: '0 0',
-              position: 'absolute',
-              width: '4000px',
-              height: '3000px',
-              pointerEvents: 'none',
-              zIndex: 1,  // Above grid background (z:0) to prevent clipping
-            }}
-          >
-            {/* Internal connection lines */}
-            <InternalConnectionLines
-              argumentNodes={argumentNodes}
+        {/* Canvas: react-flow renderer (M12) behind ?canvas=v2, legacy otherwise */}
+        {useFlow ? (
+          <div className="absolute inset-0">
+            <FlowCanvas
+              ref={flowApiRef}
+              t={t}
               standardNodes={standardNodes}
+              argumentNodes={argumentNodes}
               subArgumentNodes={subArgumentNodes}
+              contextArguments={contextArguments}
+              projectId={projectId}
+              focusState={focusState}
+              selectedNodeId={selectedNodeId}
+              isSubArgumentHighlighted={isSubArgumentHighlighted}
+              isMergeMode={isMergeMode}
+              isMoveMode={isMoveMode}
+              isConsolidateMode={isConsolidateMode}
+              mergeSelectedIds={mergeSelectedIds}
+              mergeLockedStandardKey={mergeLockedStandardKey}
+              moveTargetArgumentIds={moveTargetArgumentIds}
+              rewritingStandardKey={rewritingStandardKey}
+              rewritingArgId={rewritingArgId}
+              generatedStandardIds={generatedStandardIds}
+              newlyCreatedSubArgId={newlyCreatedSubArgId}
+              transformVersion={transformVersion}
+              onNodeDrag={handleNodeDrag}
+              onArgumentPositionReport={handleArgumentPositionReport}
+              onSubArgumentPositionReport={handleSubArgumentPositionReport}
+              onStandardSelect={handleStandardSelect}
+              onArgumentSelect={handleArgumentSelect}
+              onSubArgumentSelect={handleSubArgumentSelect}
+              onMergeToggle={handleMergeToggle}
+              onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
+              onSubArgumentTitleChange={handleSubArgumentTitleChange}
+              onSubArgumentRegenerate={handleSubArgumentRegenerate}
+              onSubArgumentDelete={handleSubArgumentDelete}
+              onSubArgumentCancelCreate={handleSubArgumentCancelCreate}
+              onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
+              onAddSubArgument={handleAddSubArgument}
+              onArgumentDelete={handleArgumentDelete}
+              onArgumentAITitle={handleArgumentAITitle}
+              onArgumentRewrite={handleArgumentRewrite}
+              onStandardRewrite={handleStandardRewrite}
+              onStandardRemove={(key) => setRemoveModalStandardKey(key)}
+              onStandardRegenerate={(key) => setRegenerateModalStandardKey(key)}
+              onAddArgument={handleAddArgument}
+              onContextMenu={handleContextMenu}
+              onSubArgAITitle={handleSubArgAITitle}
+              onZoomChange={setFlowZoom}
             />
+          </div>
+        ) : (
+          <div
+            ref={containerRef}
+            className={`absolute inset-0 ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+            onMouseDown={handleCanvasMouseDown}
+          >
+            {/* Grid background */}
+            <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 0 }}>
+              <defs>
+                <pattern
+                  id="arg-grid"
+                  width={40 * scale}
+                  height={40 * scale}
+                  patternUnits="userSpaceOnUse"
+                  x={offset.x % (40 * scale)}
+                  y={offset.y % (40 * scale)}
+                >
+                  <path
+                    d={`M ${40 * scale} 0 L 0 0 0 ${40 * scale}`}
+                    fill="none"
+                    stroke="#e2e8f0"
+                    strokeWidth="1"
+                  />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#arg-grid)" />
+            </svg>
 
-            {/* Sub-argument nodes */}
-            {subArgumentNodes.map(node => {
-              // Find this sub-arg's standard_key via its parent argument
-              const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
-              const nodeStandardKey = parentArg?.standardKey || null;
-              const isMergeDisabled = isMergeMode && mergeLockedStandardKey !== null && nodeStandardKey !== mergeLockedStandardKey;
-              const isMergeChecked = mergeSelectedIds.has(node.id);
-              return (
-                <SubArgumentNodeComponent
+            {/* Transformed content */}
+            <div
+              style={{
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transformOrigin: '0 0',
+                position: 'absolute',
+                width: '4000px',
+                height: '3000px',
+                pointerEvents: 'none',
+                zIndex: 1,  // Above grid background (z:0) to prevent clipping
+              }}
+            >
+              {/* Internal connection lines */}
+              <InternalConnectionLines
+                argumentNodes={argumentNodes}
+                standardNodes={standardNodes}
+                subArgumentNodes={subArgumentNodes}
+              />
+
+              {/* Sub-argument nodes */}
+              {subArgumentNodes.map(node => {
+                // Find this sub-arg's standard_key via its parent argument
+                const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
+                const nodeStandardKey = parentArg?.standardKey || null;
+                const isMergeDisabled = isMergeMode && mergeLockedStandardKey !== null && nodeStandardKey !== mergeLockedStandardKey;
+                const isMergeChecked = mergeSelectedIds.has(node.id);
+                return (
+                  <SubArgumentNodeComponent
+                    key={node.id}
+                    node={node}
+                    isSelected={isMergeMode ? isMergeChecked : isSubArgumentHighlighted(node)}
+                    onSelect={() => {
+                      if (isMergeMode) {
+                        if (!isMergeDisabled) handleMergeToggle(node.id);
+                      } else {
+                        handleSubArgumentSelect(node.id);
+                      }
+                    }}
+                    onDrag={isMergeMode ? () => {} : handleNodeDrag}
+                    scale={scale}
+                    t={t}
+                    onPositionReport={handleSubArgumentPositionReport}
+                    transformVersion={transformVersion}
+                    onRegenerate={isMergeMode ? undefined : handleSubArgumentRegenerate}
+                    onTitleChange={isMergeMode ? undefined : handleSubArgumentTitleChange}
+                    onDelete={isMergeMode ? undefined : handleSubArgumentDelete}
+                    onCancelCreate={handleSubArgumentCancelCreate}
+                    autoEdit={node.id === newlyCreatedSubArgId}
+                    onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
+                    mergeMode={isMergeMode}
+                    mergeChecked={isMergeChecked}
+                    mergeDisabled={isMergeDisabled}
+                    projectId={projectId}
+                    onContextMenu={(e) => {
+                      const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
+                      handleContextMenu(e, 'subargument', node.id, parentArg?.standardKey);
+                    }}
+                  />
+                );
+              })}
+
+              {/* Argument nodes */}
+              {argumentNodes.map(node => (
+                <ArgumentNodeComponent
                   key={node.id}
                   node={node}
-                  isSelected={isMergeMode ? isMergeChecked : isSubArgumentHighlighted(node)}
-                  onSelect={() => {
-                    if (isMergeMode) {
-                      if (!isMergeDisabled) handleMergeToggle(node.id);
-                    } else {
-                      handleSubArgumentSelect(node.id);
-                    }
-                  }}
-                  onDrag={isMergeMode ? () => {} : handleNodeDrag}
+                  isSelected={selectedNodeId === node.id || focusState.id === node.id}
+                  onSelect={() => handleArgumentSelect(node.id)}
+                  onDrag={handleNodeDrag}
+                  scale={scale}
+                  onPositionReport={handleArgumentPositionReport}
+                  t={t}
+                  transformVersion={transformVersion}
+                  onAddSubArgument={handleAddSubArgument}
+                  onDelete={handleArgumentDelete}
+                  onAITitle={handleArgumentAITitle}
+                  onRewrite={handleArgumentRewrite}
+                  isRewriting={rewritingArgId === node.id}
+                  isMoveMode={isMoveMode || isConsolidateMode}
+                  isMoveTarget={moveTargetArgumentIds.has(node.id)}
+                  onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
+                  onContextMenu={(e) => handleContextMenu(e, 'argument', node.id, node.data.standardKey)}
+                />
+              ))}
+
+              {/* Standard nodes */}
+              {standardNodes.map(node => (
+                <StandardNodeComponent
+                  key={node.id}
+                  node={node}
+                  isSelected={selectedNodeId === node.id || focusState.id === node.id}
+                  onSelect={() => handleStandardSelect(node.id)}
+                  onDrag={handleNodeDrag}
                   scale={scale}
                   t={t}
-                  onPositionReport={handleSubArgumentPositionReport}
-                  transformVersion={transformVersion}
-                  onRegenerate={isMergeMode ? undefined : handleSubArgumentRegenerate}
-                  onTitleChange={isMergeMode ? undefined : handleSubArgumentTitleChange}
-                  onDelete={isMergeMode ? undefined : handleSubArgumentDelete}
-                  onCancelCreate={handleSubArgumentCancelCreate}
-                  autoEdit={node.id === newlyCreatedSubArgId}
-                  onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
-                  mergeMode={isMergeMode}
-                  mergeChecked={isMergeChecked}
-                  mergeDisabled={isMergeDisabled}
-                  projectId={projectId}
-                  onContextMenu={(e) => {
-                    const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
-                    handleContextMenu(e, 'subargument', node.id, parentArg?.standardKey);
-                  }}
+                  onRewrite={handleStandardRewrite}
+                  onRemove={(key) => setRemoveModalStandardKey(key)}
+                  onRegenerate={(key) => setRegenerateModalStandardKey(key)}
+                  onAddArgument={handleAddArgument}
+                  isRewriting={rewritingStandardKey === node.id}
+                  hasLetterContent={generatedStandardIds.has(node.id)}
+                  onContextMenu={(e) => handleContextMenu(e, 'standard', node.id, node.id)}
                 />
-              );
-            })}
-
-            {/* Argument nodes */}
-            {argumentNodes.map(node => (
-              <ArgumentNodeComponent
-                key={node.id}
-                node={node}
-                isSelected={selectedNodeId === node.id || focusState.id === node.id}
-                onSelect={() => handleArgumentSelect(node.id)}
-                onDrag={handleNodeDrag}
-                scale={scale}
-                onPositionReport={handleArgumentPositionReport}
-                t={t}
-                transformVersion={transformVersion}
-                onAddSubArgument={handleAddSubArgument}
-                onDelete={handleArgumentDelete}
-                onAITitle={handleArgumentAITitle}
-                onRewrite={handleArgumentRewrite}
-                isRewriting={rewritingArgId === node.id}
-                isMoveMode={isMoveMode || isConsolidateMode}
-                isMoveTarget={moveTargetArgumentIds.has(node.id)}
-                onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
-                onContextMenu={(e) => handleContextMenu(e, 'argument', node.id, node.data.standardKey)}
-              />
-            ))}
-
-            {/* Standard nodes */}
-            {standardNodes.map(node => (
-              <StandardNodeComponent
-                key={node.id}
-                node={node}
-                isSelected={selectedNodeId === node.id || focusState.id === node.id}
-                onSelect={() => handleStandardSelect(node.id)}
-                onDrag={handleNodeDrag}
-                scale={scale}
-                t={t}
-                onRewrite={handleStandardRewrite}
-                onRemove={(key) => setRemoveModalStandardKey(key)}
-                onRegenerate={(key) => setRegenerateModalStandardKey(key)}
-                onAddArgument={handleAddArgument}
-                isRewriting={rewritingStandardKey === node.id}
-                hasLetterContent={generatedStandardIds.has(node.id)}
-                onContextMenu={(e) => handleContextMenu(e, 'standard', node.id, node.id)}
-              />
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Merge mode floating action bar */}
         {isMergeMode && (
