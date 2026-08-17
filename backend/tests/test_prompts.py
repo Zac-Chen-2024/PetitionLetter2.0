@@ -30,7 +30,7 @@ def test_all_prompts_validate():
 def test_prompt_bodies_match_snapshot():
     """Refresh with: python -c 'from tests.test_prompts import refresh; refresh()' in a prompt: commit."""
     snap = json.loads(FIXTURE.read_text())
-    current = {f"{p.id}@v{p.version}": hashlib.sha256(p.body.encode()).hexdigest() for p in pl.list_prompts()}
+    current = _current_hashes()
     changed = sorted(k for k in current if k in snap and snap[k] != current[k])
     added = sorted(set(current) - set(snap))
     removed = sorted(set(snap) - set(current))
@@ -39,9 +39,15 @@ def test_prompt_bodies_match_snapshot():
     assert not added, f"new prompts not in snapshot (refresh the fixture): {added}"
 
 
-def refresh():  # pragma: no cover - maintenance helper
+def _current_hashes():
     current = {f"{p.id}@v{p.version}": hashlib.sha256(p.body.encode()).hexdigest() for p in pl.list_prompts()}
-    FIXTURE.write_text(json.dumps(current, indent=2, sort_keys=True))
+    # JSON data assets (structured prompt content) are snapshotted the same way
+    current.update({f"{i}@v{v}": hashlib.sha256(t.encode()).hexdigest() for i, v, t in pl.list_data_assets()})
+    return current
+
+
+def refresh():  # pragma: no cover - maintenance helper
+    FIXTURE.write_text(json.dumps(_current_hashes(), indent=2, sort_keys=True))
 
 
 def test_render_returns_str_subclass_with_metadata():

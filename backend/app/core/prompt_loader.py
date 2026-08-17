@@ -184,6 +184,43 @@ def load(prompt_id: str, version: Optional[int] = None) -> Prompt:
     return Prompt(id=prompt_id, version=ver, body=body, meta=meta, path=path)
 
 
+_DATA_RE = re.compile(r"^(?P<name>[A-Za-z0-9_\-]+)@v(?P<version>\d+)\.json$")
+
+
+@lru_cache(maxsize=None)
+def load_data(data_id: str, version: Optional[int] = None) -> Any:
+    """Load a versioned JSON asset `module/name` (e.g. structured pickup criteria)
+    that is prompt content in all but shape. Same naming/versioning rules as
+    prompts; hashed into the snapshot test like any prompt body."""
+    module, _, name = data_id.rpartition("/")
+    if not module or not name:
+        raise PromptError(f"data id must look like 'module/name', got {data_id!r}")
+    d = PROMPTS_DIR / module
+    files = [p for p in d.iterdir() if (m := _DATA_RE.match(p.name)) and m.group("name") == name] if d.is_dir() else []
+    if not files:
+        raise PromptError(f"data asset not found: {data_id!r} (looked in {PROMPTS_DIR})")
+    by_ver = {int(_DATA_RE.match(p.name).group("version")): p for p in files}
+    ver = version if version is not None else max(by_ver)
+    if ver not in by_ver:
+        raise PromptError(f"data asset {data_id!r} has no version {ver}; available: {sorted(by_ver)}")
+    return json.loads(by_ver[ver].read_text(encoding="utf-8"))
+
+
+def list_data_assets() -> List[tuple]:
+    """(id, version, raw_text) for every JSON asset -- for the hash snapshot."""
+    out = []
+    if not PROMPTS_DIR.is_dir():
+        return out
+    for module_dir in sorted(PROMPTS_DIR.iterdir()):
+        if not module_dir.is_dir():
+            continue
+        for f in sorted(module_dir.iterdir()):
+            m = _DATA_RE.match(f.name)
+            if m:
+                out.append((f"{module_dir.name}/{m.group('name')}", int(m.group("version")), f.read_text(encoding="utf-8")))
+    return out
+
+
 def body(prompt_id: str, version: Optional[int] = None) -> str:
     """Raw template text (for module-level constants that are formatted later)."""
     return load(prompt_id, version).body
