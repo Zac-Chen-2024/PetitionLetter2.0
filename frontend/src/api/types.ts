@@ -183,3 +183,47 @@ export interface SuccessResponse {
   success: boolean;
   [k: string]: unknown;
 }
+
+// ---- Evidence coverage overview (M13) ----
+export interface CoverageSubArgBrief {
+  id: string;
+  title: string;
+  argument_id: string;
+  snippet_count: number;
+}
+
+export interface CoverageStandard {
+  standard_key: string;
+  argument_count: number;
+  subargument_count: number;
+  snippet_count: number;
+  single_evidence_subarguments: CoverageSubArgBrief[];
+  empty_subarguments: CoverageSubArgBrief[];
+  layer_counts: Record<string, number>;
+  layer_gaps: string[];
+}
+
+export interface CoverageUnassignedSnippet {
+  snippet_id: string;
+  exhibit_id: string;
+  page: number | null;
+  evidence_type?: string | null;
+  evidence_layer?: string | null;
+  is_applicant_achievement?: boolean | null;
+  text: string;
+}
+
+export interface CoverageResponse {
+  success: boolean;
+  project_id: string;
+  totals: {
+    snippets: number;
+    assigned_snippets: number;
+    unassigned_snippets: number;
+    arguments: number;
+    sub_arguments: number;
+  };
+  unassigned_by_exhibit: Record<string, number>;
+  unassigned_snippets: CoverageUnassignedSnippet[];
+  standards: CoverageStandard[];
+}

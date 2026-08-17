@@ -13,6 +13,7 @@ import { queryKeys } from './keys';
 import type {
   AnalyzeImpactResponse,
   ArgumentsResponse,
+  CoverageResponse,
   ExtractResult,
   ProjectInfo,
   SectionsResponse,
@@ -47,6 +48,14 @@ export function useArgumentsQuery(projectId: string | null | undefined) {
     queryKey: queryKeys.arguments(projectId ?? ''),
     queryFn: () => apiClient.get<ArgumentsResponse>(`/arguments/${projectId}`),
     enabled: !!projectId,
+  });
+}
+
+export function useCoverageQuery(projectId: string | null | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.coverage(projectId ?? ''),
+    queryFn: () => apiClient.get<CoverageResponse>(`/arguments/${projectId}/coverage`),
+    enabled: !!projectId && enabled,
   });
 }
 

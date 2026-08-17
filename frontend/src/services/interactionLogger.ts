@@ -32,7 +32,10 @@ export type EventType =
   | 'bbox_hover'
   | 'pdf_scroll'
   | 'letter_edit'
-  | 'panel_focus';
+  | 'panel_focus'
+  | 'coverage_view'
+  | 'diff_view'
+  | 'undo';
 
 export type PanelName = 'evidence' | 'pdf' | 'tree' | 'letter' | 'header' | 'other';
 

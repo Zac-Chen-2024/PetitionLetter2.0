@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import { logInteraction } from '../services/interactionLogger';
 import { useInferArgumentTitle, useInferRelationship, useRecommendSnippets } from '../api';
 import { FlowCanvas, type FlowCanvasApi } from './ArgumentCanvas/FlowCanvas';
+import { CoveragePanel } from './ArgumentCanvas/CoveragePanel';
 
 // Canvas renderer flag (M12): ?canvas=v2 or localStorage pl_canvas=v2 selects the
 // react-flow renderer; default stays on the legacy hand-written canvas until
@@ -1316,6 +1317,7 @@ export function ArgumentGraph() {
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   // Merge mode state
   const [isMergeMode, setIsMergeMode] = useState(false);
+  const [showCoverage, setShowCoverage] = useState(false);
   const [mergeSelectedIds, setMergeSelectedIds] = useState<Set<string>>(new Set());
   const [isMerging, setIsMerging] = useState(false);
   // Move mode state (within merge mode)
@@ -2229,7 +2231,28 @@ export function ArgumentGraph() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
           </button>
+          <button
+            onClick={() => { setShowCoverage(v => !v); logInteraction('coverage_view', 'tree', { open: !showCoverage }); }}
+            className={`p-1.5 rounded transition-colors ${showCoverage ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100'}`}
+            title="Evidence coverage"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V9m4 8V5m4 12v-4M4 20h16" />
+            </svg>
+          </button>
         </div>
+
+        {/* Evidence coverage overview (M13) */}
+        {showCoverage && projectId && (
+          <CoveragePanel
+            projectId={projectId}
+            standards={standardNodes.map(n => ({ id: n.id, name: n.data.name, shortName: n.data.shortName, color: n.data.color }))}
+            onClose={() => setShowCoverage(false)}
+            onNavigateToStandard={handleNavigateToStandard}
+            onSelectSubArgument={(id) => { setFocusState({ type: 'subargument', id }); centerOnNode(id); }}
+            onSelectSnippet={(id) => setFocusState({ type: 'snippet', id })}
+          />
+        )}
 
         {/* Standard minimap */}
         <StandardMinimap

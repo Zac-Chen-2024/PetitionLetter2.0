@@ -6,6 +6,8 @@ export const queryKeys = {
   project: (id: string) => ['project', id] as const,
   standards: (id: string) => ['standards', id] as const,
   arguments: (id: string) => ['arguments', id] as const,
+  // Prefix of ['arguments', id] so structural invalidations refresh it too
+  coverage: (id: string) => ['arguments', id, 'coverage'] as const,
   snippets: (id: string) => ['snippets', id] as const,
   sections: (id: string) => ['sections', id] as const,
   exhibits: (id: string) => ['exhibits', id] as const,

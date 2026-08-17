@@ -36,6 +36,8 @@ EVENTS = {
     "node_create", "node_rename", "node_move", "node_merge", "node_delete",
     "snippet_assign", "snippet_unassign", "generate_trigger",
     "citation_click", "bbox_hover", "pdf_scroll", "letter_edit", "panel_focus",
+    # M13 judgement surface
+    "coverage_view", "diff_view", "undo",
 }
 PANELS = {"evidence", "pdf", "tree", "letter", "header", "other"}
 
