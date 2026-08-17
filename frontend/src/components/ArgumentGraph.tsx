@@ -2375,6 +2375,9 @@ export function ArgumentGraph() {
             <div className="w-3 h-3 rounded-lg border-2 border-blue-500 bg-white" />
             <span>{t('graph.legend.standard')}</span>
           </div>
+          <div className="pt-1 border-t border-slate-200 text-slate-400 font-mono" title="Keyboard: j/k next/prev sub-argument · v cycle its evidence · Esc clear · Ctrl+Z undo · Ctrl+Shift+Z redo">
+            j k v Esc ⌃Z
+          </div>
         </div>
 
         {/* Canvas: react-flow renderer (M12) behind ?canvas=v2, legacy otherwise */}
