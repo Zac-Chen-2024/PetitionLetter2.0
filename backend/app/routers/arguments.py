@@ -807,3 +807,20 @@ async def infer_argument_title_endpoint(
         return {"success": True, "title": title}
     except Exception:
         raise
+
+
+# ============================================
+# Evidence coverage overview (M13)
+# ============================================
+
+@router.get("/{project_id}/coverage")
+async def get_coverage(project_id: str):
+    """Facts about evidence coverage: unassigned snippets, thin SubArguments,
+    per-standard evidence-layer gaps. No scores, no recommendations."""
+    from ..services.coverage import compute_coverage
+    from ..services.petition_writer_v3 import _load_snippet_source
+    from ..services.snippet_recommender import load_legal_arguments
+
+    return {"success": True, "project_id": project_id,
+            **compute_coverage(load_legal_arguments(project_id), _load_snippet_source(project_id))}
+
