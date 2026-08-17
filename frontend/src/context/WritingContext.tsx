@@ -1,15 +1,69 @@
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react';
-import type { WritingEdge, LetterSection, Position, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard } from '../types';
+import type { WritingEdge, LetterSection, Position, Argument, SubArgument, PipelineState, MergeSuggestion, LegalStandard, SentenceWithProvenance } from '../types';
 import { toProvenanceIndex } from '../types';
-import type { WriteV3Result } from '../api';
+import { markRegeneration } from '../utils/sentenceDiff';
+import { buildProvenanceIndex, joinLiveSentences } from '../utils/provenance';
+import { logInteraction } from '../services/interactionLogger';
+import type { SentenceAPI, WriteV3Result } from '../api';
 import { STANDARD_ID_TO_KEY } from '../constants/colors';
-import { sectionsFromAPI, sectionTitle, useAnalyzeImpact, useApplyMerges, useConfirmMerges, useExtract, useFetchMergeSuggestions, useGenerateMergeSuggestions, useInvalidate, useSectionsQuery, useWriteSection } from '../api';
+import { sectionsFromAPI, sectionTitle, useAnalyzeImpact, useApplyMerges, useConfirmMerges, useExtract, useFetchMergeSuggestions, useGenerateMergeSuggestions, useInvalidate, usePutSectionSentences, useSectionsQuery, useWriteSection } from '../api';
 import { useProject } from './ProjectContext';
 
 // ============================================
 // WritingContext
 // Provides: writing canvas state, letter sections, pipeline operations
 // ============================================
+
+// ---- M13 helpers -----------------------------------------------------------
+
+/** Sentences as the reader sees them: pending 'removed' markers stripped, other markers cleared. */
+function liveSentences(sentences: SentenceWithProvenance[]): SentenceWithProvenance[] {
+  return sentences
+    .filter(s => s.changeStatus !== 'removed')
+    .map(s => (s.changeStatus || s.previousText ? { ...s, changeStatus: undefined, previousText: undefined } : s));
+}
+
+function toSentenceAPI(sentences: SentenceWithProvenance[]): SentenceAPI[] {
+  return liveSentences(sentences).map(s => ({
+    text: s.text,
+    snippet_ids: s.snippet_ids || [],
+    subargument_id: s.subargument_id ?? null,
+    argument_id: s.argument_id ?? null,
+    exhibit_refs: s.exhibit_refs || [],
+    sentence_type: s.sentence_type || 'body',
+  }));
+}
+
+/**
+ * Apply a regeneration to a section as a pending, reviewable diff:
+ * sentences carry added / modified / removed markers, `content` is the new
+ * live text, and the pre-regeneration state is kept in `regenSnapshot`
+ * (the *oldest* snapshot survives repeated regenerations so revert always
+ * goes back to the last accepted state).
+ */
+function withRegenerationDiff(section: LetterSection, nextSentences: SentenceWithProvenance[], subArgumentId: string | null): LetterSection {
+  const prevLive = liveSentences(section.sentences || []);
+  const { sentences, summary } = markRegeneration(prevLive, nextSentences);
+  logInteraction('diff_view', 'letter', {
+    action: 'show', section_id: section.id, subargument_id: subArgumentId,
+    added: summary.added, modified: summary.modified, removed: summary.removed, equal: summary.equal,
+  });
+  return {
+    ...section,
+    sentences,
+    content: joinLiveSentences(sentences),
+    provenanceIndex: buildProvenanceIndex(sentences),
+    regenSnapshot: section.regenSnapshot ?? {
+      sentences: prevLive,
+      content: joinLiveSentences(prevLive),
+      provenanceIndex: buildProvenanceIndex(prevLive),
+      subArgumentId,
+      at: Date.now(),
+    },
+    isStale: false,
+    lastEditedAt: new Date(),
+  };
+}
 
 export interface WritingContextType {
   writingEdges: WritingEdge[];
@@ -52,6 +106,10 @@ export interface WritingContextType {
   ) => void;
   // Mark a section as stale (content out of sync with writing tree)
   markSectionStale: (standardKey: string) => void;
+  // M13 regeneration diff: accept keeps the new text (drops removed markers,
+  // persists), revert restores the pre-regeneration snapshot (and persists).
+  acceptRegeneration: (sectionId: string, projectId: string) => Promise<void>;
+  revertRegeneration: (sectionId: string, projectId: string) => Promise<void>;
   // Rewrite a single standard's letter section
   rewriteStandard: (standardKey: string, projectId: string, llmProvider: string, onSubArgSnippetsUpdated?: (updates: Record<string, string[]>) => void) => Promise<void>;
   // Exploration writing toggle
@@ -88,6 +146,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
   // mutateAsync references are stable across renders (TanStack Query), so
   // callbacks can depend on them without re-creating on every mutation state change.
   const writeSection = useWriteSection().mutateAsync;
+  const putSentences = usePutSectionSentences().mutateAsync;
   const analyzeImpact = useAnalyzeImpact().mutateAsync;
   const extract = useExtract().mutateAsync;
   const generateMergeSuggestionsM = useGenerateMergeSuggestions<MergeSuggestion>().mutateAsync;
@@ -124,6 +183,9 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     localStorage.getItem('explorationWriting') === 'true'
   );
   const explorationWritingRef = useRef(explorationWriting);
+  // Latest sections for callbacks that must read state outside an updater
+  const letterSectionsRef = useRef(letterSections);
+  letterSectionsRef.current = letterSections;
   useEffect(() => {
     explorationWritingRef.current = explorationWriting;
     localStorage.setItem('explorationWriting', String(explorationWriting));
@@ -339,9 +401,10 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       setLetterSections(prev => {
         const idx = prev.findIndex(s => s.standardId === standardKey);
         if (idx >= 0) {
-          // Replace existing section, preserve order
+          // Replace existing section, preserve order. If the old section had
+          // sentences, show a sentence-level diff instead of a silent swap.
           const updated = [...prev];
-          updated[idx] = { ...newSection, order: updated[idx].order };
+          updated[idx] = withRegenerationDiff(updated[idx], newSection.sentences || [], null);
           return updated;
         }
         // Append if new
@@ -526,14 +589,15 @@ export function WritingProvider({ children }: { children: ReactNode }) {
       setLetterSections(prev => prev.map(s => {
         if (s.standardId !== standardKey) return s;
 
-        const indicesToReplace = s.provenanceIndex?.bySubArgument?.[subArgumentId] || [];
+        // Splice against the live text (a pending diff's removed markers are display-only)
+        const oldSentences = liveSentences(s.sentences || []);
+        const liveIndex = buildProvenanceIndex(oldSentences);
+        const indicesToReplace = liveIndex.bySubArgument[subArgumentId] || [];
         const isNewSubArgument = indicesToReplace.length === 0;
-
-        const oldSentences = [...s.sentences!];
         let newSentences: typeof oldSentences;
 
         if (isNewSubArgument) {
-          const argumentIndices = s.provenanceIndex?.byArgument?.[argId] || [];
+          const argumentIndices = liveIndex.byArgument[argId] || [];
           if (argumentIndices.length > 0) {
             const insertAfterIdx = Math.max(...argumentIndices);
             newSentences = [
@@ -564,42 +628,7 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           ];
         }
 
-        const newContent = newSentences.map(sent => sent.text).join(' ');
-
-        const newProvenanceIndex = {
-          bySubArgument: {} as Record<string, number[]>,
-          byArgument: {} as Record<string, number[]>,
-          bySnippet: {} as Record<string, number[]>,
-        };
-
-        newSentences.forEach((sent, idx) => {
-          if (sent.subargument_id) {
-            if (!newProvenanceIndex.bySubArgument[sent.subargument_id]) {
-              newProvenanceIndex.bySubArgument[sent.subargument_id] = [];
-            }
-            newProvenanceIndex.bySubArgument[sent.subargument_id].push(idx);
-          }
-          if (sent.argument_id) {
-            if (!newProvenanceIndex.byArgument[sent.argument_id]) {
-              newProvenanceIndex.byArgument[sent.argument_id] = [];
-            }
-            newProvenanceIndex.byArgument[sent.argument_id].push(idx);
-          }
-          (sent.snippet_ids || []).forEach(snippetId => {
-            if (!newProvenanceIndex.bySnippet[snippetId]) {
-              newProvenanceIndex.bySnippet[snippetId] = [];
-            }
-            newProvenanceIndex.bySnippet[snippetId].push(idx);
-          });
-        });
-
-        return {
-          ...s,
-          sentences: newSentences,
-          content: newContent,
-          provenanceIndex: newProvenanceIndex,
-          lastEditedAt: new Date(),
-        };
+        return withRegenerationDiff(s, newSentences, subArgumentId);
       }));
 
       console.log(`Successfully regenerated SubArgument ${subArgumentId}`);
@@ -732,77 +761,71 @@ export function WritingProvider({ children }: { children: ReactNode }) {
 
   // Commit all changes: apply accepted suggestions, remove 'removed' sentences, rebuild index, save
   const commitChanges = useCallback(async (sectionId: string, projectId: string) => {
-    setLetterSections(prev => {
-      const updated = prev.map(section => {
-        if (section.id !== sectionId) return section;
+    const section = letterSectionsRef.current.find(s => s.id === sectionId);
+    if (!section) return;
 
-        // Filter out removed sentences, keep the rest
-        const newSentences = (section.sentences || [])
-          .filter(sent => sent.changeStatus !== 'removed')
-          .map(sent => ({
-            ...sent,
-            changeStatus: undefined,
-            suggestedText: undefined,
-            changeReason: undefined,
-          }));
+    // Drop removed sentences, clear every marker, rebuild the index
+    const newSentences = liveSentences(section.sentences || []).map(sent => ({
+      ...sent,
+      suggestedText: undefined,
+      changeReason: undefined,
+    }));
+    const committed: LetterSection = {
+      ...section,
+      sentences: newSentences,
+      content: newSentences.map(sent => sent.text).join(' '),
+      provenanceIndex: buildProvenanceIndex(newSentences),
+      isStale: false,
+      pendingSuggestions: undefined,
+      regenSnapshot: undefined,
+      lastEditedAt: new Date(),
+    };
+    setLetterSections(prev => prev.map(s => (s.id === sectionId ? committed : s)));
 
-        const newContent = newSentences.map(sent => sent.text).join(' ');
-
-        // Rebuild provenance index
-        const newProvenanceIndex = {
-          bySubArgument: {} as Record<string, number[]>,
-          byArgument: {} as Record<string, number[]>,
-          bySnippet: {} as Record<string, number[]>,
-        };
-
-        newSentences.forEach((sent, idx) => {
-          if (sent.subargument_id) {
-            if (!newProvenanceIndex.bySubArgument[sent.subargument_id]) {
-              newProvenanceIndex.bySubArgument[sent.subargument_id] = [];
-            }
-            newProvenanceIndex.bySubArgument[sent.subargument_id].push(idx);
-          }
-          if (sent.argument_id) {
-            if (!newProvenanceIndex.byArgument[sent.argument_id]) {
-              newProvenanceIndex.byArgument[sent.argument_id] = [];
-            }
-            newProvenanceIndex.byArgument[sent.argument_id].push(idx);
-          }
-          (sent.snippet_ids || []).forEach(snippetId => {
-            if (!newProvenanceIndex.bySnippet[snippetId]) {
-              newProvenanceIndex.bySnippet[snippetId] = [];
-            }
-            newProvenanceIndex.bySnippet[snippetId].push(idx);
-          });
-        });
-
-        return {
-          ...section,
-          sentences: newSentences,
-          content: newContent,
-          provenanceIndex: newProvenanceIndex,
-          isStale: false,
-          pendingSuggestions: undefined,
-          lastEditedAt: new Date(),
-        };
+    // Persist what the user now sees as a new full version.
+    if (committed.standardId && projectId) {
+      putSentences({
+        projectId,
+        standardKey: committed.standardId,
+        sentences: toSentenceAPI(committed.sentences || []),
+        source: 'user_commit',
+      }).catch(err => {
+        console.warn('Failed to persist committed changes:', err);
       });
+    }
+  }, [putSentences]);
 
-      // Save to backend asynchronously
-      const committedSection = updated.find(s => s.id === sectionId);
-      if (committedSection?.standardId && projectId) {
-        writeSection({
-          projectId,
-          standardKey: committedSection.standardId,
-          provider: 'deepseek',
-          additional_instructions: '__commit_only__',
-        }).catch(err => {
-          console.warn('Failed to persist committed changes:', err);
-        });
-      }
+  // M13: accept = commit; revert = restore the pre-regeneration snapshot.
+  const acceptRegeneration = useCallback(async (sectionId: string, projectId: string) => {
+    logInteraction('diff_view', 'letter', { action: 'accept', section_id: sectionId });
+    await commitChanges(sectionId, projectId);
+  }, [commitChanges]);
 
-      return updated;
-    });
-  }, [writeSection]);
+  const revertRegeneration = useCallback(async (sectionId: string, projectId: string) => {
+    logInteraction('diff_view', 'letter', { action: 'revert', section_id: sectionId });
+    const current = letterSectionsRef.current.find(section => section.id === sectionId);
+    if (!current?.regenSnapshot) return;
+    const snap = current.regenSnapshot;
+    const restored: LetterSection = {
+      ...current,
+      sentences: snap.sentences,
+      content: snap.content,
+      provenanceIndex: snap.provenanceIndex ?? buildProvenanceIndex(snap.sentences),
+      regenSnapshot: undefined,
+      lastEditedAt: new Date(),
+    };
+    setLetterSections(prev => prev.map(section => (section.id === sectionId ? restored : section)));
+    if (restored.standardId && projectId) {
+      putSentences({
+        projectId,
+        standardKey: restored.standardId,
+        sentences: toSentenceAPI(restored.sentences || []),
+        source: 'user_revert',
+      }).catch(err => {
+        console.warn('Failed to persist reverted section:', err);
+      });
+    }
+  }, [putSentences]);
 
   // Dismiss all changes (revert to clean state without applying)
   const dismissChanges = useCallback((sectionId: string) => {
@@ -817,37 +840,11 @@ export function WritingProvider({ children }: { children: ReactNode }) {
           changeStatus: undefined,
           suggestedText: undefined,
           changeReason: undefined,
+          previousText: undefined,
         }));
 
       const newContent = newSentences.map(sent => sent.text).join(' ');
-
-      // Rebuild provenance index
-      const newProvenanceIndex = {
-        bySubArgument: {} as Record<string, number[]>,
-        byArgument: {} as Record<string, number[]>,
-        bySnippet: {} as Record<string, number[]>,
-      };
-
-      newSentences.forEach((sent, idx) => {
-        if (sent.subargument_id) {
-          if (!newProvenanceIndex.bySubArgument[sent.subargument_id]) {
-            newProvenanceIndex.bySubArgument[sent.subargument_id] = [];
-          }
-          newProvenanceIndex.bySubArgument[sent.subargument_id].push(idx);
-        }
-        if (sent.argument_id) {
-          if (!newProvenanceIndex.byArgument[sent.argument_id]) {
-            newProvenanceIndex.byArgument[sent.argument_id] = [];
-          }
-          newProvenanceIndex.byArgument[sent.argument_id].push(idx);
-        }
-        (sent.snippet_ids || []).forEach(snippetId => {
-          if (!newProvenanceIndex.bySnippet[snippetId]) {
-            newProvenanceIndex.bySnippet[snippetId] = [];
-          }
-          newProvenanceIndex.bySnippet[snippetId].push(idx);
-        });
-      });
+      const newProvenanceIndex = buildProvenanceIndex(newSentences);
 
       return {
         ...section,
@@ -889,12 +886,14 @@ export function WritingProvider({ children }: { children: ReactNode }) {
     removeSubArgumentFromLetter,
     markSectionStale,
     rewriteStandard,
+    acceptRegeneration,
+    revertRegeneration,
     rewritingStandardKey,
     acceptSuggestion,
     rejectSuggestion,
     commitChanges,
     dismissChanges,
-  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, explorationWriting, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
+  }), [writingEdges, letterSections, writingNodePositions, mergeSuggestions, isExtracting, isMerging, extractionProgress, rewritingStandardKey, explorationWriting, addWritingEdge, removeWritingEdge, confirmWritingEdge, updateLetterSection, updateWritingNodePosition, generatePetition, reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges, applyMerges, loadMergeSuggestions, regenerateSubArgumentInLetter, removeSubArgumentFromLetter, markSectionStale, rewriteStandard, acceptRegeneration, revertRegeneration, acceptSuggestion, rejectSuggestion, commitChanges, dismissChanges]);
 
   return <WritingContext.Provider value={value}>{children}</WritingContext.Provider>;
 }

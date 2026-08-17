@@ -208,6 +208,8 @@ interface LetterSectionComponentProps {
   onEdit: (id: string, content: string) => void;
   onRewrite?: (standardId: string) => void;
   isRewriting?: boolean;
+  onAcceptRegeneration?: (sectionId: string) => void;
+  onRevertRegeneration?: (sectionId: string) => void;
   onSentenceClick?: (sentence: SentenceWithProvenance, idx: number) => void;
   onExhibitClick?: (exhibitId: string, page?: number, subargumentId?: string | null, snippetIds?: string[], sectionId?: string, sentenceIdx?: number) => void;
   focusedSubArgumentId?: string | null;
@@ -222,6 +224,8 @@ function LetterSectionComponent({
   onEdit,
   onRewrite,
   isRewriting,
+  onAcceptRegeneration,
+  onRevertRegeneration,
   onSentenceClick,
   onExhibitClick,
   focusedSubArgumentId,
@@ -233,6 +237,7 @@ function LetterSectionComponent({
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(section.content);
   const [hoveredSentenceIdx, setHoveredSentenceIdx] = useState<number | null>(null);
+  const [showPreviousText, setShowPreviousText] = useState(true);
   const [tooltipSentence, setTooltipSentence] = useState<{
     sentence: SentenceWithProvenance;
     position: { x: number; y: number };
@@ -358,11 +363,22 @@ function LetterSectionComponent({
 
     // Group sentences by SubArgument for paragraph breaks
     const renderSentence = (sentence: SentenceWithProvenance, idx: number) => {
+      // Regeneration diff (M13): removed sentences are display-only
+      if (sentence.changeStatus === 'removed') {
+        return (
+          <span key={idx} className="inline line-through decoration-red-400 text-red-400/80 bg-red-50 rounded" title="Removed by regeneration">
+            {sentence.text}{' '}
+          </span>
+        );
+      }
       const hasProvenance = sentence.snippet_ids && sentence.snippet_ids.length > 0;
       const hasSubArgument = !!sentence.subargument_id;
       const isClickable = hasProvenance || hasSubArgument;
       const isHovered = hoveredSentenceIdx === idx;
       const isFocused = isSentenceFocused(sentence, idx);
+      const isAdded = sentence.changeStatus === 'added';
+      const isModified = sentence.changeStatus === 'modified';
+      const needsAdjustment = sentence.changeStatus === 'needs_adjustment';
 
       return (
         <span
@@ -376,10 +392,20 @@ function LetterSectionComponent({
             ${isHovered && isClickable ? 'bg-blue-100 rounded' : ''}
             ${isFocused ? 'bg-yellow-200 rounded font-medium' : ''}
             ${sentence.isEdited ? 'border-b border-dashed border-orange-300' : ''}
+            ${isAdded ? 'bg-emerald-50 text-emerald-900 rounded border-b-2 border-emerald-300' : ''}
+            ${isModified ? 'bg-emerald-50 rounded border-b-2 border-amber-300' : ''}
+            ${needsAdjustment ? 'border-b-2 border-dotted border-amber-400' : ''}
             transition-colors inline
           `}
-          title={isClickable ? 'Click to focus source • Right-click for details' : undefined}
+          title={
+            isModified && showPreviousText === false ? `Was: ${sentence.previousText ?? ''}`
+            : needsAdjustment && sentence.changeReason ? `Needs adjustment: ${sentence.changeReason}`
+            : isClickable ? 'Click to focus source • Right-click for details' : undefined
+          }
         >
+          {isModified && showPreviousText && sentence.previousText && (
+            <span className="line-through decoration-red-400 text-red-400/80 bg-red-50 rounded mr-1">{sentence.previousText}</span>
+          )}
           {renderTextWithExhibitRefs(sentence.text, sentence, idx)}
           {/* Provenance indicators */}
           {(hasProvenance || hasSubArgument) && (
@@ -492,6 +518,48 @@ function LetterSectionComponent({
         </div>
       </div>
 
+      {/* Regeneration review bar (M13): what changed, accept or revert */}
+      {section.regenSnapshot && (() => {
+        const sents = section.sentences || [];
+        const added = sents.filter(x => x.changeStatus === 'added').length;
+        const modified = sents.filter(x => x.changeStatus === 'modified').length;
+        const removed = sents.filter(x => x.changeStatus === 'removed').length;
+        return (
+          <div className="mb-2 flex items-center justify-between gap-2 px-2 py-1.5 rounded-md bg-slate-50 border border-slate-200 text-[11px]">
+            <div className="flex items-center gap-2 text-slate-600">
+              <span className="font-medium">Regenerated{section.regenSnapshot.subArgumentId ? ' (1 sub-argument)' : ''}:</span>
+              <span className="text-emerald-700">+{added} added</span>
+              <span className="text-amber-700">~{modified} modified</span>
+              <span className="text-red-600">−{removed} removed</span>
+              {added + modified + removed === 0 && <span className="text-slate-400">no textual change</span>}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowPreviousText(v => !v)}
+                className="px-2 py-0.5 rounded text-slate-500 hover:bg-slate-200"
+                title="Toggle previous text for modified sentences"
+              >
+                {showPreviousText ? 'Hide old' : 'Show old'}
+              </button>
+              <button
+                onClick={() => onRevertRegeneration?.(section.id)}
+                className="px-2 py-0.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-100"
+                title="Restore the text as it was before regeneration"
+              >
+                Revert
+              </button>
+              <button
+                onClick={() => onAcceptRegeneration?.(section.id)}
+                className="px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                title="Keep the regenerated text"
+              >
+                Accept
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {isEditing ? (
         <div className="space-y-2">
           <textarea
@@ -545,6 +613,8 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
     generatePetition,
     pipelineState,
     rewriteStandard,
+    acceptRegeneration,
+    revertRegeneration,
     rewritingStandardKey,
     explorationWriting,
     setExplorationWriting,
@@ -850,6 +920,8 @@ export function LetterPanel({ className = '' }: LetterPanelProps) {
                     onEdit={updateLetterSection}
                     onRewrite={handleRewrite}
                     isRewriting={rewritingStandardKey === section.standardId}
+                    onAcceptRegeneration={acceptRegeneration}
+                    onRevertRegeneration={revertRegeneration}
                     onSentenceClick={handleSentenceClick}
                     onExhibitClick={handleExhibitClick}
                     focusedSubArgumentId={focusedSubArgumentId}

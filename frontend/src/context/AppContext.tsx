@@ -100,6 +100,10 @@ export function useApp() {
     return writing.commitChanges(sectionId, project.projectId);
   }, [writing.commitChanges, project.projectId]);
 
+  // M13 regeneration diff review, bound to the current project
+  const acceptRegeneration = useCallback((sectionId: string) => writing.acceptRegeneration(sectionId, project.projectId), [writing.acceptRegeneration, project.projectId]);
+  const revertRegeneration = useCallback((sectionId: string) => writing.revertRegeneration(sectionId, project.projectId), [writing.revertRegeneration, project.projectId]);
+
   // regenerateSubArgument: original signature takes (subArgumentId) => Promise<void>
   const regenerateSubArgument = useCallback(async (subArgumentId: string) => {
     logInteraction('generate_trigger', 'tree', { kind: 'subargument', id: subArgumentId });
@@ -417,6 +421,8 @@ export function useApp() {
     rejectSuggestion: writing.rejectSuggestion,
     commitChanges,
     dismissChanges: writing.dismissChanges,
+    acceptRegeneration,
+    revertRegeneration,
 
     // Pipeline (bound)
     generatePetition,
@@ -439,7 +445,7 @@ export function useApp() {
     project, snippets, args, ui, writing,
     generateArguments, addSubArgument, removeSubArgument, regenerateSubArgument, mergeSubArguments, moveSubArguments, consolidateSubArguments, createArgument, moveToOverallMerits,
     rewriteStandard, removeStandard, regenerateStandard,
-    removeArgument, commitChanges, generatePetition,
+    removeArgument, commitChanges, acceptRegeneration, revertRegeneration, generatePetition,
     reloadSnippets, unifiedExtract, generateMergeSuggestions, confirmMerges,
     applyMerges, loadMergeSuggestions, isElementHighlighted,
     canExtract, canConfirm, canGenerate,

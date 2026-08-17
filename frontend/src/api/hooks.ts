@@ -17,6 +17,7 @@ import type {
   ExtractResult,
   ProjectInfo,
   SectionsResponse,
+  SentenceAPI,
   SnippetsResponse,
   StandardsResponse,
   SuccessResponse,
@@ -284,6 +285,21 @@ export function useWriteSection() {
       // The server now has a new version of this section; the local letter
       // state is updated by the caller (it merges the result), so we only
       // mark the cached snapshot stale for the next project load.
+      void qc.invalidateQueries({ queryKey: queryKeys.sections(v.projectId), refetchType: 'none' });
+    },
+  });
+}
+
+/** Persist the section exactly as shown (accept/revert regeneration, edits) — M13. */
+export function usePutSectionSentences() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { projectId: string; standardKey: string; sentences: SentenceAPI[]; source: 'user_commit' | 'user_revert' | 'user_edit' }) =>
+      apiClient.put<{ success: boolean; version_id: string; sentence_count: number }>(
+        `/write/v3/${v.projectId}/${v.standardKey}/sentences`,
+        { sentences: v.sentences, source: v.source },
+      ),
+    onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: queryKeys.sections(v.projectId), refetchType: 'none' });
     },
   });
