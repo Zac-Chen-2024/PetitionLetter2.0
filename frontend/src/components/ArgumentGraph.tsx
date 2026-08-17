@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { logInteraction } from '../services/interactionLogger';
-import { useInferArgumentTitle, useInferRelationship, useRecommendSnippets } from '../api';
+import { useHistoryQuery, useInferArgumentTitle, useInferRelationship, useRecommendSnippets, useRedo, useUndo } from '../api';
 import { FlowCanvas, type FlowCanvasApi } from './ArgumentCanvas/FlowCanvas';
 import { CoveragePanel } from './ArgumentCanvas/CoveragePanel';
 
@@ -1271,6 +1271,9 @@ export function ArgumentGraph() {
     updateArgumentPosition2,
     updateSubArgumentPosition,
     setSelectedSnippetId,
+    setSelectedDocumentId,
+    allSnippets,
+    markSectionStale,
     updateSubArgument,
     saveSubArgument,
     regenerateSubArgument,
@@ -2097,8 +2100,41 @@ export function ArgumentGraph() {
     });
   }, [argumentNodes, subArgumentNodes, useFlow]);
 
-  // Handle keyboard shortcuts
+  // ---- Structural undo / redo (M13) ----
+  const historyQuery = useHistoryQuery(projectId);
+  const undoM = useUndo();
+  const redoM = useRedo();
+  const runHistoryStep = useCallback(async (direction: 'undo' | 'redo') => {
+    if (!projectId) return;
+    const m = direction === 'undo' ? undoM : redoM;
+    if (m.isPending) return;
+    try {
+      const res = await m.mutateAsync({ projectId });
+      logInteraction('undo', 'tree', { direction, applied: res.applied, label: res.label ?? null, affected: res.affected_standard_keys ?? [] });
+      if (!res.applied) { toast(`Nothing to ${direction}`); return; }
+      (res.affected_standard_keys ?? []).forEach(k => markSectionStale(k));
+      toast.success(`${direction === 'undo' ? 'Undid' : 'Redid'}: ${(res.label ?? 'change').replace(/_/g, ' ')}`);
+    } catch (err) {
+      toast.error(`${direction} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [projectId, undoM, redoM, markSectionStale]);
+
+  // ---- Keyboard: Esc (modes / selection), j/k (walk SubArguments), v (cycle evidence), Ctrl/Cmd+Z / Shift+Z / Y ----
+  const focusStateRef = useRef(focusState);
+  focusStateRef.current = focusState;
+  const evidenceCursorRef = useRef<{ subArgumentId: string; idx: number } | null>(null);
   useEffect(() => {
+    const isTyping = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+    const focusSubArgument = (id: string) => {
+      setSelectedNodeId(id);
+      setFocusState({ type: 'subargument', id });
+      centerOnNode(id);
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (isConsolidateMode) {
@@ -2107,15 +2143,62 @@ export function ArgumentGraph() {
           setIsMoveMode(false);
         } else if (isMergeMode) {
           exitMergeMode();
-        } else {
+        } else if (selectedNodeId || focusStateRef.current.type !== 'none') {
           setSelectedNodeId(null);
+          setFocusState({ type: 'none', id: null });
+          setSelectedSnippetId(null);
         }
+        return;
+      }
+      if (isTyping(e.target)) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        void runHistoryStep(e.shiftKey ? 'redo' : 'undo');
+        return;
+      }
+      if (mod && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        void runHistoryStep('redo');
+        return;
+      }
+      if (mod || e.altKey) return;
+
+      if (e.key === 'j' || e.key === 'k') {
+        if (subArgumentNodes.length === 0) return;
+        e.preventDefault();
+        const fs = focusStateRef.current;
+        const currentIdx = fs.type === 'subargument' && fs.id ? subArgumentNodes.findIndex(n => n.id === fs.id) : -1;
+        const delta = e.key === 'j' ? 1 : -1;
+        const nextIdx = currentIdx < 0
+          ? (delta > 0 ? 0 : subArgumentNodes.length - 1)
+          : (currentIdx + delta + subArgumentNodes.length) % subArgumentNodes.length;
+        focusSubArgument(subArgumentNodes[nextIdx].id);
+        return;
+      }
+      if (e.key === 'v') {
+        // View evidence: cycle through the focused SubArgument's snippets in the PDF
+        const fs = focusStateRef.current;
+        if (fs.type !== 'subargument' || !fs.id) return;
+        const sub = contextSubArguments.find(sa => sa.id === fs.id);
+        const ids = sub?.snippetIds ?? [];
+        if (ids.length === 0) { toast('No evidence on this sub-argument'); return; }
+        e.preventDefault();
+        const cursor = evidenceCursorRef.current;
+        const idx = cursor && cursor.subArgumentId === fs.id ? (cursor.idx + 1) % ids.length : 0;
+        evidenceCursorRef.current = { subArgumentId: fs.id, idx };
+        const snippetId = ids[idx];
+        const snippet = allSnippets.find(sn => sn.id === snippetId);
+        if (snippet) setSelectedDocumentId(snippet.documentId);
+        setSelectedSnippetId(snippetId);
+        logInteraction('citation_click', 'tree', { via: 'keyboard_v', subargument_id: fs.id, snippet_id: snippetId, idx, total: ids.length });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMergeMode, isMoveMode, isConsolidateMode, exitMergeMode]);
+  }, [isMergeMode, isMoveMode, isConsolidateMode, exitMergeMode, selectedNodeId, subArgumentNodes, contextSubArguments, allSnippets, setFocusState, setSelectedSnippetId, setSelectedDocumentId, centerOnNode, runHistoryStep]);
 
   // Get generateArguments from context
   const { generateArguments, isGeneratingArguments } = useApp();
@@ -2163,8 +2246,26 @@ export function ArgumentGraph() {
             </div>
           </div>
 
-          {/* Right side: Generate button */}
+          {/* Right side: Undo / Redo (M13) + Generate button */}
           <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                onClick={() => runHistoryStep('undo')}
+                disabled={!historyQuery.data?.undo_depth || undoM.isPending}
+                className="px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={historyQuery.data?.undo[0] ? `Undo: ${historyQuery.data.undo[0].label.replace(/_/g, ' ')} (Ctrl+Z)` : 'Nothing to undo'}
+              >
+                ↶ Undo{historyQuery.data?.undo_depth ? ` (${historyQuery.data.undo_depth})` : ''}
+              </button>
+              <button
+                onClick={() => runHistoryStep('redo')}
+                disabled={!historyQuery.data?.redo_depth || redoM.isPending}
+                className="px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 border-l border-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={historyQuery.data?.redo[0] ? `Redo: ${historyQuery.data.redo[0].label.replace(/_/g, ' ')} (Ctrl+Shift+Z)` : 'Nothing to redo'}
+              >
+                ↷
+              </button>
+            </div>
           <button
               onClick={() => generateArguments(true)}
               disabled={isGeneratingArguments}

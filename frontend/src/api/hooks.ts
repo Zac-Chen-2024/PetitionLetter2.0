@@ -52,6 +52,40 @@ export function useArgumentsQuery(projectId: string | null | undefined) {
   });
 }
 
+// ---- Structural undo / redo (M13) ----
+export interface HistoryPeek {
+  success: boolean;
+  undo: { seq: number; label: string; ts: string }[];
+  redo: { seq: number; label: string; ts: string }[];
+  undo_depth: number;
+  redo_depth: number;
+}
+export interface HistoryStepResult extends HistoryPeek {
+  direction: 'undo' | 'redo';
+  applied: boolean;
+  label?: string;
+  affected_standard_keys?: string[];
+}
+
+export function useHistoryQuery(projectId: string | null | undefined) {
+  return useQuery({
+    // prefix of ['arguments', id]: every structural mutation refreshes it
+    queryKey: [...queryKeys.arguments(projectId ?? ''), 'history'] as const,
+    queryFn: () => apiClient.get<HistoryPeek>(`/arguments/${projectId}/history`),
+    enabled: !!projectId,
+  });
+}
+
+function useHistoryStep(direction: 'undo' | 'redo') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { projectId: string }) => apiClient.post<HistoryStepResult>(`/arguments/${v.projectId}/${direction}`, {}),
+    onSuccess: (_d, v) => { void qc.invalidateQueries({ queryKey: queryKeys.arguments(v.projectId) }); },
+  });
+}
+export function useUndo() { return useHistoryStep('undo'); }
+export function useRedo() { return useHistoryStep('redo'); }
+
 export function useCoverageQuery(projectId: string | null | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.coverage(projectId ?? ''),
