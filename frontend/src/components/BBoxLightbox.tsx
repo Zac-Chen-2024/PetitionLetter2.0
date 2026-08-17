@@ -1,7 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { pdfjs } from 'react-pdf';
 import { Portal } from './Portal';
 import type { BoundingBox } from '../types';
+
+/** Another snippet on the same page, drawn as a dashed light box for context (M13). */
+export interface CandidateBox {
+  id: string;
+  bbox: BoundingBox;
+  color: string;
+  label?: string;
+}
 
 interface BBoxLightboxProps {
   pdfUrl: string;
@@ -9,6 +17,7 @@ interface BBoxLightboxProps {
   bbox: BoundingBox;
   originRect: DOMRect;
   snippetColor: string;
+  candidates?: CandidateBox[];
   onTransitionEnd?: () => void;
   isLeaving?: boolean;
 }
@@ -34,23 +43,50 @@ async function renderPageHighRes(pdfUrl: string, pageNumber: number): Promise<HT
   return canvas;
 }
 
-function cropBbox(canvas: HTMLCanvasElement, bbox: BoundingBox) {
+// Crop region in normalized page units (0..1000), same space as BoundingBox
+interface CropRect { x: number; y: number; width: number; height: number }
+
+const CONTEXT_PAD = 40;        // page-units of context around the snippet (4% of the page)
+const CANDIDATE_REACH = 60;    // candidates within this distance are pulled into the crop
+const MAX_GROWTH = 350;        // never grow the crop by more than this per axis
+
+/**
+ * Crop rectangle for the lightbox: the snippet plus a little page context,
+ * widened to include nearby candidate boxes so the reader can see the
+ * alternatives around the cited passage.
+ */
+export function computeCropRect(bbox: BoundingBox, candidates: CandidateBox[] = []): CropRect {
+  let x1 = bbox.x - CONTEXT_PAD;
+  let y1 = bbox.y - CONTEXT_PAD;
+  let x2 = bbox.x + bbox.width + CONTEXT_PAD;
+  let y2 = bbox.y + bbox.height + CONTEXT_PAD;
+
+  const reachX1 = bbox.x - CANDIDATE_REACH, reachY1 = bbox.y - CANDIDATE_REACH;
+  const reachX2 = bbox.x + bbox.width + CANDIDATE_REACH, reachY2 = bbox.y + bbox.height + CANDIDATE_REACH;
+  candidates.forEach(({ bbox: c }) => {
+    const intersects = c.x < reachX2 && c.x + c.width > reachX1 && c.y < reachY2 && c.y + c.height > reachY1;
+    if (!intersects) return;
+    x1 = Math.min(x1, c.x - CONTEXT_PAD / 2);
+    y1 = Math.min(y1, c.y - CONTEXT_PAD / 2);
+    x2 = Math.max(x2, c.x + c.width + CONTEXT_PAD / 2);
+    y2 = Math.max(y2, c.y + c.height + CONTEXT_PAD / 2);
+  });
+
+  // Bound growth, then clamp to the page
+  x1 = Math.max(0, Math.max(x1, bbox.x - MAX_GROWTH));
+  y1 = Math.max(0, Math.max(y1, bbox.y - MAX_GROWTH));
+  x2 = Math.min(1000, Math.min(x2, bbox.x + bbox.width + MAX_GROWTH));
+  y2 = Math.min(1000, Math.min(y2, bbox.y + bbox.height + MAX_GROWTH));
+  return { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1) };
+}
+
+function cropRegion(canvas: HTMLCanvasElement, crop: CropRect) {
   const cw = canvas.width;
   const ch = canvas.height;
-  const padFrac = 0.02;
-
-  let sx = (bbox.x / 1000) * cw;
-  let sy = (bbox.y / 1000) * ch;
-  let sw = (bbox.width / 1000) * cw;
-  let sh = (bbox.height / 1000) * ch;
-
-  // Expand by 2% padding (clamped to canvas bounds)
-  const padX = sw * padFrac;
-  const padY = sh * padFrac;
-  sx = Math.max(0, sx - padX);
-  sy = Math.max(0, sy - padY);
-  sw = Math.min(cw - sx, sw + padX * 2);
-  sh = Math.min(ch - sy, sh + padY * 2);
+  const sx = (crop.x / 1000) * cw;
+  const sy = (crop.y / 1000) * ch;
+  const sw = Math.max(1, (crop.width / 1000) * cw);
+  const sh = Math.max(1, (crop.height / 1000) * ch);
 
   const offscreen = document.createElement('canvas');
   offscreen.width = sw;
@@ -60,16 +96,32 @@ function cropBbox(canvas: HTMLCanvasElement, bbox: BoundingBox) {
   return { url: offscreen.toDataURL('image/png'), width: sw, height: sh };
 }
 
+/** Position of a page-space box inside the crop, as CSS percentages. */
+function boxInCrop(box: BoundingBox, crop: CropRect): React.CSSProperties {
+  return {
+    left: `${((box.x - crop.x) / crop.width) * 100}%`,
+    top: `${((box.y - crop.y) / crop.height) * 100}%`,
+    width: `${(box.width / crop.width) * 100}%`,
+    height: `${(box.height / crop.height) * 100}%`,
+  };
+}
+
 export function BBoxLightbox({
   pdfUrl,
   pageNumber,
   bbox,
   originRect,
   snippetColor,
+  candidates = [],
   onTransitionEnd,
   isLeaving = false,
 }: BBoxLightboxProps) {
   const [cropped, setCropped] = useState<{ url: string; width: number; height: number } | null>(null);
+  const crop = useMemo(() => computeCropRect(bbox, candidates), [bbox, candidates]);
+  const visibleCandidates = useMemo(
+    () => candidates.filter(({ bbox: c }) => c.x < crop.x + crop.width && c.x + c.width > crop.x && c.y < crop.y + crop.height && c.y + c.height > crop.y),
+    [candidates, crop],
+  );
   const [animPhase, setAnimPhase] = useState<'initial' | 'entered'>('initial');
   const imgRef = useRef<HTMLDivElement>(null);
 
@@ -79,13 +131,13 @@ export function BBoxLightbox({
     renderPageHighRes(pdfUrl, pageNumber).then((canvas) => {
       if (cancelled) return;
       try {
-        setCropped(cropBbox(canvas, bbox));
+        setCropped(cropRegion(canvas, crop));
       } catch {
         // canvas security error etc.
       }
     });
     return () => { cancelled = true; };
-  }, [pdfUrl, pageNumber, bbox]);
+  }, [pdfUrl, pageNumber, crop]);
 
   // Two-frame enter animation — start after crop is ready
   useEffect(() => {
@@ -166,13 +218,40 @@ export function BBoxLightbox({
             width: '100%',
             height: '100%',
             objectFit: 'fill',
-            border: `3px solid ${snippetColor}`,
+            border: '3px solid rgba(15,23,42,0.35)',
             borderRadius: 4,
             boxShadow: '0 12px 40px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)',
             display: 'block',
           }}
           draggable={false}
         />
+        {/* Cited snippet: solid; other snippets on the page: dashed, light (M13 candidate boxes) */}
+        <div style={{ position: 'absolute', inset: 3, overflow: 'hidden', pointerEvents: 'none' }}>
+          {visibleCandidates.map((c) => (
+            <div
+              key={c.id}
+              style={{
+                position: 'absolute',
+                ...boxInCrop(c.bbox, crop),
+                border: `2px dashed ${c.color}`,
+                backgroundColor: `${c.color}14`,
+                borderRadius: 3,
+                opacity: 0.75,
+              }}
+              title={c.label}
+            />
+          ))}
+          <div
+            style={{
+              position: 'absolute',
+              ...boxInCrop(bbox, crop),
+              border: `3px solid ${snippetColor}`,
+              backgroundColor: `${snippetColor}1f`,
+              borderRadius: 3,
+              boxShadow: `0 0 0 1px rgba(255,255,255,0.6)`,
+            }}
+          />
+        </div>
       </div>
     </Portal>
   );

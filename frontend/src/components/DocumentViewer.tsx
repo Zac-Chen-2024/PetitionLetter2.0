@@ -8,7 +8,7 @@ import { logThrottled } from '../services/interactionLogger';
 import type { Snippet, BoundingBox, MaterialType } from '../types';
 import { SnippetCreationModal } from './SnippetCreationModal';
 import { Magnifier } from './Magnifier';
-import { BBoxLightbox } from './BBoxLightbox';
+import { BBoxLightbox, type CandidateBox } from './BBoxLightbox';
 
 // Configure PDF.js worker - use CDN for compatibility
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -60,7 +60,7 @@ const FolderIcon = () => (
 
 // Spinner icon for loading
 // Snippet bounding box overlay with position tracking
-function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pdfUrl: string; onClick: (e: React.MouseEvent) => void }) {
+function SnippetBboxOverlay({ snippet, pdfUrl, onClick, candidates }: { snippet: Snippet; pdfUrl: string; onClick: (e: React.MouseEvent) => void; candidates?: CandidateBox[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const { updatePdfBboxPosition } = useApp();
 
@@ -152,6 +152,7 @@ function SnippetBboxOverlay({ snippet, pdfUrl, onClick }: { snippet: Snippet; pd
           bbox={snippet.boundingBox}
           originRect={lightbox.originRect}
           snippetColor={snippet.color}
+          candidates={candidates}
           isLeaving={isLeaving}
           onTransitionEnd={handleLightboxTransitionEnd}
         />
@@ -411,15 +412,39 @@ function PDFViewer({
                   {selectedSnippetId && pageSnippets.map((snippet) => {
                     const isSelected = selectedSnippetId === snippet.id;
                     if (!isSelected) return null;
+                    const candidates: CandidateBox[] = pageSnippets
+                      .filter(s => s.id !== snippet.id)
+                      .map(s => ({ id: s.id, bbox: s.boundingBox, color: s.color, label: s.summary }));
                     return (
                       <SnippetBboxOverlay
                         key={snippet.id}
                         snippet={snippet}
                         pdfUrl={fullPdfUrl}
                         onClick={(e) => handleSnippetClick(e, snippet)}
+                        candidates={candidates}
                       />
                     );
                   })}
+                  {/* Candidate boxes (M13): other snippets on the same page, dashed and light.
+                      Not what the sentence cites -- shown so the reader can judge the neighbourhood. */}
+                  {selectedSnippetId && pageSnippets.some(s => s.id === selectedSnippetId) && pageSnippets
+                    .filter(s => s.id !== selectedSnippetId)
+                    .map((s) => (
+                      <div
+                        key={`cand-${s.id}`}
+                        onClick={(e) => handleSnippetClick(e, s)}
+                        className="absolute border-2 border-dashed rounded cursor-pointer z-10 opacity-60 hover:opacity-100 transition-opacity"
+                        style={{
+                          left: `${(s.boundingBox.x / 1000) * 100}%`,
+                          top: `${(s.boundingBox.y / 1000) * 100}%`,
+                          width: `${(s.boundingBox.width / 1000) * 100}%`,
+                          height: `${(s.boundingBox.height / 1000) * 100}%`,
+                          borderColor: s.color,
+                          backgroundColor: `${s.color}10`,
+                        }}
+                        title={s.summary}
+                      />
+                    ))}
                 </div>
               );
             })}
