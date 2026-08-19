@@ -11,22 +11,25 @@ Endpoints:
 - POST /api/arguments/{project_id}/infer-relationship - 推断关系
 """
 
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Optional
+import copy
+import logging
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from app.core.ids import validate_path_params
+from app.core.jobs import manager as job_manager
 
 from ..services.legal_argument_organizer import (
     full_legal_pipeline,
     regenerate_standard_pipeline,
 )
-import json
-import logging
-from datetime import datetime, timezone
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/arguments", tags=["arguments"])
+router = APIRouter(prefix="/api/arguments", tags=["arguments"], dependencies=[Depends(validate_path_params)])
 
 
 # ============================================
@@ -62,45 +65,40 @@ class GenerateResponse(BaseModel):
 # Generation Endpoints
 # ============================================
 
-@router.post("/{project_id}/generate", response_model=GenerateResponse)
+async def _run_generate(project_id: str, request: GenerateRequest, job=None) -> dict:
+    result = await full_legal_pipeline(
+        project_id=project_id,
+        applicant_name=request.applicant_name or "the applicant",
+        provider=request.provider,
+        job=job,
+    )
+    return GenerateResponse(
+        success=True,
+        main_subject=request.applicant_name,
+        argument_count=result.get("stats", {}).get("argument_count", 0),
+        arguments=result.get("arguments", []),
+        stats=result.get("stats", {})
+    ).model_dump()
+
+
+@router.post("/{project_id}/generate", status_code=202)
 async def generate_arguments(
     project_id: str,
     request: GenerateRequest = GenerateRequest()
 ):
     """
-    一键生成论据 (LLM + 法律条例驱动)
+    一键生成论据 (LLM + 法律条例驱动) —— M10：异步 job
 
     Pipeline:
     1. LLM + 法律条例 → 组织子论点 (~7-8个，符合律师论证风格)
     2. LLM → 划分次级子论点 (每个2-4个 SubArguments)
     3. 智能过滤弱证据（如普通认证）
 
-    Args:
-        project_id: 项目 ID
-        force_reanalyze: 是否强制重新生成
-        applicant_name: 申请人姓名
-        provider: LLM provider (deepseek/openai)
+    立即返回 job 记录；轮询 GET /api/jobs/{id}，succeeded 时 result 是 GenerateResponse。
     """
-    try:
-        # 使用新的 LLM + 法律条例驱动流程
-        result = await full_legal_pipeline(
-            project_id=project_id,
-            applicant_name=request.applicant_name or "the applicant",
-            provider=request.provider
-        )
-
-        return GenerateResponse(
-            success=True,
-            main_subject=request.applicant_name,
-            argument_count=result.get("stats", {}).get("argument_count", 0),
-            arguments=result.get("arguments", []),
-            stats=result.get("stats", {})
-        )
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    params = {"project_id": project_id, **request.model_dump()}
+    return job_manager.submit("generate_arguments", project_id, params,
+                              lambda job: _run_generate(project_id, request, job=job))
 
 
 class RegenerateStandardRequest(BaseModel):
@@ -175,12 +173,12 @@ async def get_arguments(project_id: str):
 # ============================================
 
 from ..services.snippet_recommender import (
-    recommend_snippets_for_subargument,
+    consolidate_subarguments,
     create_subargument,
     get_assigned_snippet_ids,
     infer_relationship,
     merge_subarguments,
-    consolidate_subarguments,
+    recommend_snippets_for_subargument,
 )
 
 
@@ -282,8 +280,8 @@ async def recommend_snippets(
             total_available=len(recommended)
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class CreateArgumentRequest(BaseModel):
@@ -306,8 +304,8 @@ async def create_argument_endpoint(
             title=request.title,
         )
         return {"success": True, "argument": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class MoveSubArgumentsRequest(BaseModel):
@@ -332,9 +330,9 @@ async def move_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Move sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Move sub-arguments failed")
+        raise
 
 
 class MergeSubArgumentsRequest(BaseModel):
@@ -371,9 +369,9 @@ async def merge_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Merge sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Merge sub-arguments failed")
+        raise
 
 
 class ConsolidateSubArgumentsRequest(BaseModel):
@@ -411,9 +409,9 @@ async def consolidate_subarguments_endpoint(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Consolidate sub-arguments failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Consolidate sub-arguments failed")
+        raise
 
 
 @router.post("/{project_id}/subarguments")
@@ -449,8 +447,8 @@ async def create_new_subargument(
             "subargument": new_subarg
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class InferRelationshipRequest(BaseModel):
@@ -489,36 +487,38 @@ async def update_subargument(
     - needs_snippet_confirmation: 是否需要确认 snippets
     - status: 状态 (draft/verified)
     """
-    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
+    from ..services.snippet_recommender import update_legal_arguments
 
-    legal_args = load_legal_arguments(project_id)
-    sub_arguments = legal_args.get("sub_arguments", [])
+    def _mutate(legal_args):
+        sub_arguments = legal_args.get("sub_arguments", [])
 
-    found = False
-    for sub_arg in sub_arguments:
-        if sub_arg.get("id") == subargument_id:
-            if request.title is not None:
-                sub_arg["title"] = request.title
-            if request.purpose is not None:
-                sub_arg["purpose"] = request.purpose
-            if request.relationship is not None:
-                sub_arg["relationship"] = request.relationship
-            if request.snippet_ids is not None:
-                sub_arg["snippet_ids"] = request.snippet_ids
-            if request.pending_snippet_ids is not None:
-                sub_arg["pending_snippet_ids"] = request.pending_snippet_ids
-            if request.needs_snippet_confirmation is not None:
-                sub_arg["needs_snippet_confirmation"] = request.needs_snippet_confirmation
-            if request.status is not None:
-                sub_arg["status"] = request.status
-            sub_arg["updated_at"] = datetime.now(timezone.utc).isoformat()
-            found = True
-            break
+        found = False
+        for sub_arg in sub_arguments:
+            if sub_arg.get("id") == subargument_id:
+                if request.title is not None:
+                    sub_arg["title"] = request.title
+                if request.purpose is not None:
+                    sub_arg["purpose"] = request.purpose
+                if request.relationship is not None:
+                    sub_arg["relationship"] = request.relationship
+                if request.snippet_ids is not None:
+                    sub_arg["snippet_ids"] = request.snippet_ids
+                if request.pending_snippet_ids is not None:
+                    sub_arg["pending_snippet_ids"] = request.pending_snippet_ids
+                if request.needs_snippet_confirmation is not None:
+                    sub_arg["needs_snippet_confirmation"] = request.needs_snippet_confirmation
+                if request.status is not None:
+                    sub_arg["status"] = request.status
+                sub_arg["updated_at"] = datetime.now(timezone.utc).isoformat()
+                found = True
+                break
 
-    if not found:
-        raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
+        if not found:
+            raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
 
-    save_legal_arguments(project_id, legal_args)
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
 
     return {
         "success": True,
@@ -540,33 +540,38 @@ async def delete_subargument(
     """
     logger.debug(f"DELETE SubArgument: project_id={project_id}, subargument_id={subargument_id}")
 
-    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
     from ..services.petition_writer_v3 import remove_subargument_from_writing
+    from ..services.snippet_recommender import update_legal_arguments
 
-    legal_args = load_legal_arguments(project_id)
-    sub_arguments = legal_args.get("sub_arguments", [])
-    arguments = legal_args.get("arguments", [])
-
-    logger.debug(f"DELETE SubArgument: before={len(sub_arguments)}")
-
-    # Find and remove the SubArgument
-    original_count = len(sub_arguments)
-    sub_arguments = [sa for sa in sub_arguments if sa.get("id") != subargument_id]
-
-    if len(sub_arguments) == original_count:
-        logger.warning(f"DELETE SubArgument: not found {subargument_id}")
-        raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
-
-    legal_args["sub_arguments"] = sub_arguments
-
-    # Find parent Argument's standard_key before removing reference
     parent_standard_key = None
-    for arg in arguments:
-        if "sub_argument_ids" in arg and subargument_id in arg["sub_argument_ids"]:
-            parent_standard_key = arg.get("standard_key")
-            arg["sub_argument_ids"].remove(subargument_id)
+    sub_arguments = None
+    def _mutate(legal_args):
+        nonlocal parent_standard_key, sub_arguments
+        sub_arguments = legal_args.get("sub_arguments", [])
+        arguments = legal_args.get("arguments", [])
 
-    save_legal_arguments(project_id, legal_args)
+        logger.debug(f"DELETE SubArgument: before={len(sub_arguments)}")
+
+        # Find and remove the SubArgument
+        original_count = len(sub_arguments)
+        sub_arguments = [sa for sa in sub_arguments if sa.get("id") != subargument_id]
+
+        if len(sub_arguments) == original_count:
+            logger.warning(f"DELETE SubArgument: not found {subargument_id}")
+            raise HTTPException(status_code=404, detail=f"SubArgument not found: {subargument_id}")
+
+        legal_args["sub_arguments"] = sub_arguments
+
+        # Find parent Argument's standard_key before removing reference
+        parent_standard_key = None
+        for arg in arguments:
+            if "sub_argument_ids" in arg and subargument_id in arg["sub_argument_ids"]:
+                parent_standard_key = arg.get("standard_key")
+                arg["sub_argument_ids"].remove(subargument_id)
+
+        return legal_args
+
+    update_legal_arguments(project_id, _mutate)
     logger.debug(f"DELETE SubArgument: after={len(sub_arguments)}, saved")
 
     # Layer 1: Cascade - clean up writing_v3 files
@@ -630,108 +635,114 @@ async def move_to_overall_merits(project_id: str, request: MoveToOverallMeritsRe
     - argument level: single argument is moved
     - subargument level: single sub-argument is moved (creates/joins an OM argument)
     """
-    from ..services.snippet_recommender import load_legal_arguments, save_legal_arguments
     import uuid as _uuid
+
+    from ..services.snippet_recommender import update_legal_arguments
 
     if request.level not in ("standard", "argument", "subargument"):
         raise HTTPException(status_code=400, detail=f"Invalid level: {request.level}")
 
-    legal_args = load_legal_arguments(project_id)
-    arguments = legal_args.get("arguments", [])
-    sub_arguments = legal_args.get("sub_arguments", [])
+    moved_argument_ids = None
+    moved_subargument_ids = None
+    def _mutate(legal_args):
+        nonlocal moved_argument_ids, moved_subargument_ids
+        arguments = legal_args.get("arguments", [])
+        sub_arguments = legal_args.get("sub_arguments", [])
 
-    moved_argument_ids = []
-    moved_subargument_ids = []
+        moved_argument_ids = []
+        moved_subargument_ids = []
 
-    if request.level == "standard":
-        # Move all arguments under this standard_key
-        standard_key = request.target_id
-        if standard_key == "overall_merits":
-            raise HTTPException(status_code=400, detail="Cannot move overall_merits into itself")
-        for arg in arguments:
-            if arg.get("standard_key") == standard_key:
-                arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
-                arg["standard_key"] = "overall_merits"
-                if "standard" in arg:
-                    arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
-                    arg["standard"] = "overall_merits"
-                moved_argument_ids.append(arg["id"])
+        if request.level == "standard":
+            # Move all arguments under this standard_key
+            standard_key = request.target_id
+            if standard_key == "overall_merits":
+                raise HTTPException(status_code=400, detail="Cannot move overall_merits into itself")
+            for arg in arguments:
+                if arg.get("standard_key") == standard_key:
+                    arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
+                    arg["standard_key"] = "overall_merits"
+                    if "standard" in arg:
+                        arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
+                        arg["standard"] = "overall_merits"
+                    moved_argument_ids.append(arg["id"])
 
-    elif request.level == "argument":
-        # Move single argument
-        arg_id = request.target_id
-        for arg in arguments:
-            if arg.get("id") == arg_id:
+        elif request.level == "argument":
+            # Move single argument
+            arg_id = request.target_id
+            for arg in arguments:
+                if arg.get("id") == arg_id:
+                    if arg.get("standard_key") == "overall_merits":
+                        raise HTTPException(status_code=400, detail="Argument is already in Overall Merits")
+                    arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
+                    arg["standard_key"] = "overall_merits"
+                    if "standard" in arg:
+                        arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
+                        arg["standard"] = "overall_merits"
+                    moved_argument_ids.append(arg["id"])
+                    break
+            else:
+                raise HTTPException(status_code=404, detail=f"Argument not found: {arg_id}")
+
+        elif request.level == "subargument":
+            # Move single sub-argument into an overall_merits argument
+            subarg_id = request.target_id
+            target_subarg = None
+            parent_arg = None
+            for sa in sub_arguments:
+                if sa.get("id") == subarg_id:
+                    target_subarg = sa
+                    break
+            if not target_subarg:
+                raise HTTPException(status_code=404, detail=f"SubArgument not found: {subarg_id}")
+
+            # Find parent argument
+            for arg in arguments:
+                if subarg_id in arg.get("sub_argument_ids", []):
+                    parent_arg = arg
+                    break
+
+            if parent_arg and parent_arg.get("standard_key") == "overall_merits":
+                raise HTTPException(status_code=400, detail="SubArgument is already in Overall Merits")
+
+            # Remove from parent argument's sub_argument_ids
+            if parent_arg:
+                parent_arg["sub_argument_ids"] = [
+                    sid for sid in parent_arg.get("sub_argument_ids", [])
+                    if sid != subarg_id
+                ]
+
+            # Find or create an overall_merits argument to house this sub-argument
+            om_arg = None
+            original_std = parent_arg.get("standard_key", "unknown") if parent_arg else "unknown"
+            for arg in arguments:
                 if arg.get("standard_key") == "overall_merits":
-                    raise HTTPException(status_code=400, detail="Argument is already in Overall Merits")
-                arg["original_standard"] = arg.get("original_standard") or arg.get("standard_key")
-                arg["standard_key"] = "overall_merits"
-                if "standard" in arg:
-                    arg["original_standard_field"] = arg.get("original_standard_field") or arg.get("standard")
-                    arg["standard"] = "overall_merits"
-                moved_argument_ids.append(arg["id"])
-                break
-        else:
-            raise HTTPException(status_code=404, detail=f"Argument not found: {arg_id}")
+                    om_arg = arg
+                    break
 
-    elif request.level == "subargument":
-        # Move single sub-argument into an overall_merits argument
-        subarg_id = request.target_id
-        target_subarg = None
-        parent_arg = None
-        for sa in sub_arguments:
-            if sa.get("id") == subarg_id:
-                target_subarg = sa
-                break
-        if not target_subarg:
-            raise HTTPException(status_code=404, detail=f"SubArgument not found: {subarg_id}")
+            if not om_arg:
+                om_arg = {
+                    "id": f"arg-om-{_uuid.uuid4().hex[:8]}",
+                    "title": "Supplemental Evidence — Overall Merits",
+                    "standard_key": "overall_merits",
+                    "standard": "overall_merits",
+                    "original_standard": "overall_merits",
+                    "sub_argument_ids": [],
+                    "snippet_ids": [],
+                    "is_ai_generated": False,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                arguments.append(om_arg)
 
-        # Find parent argument
-        for arg in arguments:
-            if subarg_id in arg.get("sub_argument_ids", []):
-                parent_arg = arg
-                break
+            om_arg["sub_argument_ids"].append(subarg_id)
+            # Tag the sub-argument with its original standard for cross-reference
+            target_subarg["original_standard"] = original_std
+            moved_subargument_ids.append(subarg_id)
 
-        if parent_arg and parent_arg.get("standard_key") == "overall_merits":
-            raise HTTPException(status_code=400, detail="SubArgument is already in Overall Merits")
+        legal_args["arguments"] = arguments
+        legal_args["sub_arguments"] = sub_arguments
+        return legal_args
 
-        # Remove from parent argument's sub_argument_ids
-        if parent_arg:
-            parent_arg["sub_argument_ids"] = [
-                sid for sid in parent_arg.get("sub_argument_ids", [])
-                if sid != subarg_id
-            ]
-
-        # Find or create an overall_merits argument to house this sub-argument
-        om_arg = None
-        original_std = parent_arg.get("standard_key", "unknown") if parent_arg else "unknown"
-        for arg in arguments:
-            if arg.get("standard_key") == "overall_merits":
-                om_arg = arg
-                break
-
-        if not om_arg:
-            om_arg = {
-                "id": f"arg-om-{_uuid.uuid4().hex[:8]}",
-                "title": "Supplemental Evidence — Overall Merits",
-                "standard_key": "overall_merits",
-                "standard": "overall_merits",
-                "original_standard": "overall_merits",
-                "sub_argument_ids": [],
-                "snippet_ids": [],
-                "is_ai_generated": False,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            arguments.append(om_arg)
-
-        om_arg["sub_argument_ids"].append(subarg_id)
-        # Tag the sub-argument with its original standard for cross-reference
-        target_subarg["original_standard"] = original_std
-        moved_subargument_ids.append(subarg_id)
-
-    legal_args["arguments"] = arguments
-    legal_args["sub_arguments"] = sub_arguments
-    save_legal_arguments(project_id, legal_args)
+    update_legal_arguments(project_id, _mutate)
 
     return {
         "success": True,
@@ -771,8 +782,8 @@ async def infer_subargument_relationship(
             "relationship": relationship
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 class InferArgumentTitleRequest(BaseModel):
@@ -795,5 +806,69 @@ async def infer_argument_title_endpoint(
             provider=request.provider
         )
         return {"success": True, "title": title}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
+
+
+# ============================================
+# Evidence coverage overview (M13)
+# ============================================
+
+@router.get("/{project_id}/coverage")
+async def get_coverage(project_id: str):
+    """Facts about evidence coverage: unassigned snippets, thin SubArguments,
+    per-standard evidence-layer gaps. No scores, no recommendations."""
+    from ..services.coverage import compute_coverage
+    from ..services.petition_writer_v3 import _load_snippet_source
+    from ..services.snippet_recommender import load_legal_arguments
+
+    return {"success": True, "project_id": project_id,
+            **compute_coverage(load_legal_arguments(project_id), _load_snippet_source(project_id))}
+
+
+
+# ============================================
+# Structural undo / redo (M13)
+# ============================================
+
+def _step_history(project_id: str, direction: str) -> Dict:
+    from ..core.atomic_io import update_json
+    from ..services import history
+    from ..services.snippet_recommender import _legal_arguments_file
+
+    outcome: Dict = {"applied": False}
+
+    def _mutate(data):
+        current = copy.deepcopy(data)
+        entry = history.step(project_id, direction, current)
+        if entry is None:
+            return data
+        outcome.update({
+            "applied": True,
+            "label": entry["label"],
+            "seq": entry["seq"],
+            "affected_standard_keys": history.affected_standards(current, entry["data"]),
+        })
+        return entry["data"]
+
+    update_json(_legal_arguments_file(project_id), _mutate, default={"arguments": [], "sub_arguments": []})
+    return {"success": True, "direction": direction, **outcome, **history.peek(project_id)}
+
+
+@router.get("/{project_id}/history")
+async def get_history(project_id: str):
+    """What undo / redo would do next (labels + depths)."""
+    from ..services import history
+    return {"success": True, **history.peek(project_id)}
+
+
+@router.post("/{project_id}/undo")
+async def undo_last_change(project_id: str):
+    """Restore the document as it was before the last structural change."""
+    return _step_history(project_id, "undo")
+
+
+@router.post("/{project_id}/redo")
+async def redo_last_change(project_id: str):
+    """Re-apply the last undone change."""
+    return _step_history(project_id, "redo")

@@ -2,30 +2,128 @@
 本地文件存储服务
 将项目数据保存为本地 JSON 文件，类似日志系统
 """
-import os
 import json
+import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
 from pathlib import Path
+from typing import Dict, List, Optional
 
-# 数据存储根目录 (backend/data)
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
+from ..core.atomic_io import update_json, write_json
+from ..core.config import settings
+from ..core.ids import is_safe_id
+from ..core.workspace import current_workspace
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Data-root resolution -- the ONE place that knows where data lives.
+#
+# Everything below (and every other module) must go through data_dir() /
+# projects_dir() / project_path(). They are functions, not constants, so that
+# (a) tests can point them at a temp dir via settings.data_dir and (b) M5 can
+# scope projects_dir() per workspace without touching call sites.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"  # backend/data
+
+
+def data_dir() -> Path:
+    """Root data directory (backend/data unless DATA_DIR is set)."""
+    if settings.data_dir:
+        return Path(settings.data_dir)
+    return _DEFAULT_DATA_DIR
+
+
+def workspace_dir(workspace_id: Optional[str] = None) -> Path:
+    """Root of one workspace (defaults to the request's current workspace)."""
+    return data_dir() / "workspaces" / (workspace_id or current_workspace())
+
+
+def projects_dir() -> Path:
+    """Directory that holds one sub-directory per project, scoped to the
+    current workspace (see app.core.workspace)."""
+    return workspace_dir() / "projects"
 
 
 def ensure_dirs():
     """确保数据目录存在"""
-    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    projects_dir().mkdir(parents=True, exist_ok=True)
 
 
 def get_project_dir(project_id: str) -> Path:
-    """获取项目目录"""
-    return PROJECTS_DIR / project_id
+    """获取项目目录
+
+    Second line of defence after router-level ID validation: the resolved
+    path must stay inside projects_dir(), otherwise a bad project_id such as
+    ".." could point at (and delete) the whole data directory.
+    """
+    if not is_safe_id(project_id):
+        raise ValueError(f"Invalid project_id: {project_id!r}")
+    base = projects_dir()
+    target = base / project_id
+    # Belt and braces: a safe id can never escape, but assert it anyway.
+    if target.parent != base:
+        raise ValueError(f"Invalid project_id: {project_id!r}")
+    return target
+
+
+def project_path(project_id: str, *parts: str) -> Path:
+    """Path inside a project: project_path(pid, "arguments", "legal_arguments.json")."""
+    return get_project_dir(project_id).joinpath(*parts)
 
 
 def get_project_file(project_id: str, filename: str) -> Path:
     """获取项目文件路径"""
     return get_project_dir(project_id) / filename
+
+
+_DEFAULT_SOURCE_DATA_DIR = _DEFAULT_DATA_DIR.parent.parent / "data"  # <repo>/data
+
+
+def source_data_dir() -> Path:
+    """Root of the original case material (PDFs), see settings.source_data_dir."""
+    if settings.source_data_dir:
+        return Path(settings.source_data_dir)
+    return _DEFAULT_SOURCE_DATA_DIR
+
+
+def resolve_source_path(project_id: str) -> Optional[Path]:
+    """Locate the project's original-material directory.
+
+    metadata.json.source_path is an absolute path recorded on whichever
+    machine created the project. If it exists here, use it. Otherwise look
+    for a directory with the same basename under source_data_dir(), one or
+    two levels deep (data/<Person> or data/<category>/<Person>). Nothing is
+    rewritten on disk (the old Docker entrypoint used to patch metadata.json
+    at startup; a read-time resolver is workspace-safe and side-effect free).
+    """
+    metadata_file = get_project_file(project_id, "metadata.json")
+    if not metadata_file.exists():
+        return None
+    try:
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            source_path = json.load(f).get("source_path", "")
+    except Exception:
+        return None
+    if not source_path:
+        return None
+
+    recorded = Path(source_path)
+    if recorded.is_dir():
+        return recorded
+
+    # Windows paths on a POSIX host: PurePath.name would keep the backslashes.
+    person = source_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    root = source_data_dir()
+    if not root.is_dir():
+        return None
+    direct = root / person
+    if direct.is_dir():
+        return direct
+    for sub in root.iterdir():
+        if sub.is_dir() and (sub / person).is_dir():
+            return sub / person
+    return None
 
 
 # ==================== 项目类型辅助函数 ====================
@@ -65,8 +163,8 @@ def _generate_project_number(project_type: str) -> str:
 
     # Count existing projects of this type for the current year
     count = 0
-    if PROJECTS_DIR.exists():
-        for item in PROJECTS_DIR.iterdir():
+    if projects_dir().exists():
+        for item in projects_dir().iterdir():
             if item.is_dir():
                 meta_file = item / "meta.json"
                 if meta_file.exists():
@@ -108,7 +206,7 @@ def list_projects() -> List[Dict]:
     ensure_dirs()
     projects = []
 
-    for item in PROJECTS_DIR.iterdir():
+    for item in projects_dir().iterdir():
         if item.is_dir():
             meta_file = item / "meta.json"
             if meta_file.exists():
@@ -162,12 +260,10 @@ def create_project(name: str, project_type: str = "EB-1A") -> Dict:
         "updatedAt": datetime.now(timezone.utc).isoformat()
     }
 
-    with open(project_dir / "meta.json", 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    write_json(project_dir / "meta.json", meta)
 
     # 初始化空的文档列表
-    with open(project_dir / "documents.json", 'w', encoding='utf-8') as f:
-        json.dump([], f, ensure_ascii=False, indent=2)
+    write_json(project_dir / "documents.json", [])
 
     return meta
 
@@ -215,20 +311,15 @@ def update_project_meta(project_id: str, updates: Dict) -> Optional[Dict]:
     if not meta_file.exists():
         return None
 
-    with open(meta_file, 'r', encoding='utf-8') as f:
-        meta = json.load(f)
+    def _mutate(meta):
+        # 更新提供的字段
+        for key, value in updates.items():
+            if value is not None:
+                meta[key] = value
+        meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        return meta
 
-    # 更新提供的字段
-    for key, value in updates.items():
-        if value is not None:
-            meta[key] = value
-
-    meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
-
-    with open(meta_file, 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
-    return meta
+    return update_json(meta_file, _mutate)
 
 
 # ==================== 文档管理 ====================
@@ -249,8 +340,7 @@ def save_documents(project_id: str, documents: List[Dict]):
     project_dir.mkdir(parents=True, exist_ok=True)
 
     docs_file = project_dir / "documents.json"
-    with open(docs_file, 'w', encoding='utf-8') as f:
-        json.dump(documents, f, ensure_ascii=False, indent=2)
+    write_json(docs_file, documents)
 
     # 更新项目修改时间
     _update_project_time(project_id)
@@ -258,21 +348,30 @@ def save_documents(project_id: str, documents: List[Dict]):
 
 def add_document(project_id: str, document: Dict) -> Dict:
     """添加文档"""
-    documents = get_documents(project_id)
-    documents.append(document)
-    save_documents(project_id, documents)
+    docs_file = get_project_file(project_id, "documents.json")
+    update_json(docs_file, lambda docs: [*docs, document], default=[])
+    _update_project_time(project_id)
     return document
 
 
 def update_document(project_id: str, doc_id: str, updates: Dict) -> Optional[Dict]:
     """更新文档"""
-    documents = get_documents(project_id)
-    for i, doc in enumerate(documents):
-        if doc.get('id') == doc_id:
-            documents[i].update(updates)
-            save_documents(project_id, documents)
-            return documents[i]
-    return None
+    docs_file = get_project_file(project_id, "documents.json")
+    updated: Optional[Dict] = None
+
+    def _mutate(documents):
+        nonlocal updated
+        for doc in documents:
+            if doc.get('id') == doc_id:
+                doc.update(updates)
+                updated = doc
+                break
+        return documents
+
+    update_json(docs_file, _mutate, default=[])
+    if updated is not None:
+        _update_project_time(project_id)
+    return updated
 
 
 # ==================== 分析结果 ====================
@@ -294,8 +393,7 @@ def save_analysis(project_id: str, analysis_data: Dict) -> str:
     }
 
     filename = f"analysis_{version_id}.json"
-    with open(analysis_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(analysis_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -361,8 +459,7 @@ def save_relationship(project_id: str, relationship_data: Dict) -> str:
     }
 
     filename = f"relationship_{version_id}.json"
-    with open(rel_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(rel_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -393,8 +490,7 @@ def save_quote_index_map(project_id: str, quote_index_map: Dict) -> str:
     }
 
     filename = f"quote_index_map_{version_id}.json"
-    with open(rel_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(rel_dir / filename, data)
 
     return version_id
 
@@ -553,8 +649,7 @@ def create_relationship_snapshot(
     snapshots_data["current_snap"] = snap_id
 
     # 保存快照元数据
-    with open(snapshots_file, 'w', encoding='utf-8') as f:
-        json.dump(snapshots_data, f, ensure_ascii=False, indent=2)
+    write_json(snapshots_file, snapshots_data)
 
     return snapshot
 
@@ -602,8 +697,7 @@ def rollback_to_snapshot(project_id: str, snapshot_id: str) -> Dict:
     snapshots_data["current_snap"] = snapshot_id
 
     # 保存快照元数据
-    with open(snapshots_file, 'w', encoding='utf-8') as f:
-        json.dump(snapshots_data, f, ensure_ascii=False, indent=2)
+    write_json(snapshots_file, snapshots_data)
 
     return {
         "snapshot_id": snapshot_id,
@@ -759,8 +853,7 @@ def save_writing(project_id: str, section: str, text: str, citations: List[Dict]
     }
 
     filename = f"writing_{section}_{version_id}.json"
-    with open(writing_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(version_data, f, ensure_ascii=False, indent=2)
+    write_json(writing_dir / filename, version_data)
 
     _update_project_time(project_id)
     return version_id
@@ -877,8 +970,7 @@ def save_chunks(project_id: str, document_id: str, chunks: List[Dict]) -> str:
     }
 
     filename = f"chunks_{document_id}.json"
-    with open(chunks_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(chunk_data, f, ensure_ascii=False, indent=2)
+    write_json(chunks_dir / filename, chunk_data)
 
     _update_project_time(project_id)
     return document_id
@@ -915,8 +1007,7 @@ def save_l1_analysis(project_id: str, chunk_analyses: List[Dict]) -> str:
     }
 
     filename = f"l1_analysis_{version_id}.json"
-    with open(l1_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(analysis_data, f, ensure_ascii=False, indent=2)
+    write_json(l1_dir / filename, analysis_data)
 
     _update_project_time(project_id)
     return version_id
@@ -931,7 +1022,6 @@ def load_l1_analysis(project_id: str, version_id: str = None) -> Optional[List[D
     - 不同文档的结果可以来自不同的分析文件
     - 解决批量分析产生多个文件导致数据分散的问题
     """
-    from .quote_merger import hash_quote
 
     l1_dir = get_project_dir(project_id) / "l1_analysis"
     if not l1_dir.exists():
@@ -1006,7 +1096,7 @@ def load_l1_analysis(project_id: str, version_id: str = None) -> Optional[List[D
 
         except Exception as e:
             # 跳过无法读取的文件
-            print(f"[Storage] Warning: Failed to read {filepath}: {e}")
+            logger.warning(f"[Storage] Warning: Failed to read {filepath}: {e}")
             continue
 
     # 组装合并后的结果
@@ -1030,8 +1120,7 @@ def save_l1_summary(project_id: str, summary: Dict) -> str:
     summary["version_id"] = version_id
 
     filename = f"l1_summary_{version_id}.json"
-    with open(l1_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    write_json(l1_dir / filename, summary)
 
     _update_project_time(project_id)
     return version_id
@@ -1208,13 +1297,10 @@ def _update_project_time(project_id: str):
     """更新项目修改时间"""
     meta_file = get_project_file(project_id, "meta.json")
     if meta_file.exists():
-        with open(meta_file, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
-
-        meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
-
-        with open(meta_file, 'w', encoding='utf-8') as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        def _touch(meta):
+            meta["updatedAt"] = datetime.now(timezone.utc).isoformat()
+            return meta
+        update_json(meta_file, _touch)
 
 
 def get_full_project_data(project_id: str) -> Optional[Dict]:
@@ -1236,7 +1322,7 @@ def get_full_project_data(project_id: str) -> Optional[Dict]:
 
 def get_style_templates_dir() -> Path:
     """获取样式模板存储目录（全局，不按项目分）"""
-    templates_dir = DATA_DIR / "style_templates"
+    templates_dir = data_dir() / "style_templates"
     templates_dir.mkdir(parents=True, exist_ok=True)
     return templates_dir
 
@@ -1271,8 +1357,7 @@ def save_style_template(section: str, name: str, original_text: str, parsed_stru
     }
 
     filepath = section_dir / f"{template_id}.json"
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(template_data, f, ensure_ascii=False, indent=2)
+    write_json(filepath, template_data)
 
     return template_data
 
@@ -1392,8 +1477,7 @@ def save_ocr_page(project_id: str, document_id: str, page_number: int, page_resu
     """
     ocr_dir = get_ocr_pages_dir(project_id, document_id)
     filepath = ocr_dir / f"page_{page_number}.json"
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(page_result, f, ensure_ascii=False, indent=2)
+    write_json(filepath, page_result)
 
 
 def get_completed_pages(project_id: str, document_id: str) -> List[int]:
@@ -1485,8 +1569,7 @@ def update_style_template(template_id: str, updates: Dict) -> Optional[Dict]:
 
                 template['updated_at'] = datetime.now(timezone.utc).isoformat()
 
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(template, f, ensure_ascii=False, indent=2)
+                write_json(filepath, template)
 
                 return template
 

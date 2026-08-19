@@ -14,21 +14,19 @@ Entity Merger - 实体合并服务
 """
 
 import json
+import logging
 import uuid
-from typing import List, Dict, Optional
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional
 
+from ..core.atomic_io import update_json, write_json
+from ..core.prompt_loader import body as _prompt_body
 from .llm_client import call_llm
-from .unified_extractor import (
-    get_extraction_dir,
-    get_entities_dir,
-    load_combined_extraction,
-    PROJECTS_DIR
-)
-from ..core.config import settings
+from .storage import project_path
+from .unified_extractor import get_entities_dir, get_extraction_dir, load_combined_extraction
 
+logger = logging.getLogger(__name__)
 
 # ==================== Data Models ====================
 
@@ -59,52 +57,9 @@ class MergeRecord:
 
 # ==================== LLM Prompts ====================
 
-MERGE_SUGGESTION_SYSTEM_PROMPT = """You are an expert at entity resolution and name matching.
+MERGE_SUGGESTION_SYSTEM_PROMPT = _prompt_body("entity_merger/merge_suggestion_system_prompt")
 
-Your task is to identify entities that refer to the SAME real-world person, organization, or thing, but with different names or spellings.
-
-RULES:
-1. Only merge entities that clearly refer to the SAME thing
-2. Consider:
-   - Name variations (formal vs informal): "Dr. John Smith" = "John Smith" = "J. Smith"
-   - Abbreviations: "Massachusetts Institute of Technology" = "MIT"
-   - Titles: "Professor John Smith" = "Dr. John Smith" = "John Smith"
-   - Nicknames: "[Full Name]" = "[Nickname]" = "Coach [Name]"
-3. DO NOT merge:
-   - Different people with similar names
-   - Parent and child organizations
-   - Different awards/publications with similar names
-
-The applicant's name is: {applicant_name}
-Pay special attention to variations of the applicant's name."""
-
-MERGE_SUGGESTION_USER_PROMPT = """Analyze these entities extracted from EB-1A petition documents and identify which ones refer to the SAME real-world entity.
-
-## Entities (grouped by type)
-
-{entities_text}
-
-## Instructions
-
-For each group of entities that should be merged:
-1. Choose the most formal/complete name as the PRIMARY entity
-2. List all other names as MERGE targets
-3. Explain WHY they are the same entity
-
-Return JSON format:
-{{
-  "merge_suggestions": [
-    {{
-      "primary_name": "The most formal name",
-      "merge_names": ["alias1", "alias2"],
-      "entity_type": "person|organization|...",
-      "reason": "Why these are the same",
-      "confidence": 0.9
-    }}
-  ]
-}}
-
-If no merges are needed, return {{"merge_suggestions": []}}"""
+MERGE_SUGGESTION_USER_PROMPT = _prompt_body("entity_merger/merge_suggestion_user_prompt")
 
 
 MERGE_SUGGESTION_SCHEMA = {
@@ -161,8 +116,7 @@ async def suggest_entity_merges(
     if not entities:
         return []
 
-    print(f"[EntityMerger] Analyzing {len(entities)} entities for merges...")
-
+    logger.info(f"[EntityMerger] Analyzing {len(entities)} entities for merges...")
     # 2. 按类型分组实体
     entities_by_type = {}
     for e in entities:
@@ -190,8 +144,7 @@ async def suggest_entity_merges(
     system_prompt = MERGE_SUGGESTION_SYSTEM_PROMPT.format(applicant_name=applicant_name)
     user_prompt = MERGE_SUGGESTION_USER_PROMPT.format(entities_text=entities_text)
 
-    print(f"[EntityMerger] Calling LLM ({provider}) for merge suggestions...")
-
+    logger.info(f"[EntityMerger] Calling LLM ({provider}) for merge suggestions...")
     try:
         result = await call_llm(
             prompt=user_prompt,
@@ -202,7 +155,7 @@ async def suggest_entity_merges(
             max_tokens=4000
         )
     except Exception as e:
-        print(f"[EntityMerger] LLM error: {e}")
+        logger.warning(f"[EntityMerger] LLM error: {e}")
         return []
 
     # 5. 处理结果
@@ -235,11 +188,9 @@ async def suggest_entity_merges(
         "suggestions": suggestions
     }
 
-    with open(suggestions_file, 'w', encoding='utf-8') as f:
-        json.dump(suggestions_data, f, ensure_ascii=False, indent=2)
+    write_json(suggestions_file, suggestions_data)
 
-    print(f"[EntityMerger] Generated {len(suggestions)} merge suggestions")
-
+    logger.info(f"[EntityMerger] Generated {len(suggestions)} merge suggestions")
     return suggestions
 
 
@@ -263,23 +214,21 @@ def update_merge_suggestion_status(
     if not suggestions_file.exists():
         return False
 
-    with open(suggestions_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    suggestions = data.get("suggestions", [])
     updated = False
 
-    for s in suggestions:
-        if s.get("id") == suggestion_id:
-            s["status"] = status
-            s["updated_at"] = datetime.now(timezone.utc).isoformat()
-            updated = True
-            break
+    def _mutate(data):
+        nonlocal updated
+        for s in data.get("suggestions", []):
+            if s.get("id") == suggestion_id:
+                s["status"] = status
+                s["updated_at"] = datetime.now(timezone.utc).isoformat()
+                updated = True
+                break
+        return data
 
-    if updated:
-        with open(suggestions_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
+    # Confirming several suggestions in a row fires concurrent POSTs; the
+    # locked read-modify-write keeps them from overwriting each other.
+    update_json(suggestions_file, _mutate, default={"suggestions": []})
     return updated
 
 
@@ -313,8 +262,7 @@ def apply_entity_merges(project_id: str) -> Dict:
         for old_name in merge.get("merge_entity_names", []):
             name_mapping[old_name] = primary_name
 
-    print(f"[EntityMerger] Applying {len(accepted_merges)} merges with {len(name_mapping)} name mappings")
-
+    logger.info(f"[EntityMerger] Applying {len(accepted_merges)} merges with {len(name_mapping)} name mappings")
     # 3. 加载合并后的提取结果
     combined = load_combined_extraction(project_id)
     if not combined:
@@ -391,11 +339,10 @@ def apply_entity_merges(project_id: str) -> Dict:
 
     extraction_dir = get_extraction_dir(project_id)
     combined_file = extraction_dir / "combined_extraction.json"
-    with open(combined_file, 'w', encoding='utf-8') as f:
-        json.dump(combined, f, ensure_ascii=False, indent=2)
+    write_json(combined_file, combined)
 
     # 8. 同步更新 snippets 文件
-    snippets_dir = PROJECTS_DIR / project_id / "snippets"
+    snippets_dir = project_path(project_id, "snippets")
     snippets_file = snippets_dir / "extracted_snippets.json"
 
     if snippets_file.exists():
@@ -405,8 +352,7 @@ def apply_entity_merges(project_id: str) -> Dict:
         snippets_data["snippets"] = snippets
         snippets_data["merge_applied_at"] = datetime.now(timezone.utc).isoformat()
 
-        with open(snippets_file, 'w', encoding='utf-8') as f:
-            json.dump(snippets_data, f, ensure_ascii=False, indent=2)
+        write_json(snippets_file, snippets_data)
 
     # 9. 保存合并历史
     merge_history = []
@@ -423,23 +369,20 @@ def apply_entity_merges(project_id: str) -> Dict:
         merge_history.append(record)
 
     history_file = get_entities_dir(project_id) / "merge_history.json"
-    with open(history_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            "applied_at": datetime.now(timezone.utc).isoformat(),
-            "merges": merge_history
-        }, f, ensure_ascii=False, indent=2)
+    write_json(history_file, {
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+        "merges": merge_history
+    })
 
     # 10. 保存更新后的 entities
     entities_file = get_entities_dir(project_id) / "entities.json"
-    with open(entities_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "entity_count": len(new_entities),
-            "entities": new_entities
-        }, f, ensure_ascii=False, indent=2)
+    write_json(entities_file, {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "entity_count": len(new_entities),
+        "entities": new_entities
+    })
 
-    print(f"[EntityMerger] Applied {len(accepted_merges)} merges, updated {snippets_updated} snippets, {relations_updated} relations")
-
+    logger.info(f"[EntityMerger] Applied {len(accepted_merges)} merges, updated {snippets_updated} snippets, {relations_updated} relations")
     return {
         "success": True,
         "merges_applied": len(accepted_merges),
@@ -487,8 +430,7 @@ def add_manual_merge(
 
     data["suggestions"].append(suggestion)
 
-    with open(suggestions_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(suggestions_file, data)
 
     return suggestion
 

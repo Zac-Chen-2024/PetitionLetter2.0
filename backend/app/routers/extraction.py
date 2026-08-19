@@ -10,23 +10,27 @@ Extraction Router - 统一提取 API
 这将替代旧的 analysis router 的提取功能。
 """
 
-from fastapi import APIRouter, HTTPException
 from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.core.ids import validate_path_params
+from app.core.jobs import manager as job_manager
+
+from ..services.entity_merger import (
+    apply_entity_merges,
+    get_merge_status,
+    load_merge_suggestions,
+    suggest_entity_merges,
+    update_merge_suggestion_status,
+)
 from ..services.unified_extractor import (
     extract_all_unified,
     load_combined_extraction,
 )
-from ..services.entity_merger import (
-    suggest_entity_merges,
-    load_merge_suggestions,
-    update_merge_suggestion_status,
-    apply_entity_merges,
-    get_merge_status,
-)
 
-router = APIRouter(prefix="/api/extraction", tags=["extraction"])
+router = APIRouter(prefix="/api/extraction", tags=["extraction"], dependencies=[Depends(validate_path_params)])
 
 
 # ==================== Request/Response Models ====================
@@ -44,7 +48,7 @@ class MergeConfirmation(BaseModel):
 
 # ==================== Extraction Endpoints ====================
 
-@router.post("/{project_id}/extract")
+@router.post("/{project_id}/extract", status_code=202)
 async def extract_project(
     project_id: str,
     request: ExtractionRequest
@@ -69,21 +73,21 @@ async def extract_project(
         except Exception:
             project_type = "EB-1A"
 
-    try:
+    async def _run(job):
         result = await extract_all_unified(
             project_id=project_id,
             applicant_name=applicant_name,
             provider=provider,
-            project_type=project_type
+            project_type=project_type,
+            job=job,
         )
-
         if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "Extraction failed"))
-
+            raise RuntimeError(result.get("error", "Extraction failed"))
         return result
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    params = {"project_id": project_id, "applicant_name": applicant_name, "provider": provider,
+              "project_type": project_type}
+    return job_manager.submit("extract", project_id, params, _run)
 
 
 # ==================== Snippet Query Endpoints ====================
@@ -171,8 +175,8 @@ async def generate_merge_suggestions(
             "suggestions": suggestions
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise
 
 
 @router.get("/{project_id}/merge-suggestions")

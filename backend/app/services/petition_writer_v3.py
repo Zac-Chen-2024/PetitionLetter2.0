@@ -14,19 +14,24 @@ Argument → SubArgument结构(大纲) + snippet指针
 输出：{text, snippet_ids, subargument_id, argument_id, exhibit_refs}[]
 """
 
+import hashlib
 import json
 import logging
-from typing import List, Dict, Optional, Any
-from pathlib import Path
-from datetime import datetime, timezone
+import re
 from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
+from ..core.atomic_io import read_json, write_json
+from ..core.prompt_loader import body as _prompt_body
+from ..core.prompt_loader import render as _prompt_render
+from ..core.text import text_similarity as _text_similarity
 from .llm_client import call_llm, call_llm_text
 from .snippet_registry import load_registry
 from .standards_registry import get_standard_name
+from .storage import project_path
 from .writing_strategies import get_writing_strategy
-from .provenance_engine import _text_similarity
-import re
 
 # Labels that LLMs sometimes leak from the argumentation-method prompt
 _LEAKED_LABEL_RE = re.compile(
@@ -173,8 +178,6 @@ def _build_snippet_lookup(snippet_registry: List[Dict]) -> Dict:
 # 常量定义
 # ============================================
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
 
 
 def _load_snippet_source(project_id: str) -> List[Dict]:
@@ -183,7 +186,7 @@ def _load_snippet_source(project_id: str) -> List[Dict]:
     前端始终从 extraction 端点加载 snippet（snp_ 格式 ID），
     所以 writing pipeline 也必须优先使用同一数据源，确保全链路 ID 一致。
     """
-    combined_file = PROJECTS_DIR / project_id / "extraction" / "combined_extraction.json"
+    combined_file = project_path(project_id, "extraction", "combined_extraction.json")
     if combined_file.exists():
         with open(combined_file, 'r', encoding='utf-8') as f:
             snippets = json.load(f).get("snippets", [])
@@ -247,15 +250,10 @@ async def _recover_snippet_ids_by_llm(
         for s in candidates
     )
 
-    prompt = f"""Match this sentence to the most relevant evidence snippets.
-
-SENTENCE: "{sentence_text}"
-
-CANDIDATE SNIPPETS:
-{candidates_text}
-
-Return JSON: {{"snippet_ids": ["id1", "id2"]}}
-Only include snippets that this sentence DIRECTLY references or paraphrases. Return empty if none match."""
+    prompt = _prompt_render("writer/recover_snippet_ids_by_llm_prompt",
+        sentence_text=sentence_text,
+        candidates_text=candidates_text,
+    )
 
     try:
         result = await call_llm(
@@ -529,7 +527,7 @@ def _load_exhibit_json(project_id: str, exhibit_id: str) -> Optional[Dict]:
     if cache_key in _exhibit_cache:
         return _exhibit_cache[cache_key]
 
-    path = PROJECTS_DIR / project_id / "documents" / f"{exhibit_id}.json"
+    path = project_path(project_id, "documents", f"{exhibit_id}.json")
     if not path.exists():
         logger.warning(f"Exhibit file not found: {path}")
         return None
@@ -634,7 +632,7 @@ def load_exhibit_pages_for_argument(
 
 def load_legal_arguments(project_id: str) -> Optional[Dict]:
     """加载 legal_arguments.json"""
-    legal_file = PROJECTS_DIR / project_id / "arguments" / "legal_arguments.json"
+    legal_file = project_path(project_id, "arguments", "legal_arguments.json")
     if legal_file.exists():
         with open(legal_file, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -769,7 +767,6 @@ def load_subargument_context(
 
 def _build_writing_prompt(context: Dict) -> str:
     """构建写作 Prompt"""
-    standard = context.get("standard", {})
     arguments = context.get("arguments", [])
 
     if not arguments:
@@ -832,52 +829,16 @@ async def _step1_generate_subargument_body(
     evidence_text = "\n\n".join(evidence_lines) if evidence_lines else "(no evidence provided)"
     snippet_ids_str = ", ".join(f'"{sid}"' for sid in snippet_ids_list)
 
-    system_prompt = """You are a Senior Immigration Attorney at a top-tier law firm drafting an immigration petition letter.
+    system_prompt = _prompt_body("writer/step1_generate_subargument_body_system_prompt")
 
-ABSOLUTE RULES:
-1. Every fact, date, name, number MUST come from the EVIDENCE snippets. NEVER invent or infer facts.
-2. Always write in THIRD PERSON about the Beneficiary ("the Beneficiary", "Mr./Ms. [Name]"). Never use "I" or "we".
-3. Do NOT copy snippet text verbatim. Instead, ARGUE: state a legal point, then cite the evidence that supports it.
-4. Use direct quotes sparingly — only the most impactful short phrases, embedded naturally in your argument."""
-
-    user_prompt = f"""Draft 2-4 sentences for this sub-argument in a petition letter.
-
-SUB-ARGUMENT: {subargument['title']}
-PARENT ARGUMENT: {argument_title}
-
-EVIDENCE SNIPPETS:
-{evidence_text}
-
-{f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else ""}
-
-WRITING STYLE — Each sentence must follow this pattern:
-  [Legal argumentative claim] + [evidence from snippet with Exhibit citation]
-
-  GOOD: "The organization's longstanding commitment to excellence is evidenced by its receipt of [Award Name] on multiple occasions [Exhibit X, p.Y]."
-  BAD:  "[Organization] wins [Award]." (raw snippet headline, no argumentation)
-
-  GOOD: "The Beneficiary's formal authority within [Organization] is confirmed by her role as legal representative [Exhibit X, p.Y]."
-  BAD:  "I serve as the legal representative of [Organization]." (first person, raw snippet copy)
-
-RULES:
-1. Use ONLY facts from the snippets above. Do NOT invent dates, statistics, or names.
-2. Each sentence must cite [Exhibit X, p.Y] and reference snippet_id(s). Valid IDs: [{snippet_ids_str}]
-3. Embed 1-2 short direct quotes from snippets naturally within sentences (do NOT use block quote format).
-4. Professional legal tone, 100% English (translate non-English source text).
-5. Write 2-4 sentences — match the evidence available. No filler.
-
-Return JSON:
-{{
-  "sentences": [
-    {{
-      "text": "Argumentative sentence with evidence [Exhibit X, p.Y].",
-      "snippet_ids": ["{snippet_ids_list[0] if snippet_ids_list else 'snip_xxx'}"],
-      "exhibit_refs": ["X-Y"]
-    }}
-  ]
-}}
-
-Return ONLY valid JSON, no markdown."""
+    user_prompt = _prompt_render("writer/step1_generate_subargument_body_user_prompt",
+        subargument_title=subargument['title'],
+        argument_title=argument_title,
+        evidence_text=evidence_text,
+        additional_instructions_block=f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else "",
+        snippet_ids_str=snippet_ids_str,
+        example_snippet_id=snippet_ids_list[0] if snippet_ids_list else 'snip_xxx',
+    )
 
     result = await call_llm(
         prompt=user_prompt,
@@ -950,7 +911,7 @@ async def _step1_generate_argument_body(
         lines = [
             f"  {i}. [{subarg['id']}] {subarg.get('title', '')}",
             f"     Purpose: {subarg.get('purpose', '')}",
-            f"     Key evidence pointers:"
+            "     Key evidence pointers:"
         ]
         for snip in subarg.get("snippets", []):
             text_preview = snip["text"][:200] + "..." if len(snip["text"]) > 200 else snip["text"]
@@ -1005,39 +966,20 @@ async def _step1_generate_argument_body(
     if strategy.step1_argumentation_appendix:
         system_prompt += "\n" + strategy.step1_argumentation_appendix
 
-    user_prompt = f"""Draft the body paragraphs for this argument in a petition letter.
-
-STANDARD: {standard.get('name', '')} ({standard.get('legal_ref', '')})
-ARGUMENT: {argument.get('title', '')}
-
-SUB-ARGUMENTS (use as structural outline — write one paragraph per sub-argument):
-{outline_text}
-
-=== SOURCE MATERIALS (full text — extract ALL relevant details) ===
-
-{source_text}
-
-=== END SOURCE MATERIALS ===
-
-=== SNIPPET INDEX (all evidence blocks on cited exhibits — use these IDs in snippet_ids) ===
-{snippet_index_text}
-=== END SNIPPET INDEX ===
-
-{cross_prong_context or ""}
-
-{f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else ""}
-
-{_build_step1_instructions(project_type, standard.get('key', ''))}
-
-Return JSON:
-{{
-  "sub_argument_paragraphs": [
-    {subarg_json_example}
-  ]
-}}
-
-CRITICAL: Return ALL {len(subarg_ids)} sub-argument paragraphs. subargument_id values MUST be exactly: {subarg_ids}
-Return ONLY valid JSON, no markdown."""
+    user_prompt = _prompt_render("writer/step1_generate_argument_body_user_prompt",
+        standard_get_name=standard.get('name', ''),
+        standard_get_legal_ref=standard.get('legal_ref', ''),
+        argument_get_title=argument.get('title', ''),
+        outline_text=outline_text,
+        source_text=source_text,
+        snippet_index_text=snippet_index_text,
+        cross_prong_context_or=cross_prong_context or "",
+        additional_instructions_block=f"ADDITIONAL INSTRUCTIONS: {additional_instructions}" if additional_instructions else "",
+        step1_instructions=_build_step1_instructions(project_type, standard.get('key', '')),
+        subarg_json_example=subarg_json_example,
+        len_subarg_ids=len(subarg_ids),
+        subarg_ids=subarg_ids,
+    )
 
     # Token budget: system ~800 + outline ~1500 + source ~15000-20000 + output ~8000 = well within 128K
     result = await call_llm(
@@ -1121,27 +1063,11 @@ async def _step2_polish_single_subarg(
 
     system_prompt = """You are a Senior Immigration Attorney revising a single paragraph in a petition letter for argumentative strength and sentence flow."""
 
-    user_prompt = f"""Revise the following paragraph for the "{standard.get('name', '')}" section.
-
-CURRENT TEXT ({len(sentences)} sentences):
-{sentences_text}
-
-INSTRUCTIONS:
-1. Improve sentence-to-sentence flow: add connective phrases, vary sentence openings
-2. Strengthen argumentative language — make legal conclusions more assertive
-3. PRESERVE all [Exhibit X, p.Y] citations EXACTLY — do not change, add, or remove any
-4. PRESERVE the exact number of sentences ({len(sentences)})
-5. Do NOT add new facts or remove existing ones
-6. 100% English output
-
-Return JSON:
-{{
-  "sentences": [
-    {{"text": "revised sentence...", "snippet_ids": ["..."], "exhibit_refs": ["..."]}}
-  ]
-}}
-
-CRITICAL: Return EXACTLY {len(sentences)} sentences. Return ONLY valid JSON."""
+    user_prompt = _prompt_render("writer/step2_polish_single_subarg_user_prompt",
+        standard_get_name=standard.get('name', ''),
+        len_sentences=len(sentences),
+        sentences_text=sentences_text,
+    )
 
     try:
         result = await call_llm(
@@ -1222,40 +1148,13 @@ async def _step2_polish_argument(
     system_prompt = """You are a Senior Immigration Attorney polishing a petition letter section for coherence.
 Your task is to add smooth transitions between sub-argument paragraphs while preserving ALL factual content, evidence citations, and direct quotes exactly as written."""
 
-    user_prompt = f"""Polish the following sub-argument paragraphs for the "{standard.get('name', '')}" section.
-
-CURRENT TEXT (grouped by SubArgument):
-
-{input_text}
-
-INSTRUCTIONS:
-1. Add transition phrases BETWEEN SubArgument groups ("Furthermore,", "In addition to the above,", "Moreover,", etc.)
-2. PRESERVE all [Exhibit X, p.Y] citations and direct quotes EXACTLY — do not change any facts, dates, names, or numbers
-3. MUST keep the same SubArgument grouping — do NOT merge or split SubArguments
-4. MUST keep the same number of sentences per SubArgument group
-5. Only change: word order, transition words, connective phrases. Do NOT add new facts.
-6. 100% English output
-
-Return JSON with the SAME structure:
-{{
-  "subargument_paragraphs": [
-    {{
-      "subargument_id": "{subarg_ids[0]}",
-      "sentences": [
-        {{"text": "polished sentence...", "snippet_ids": ["snip_xxx"], "exhibit_refs": ["X-Y"]}}
-      ]
-    }},
-    {{
-      "subargument_id": "{subarg_ids[1] if len(subarg_ids) > 1 else 'subarg-yyy'}",
-      "sentences": [
-        {{"text": "Furthermore, polished sentence...", "snippet_ids": ["snip_yyy"], "exhibit_refs": ["X-Y"]}}
-      ]
-    }}
-  ]
-}}
-
-CRITICAL: Return ALL {len(subarg_ids)} SubArgument groups. Do NOT skip any.
-Return ONLY valid JSON."""
+    user_prompt = _prompt_render("writer/step2_polish_argument_user_prompt",
+        standard_get_name=standard.get('name', ''),
+        input_text=input_text,
+        subarg_ids_0=subarg_ids[0],
+        second_subarg_id_example=subarg_ids[1] if len(subarg_ids) > 1 else 'subarg-yyy',
+        len_subarg_ids=len(subarg_ids),
+    )
 
     try:
         result = await call_llm(
@@ -1322,28 +1221,11 @@ async def _step3_generate_section_frame(
     strategy = get_writing_strategy(project_type, standard.get("key", ""))
     system_prompt = strategy.frame_system_prompt
 
-    user_prompt = f"""Write an opening sentence and a closing sentence for the "{standard.get('name', '')}" ({standard.get('legal_ref', '')}) section of a petition letter.
-
-The section contains these arguments and sub-arguments:
-{summary_text}
-
-OPENING SENTENCE:
-- MUST explicitly cite the regulation: "{standard.get('legal_ref', '')}"
-- Briefly introduce the scope — do NOT include specific facts, dates, or names (the body handles that)
-- Keep it to ONE concise sentence
-
-CLOSING SENTENCE:
-- Summarize the argument scope in ONE sentence
-- Confident, conclusive legal language
-- Do NOT introduce any new facts not covered in the body
-
-Return JSON:
-{{
-  "opening_text": "The Beneficiary satisfies {standard.get('legal_ref', '')} by demonstrating...",
-  "closing_text": "In sum, the foregoing evidence clearly establishes..."
-}}
-
-100% English. Return ONLY valid JSON."""
+    user_prompt = _prompt_render("writer/step3_generate_section_frame_user_prompt",
+        standard_get_name=standard.get('name', ''),
+        standard_get_legal_ref=standard.get('legal_ref', ''),
+        summary_text=summary_text,
+    )
 
     try:
         result = await call_llm(
@@ -1408,15 +1290,9 @@ async def _translate_to_english(text: str, provider: str = "deepseek") -> str:
 
     # Try LLM translation
     try:
-        prompt = f"""Translate the following text to English.
-IMPORTANT:
-1. Keep all exhibit citations (e.g., [Exhibit C-2, p.3]) exactly as they are
-2. Keep all formatting including block quotes (> "...")
-3. Translate ONLY the non-English text to English
-4. Do NOT add any explanations, just return the translated text
-
-Text to translate:
-{text}"""
+        prompt = _prompt_render("writer/translate_to_english_prompt",
+            text=text,
+        )
 
         llm_result = await call_llm_text(
             prompt=prompt,
@@ -1429,8 +1305,7 @@ Text to translate:
         if llm_result and not _contains_non_ascii(llm_result):
             return llm_result.strip()
     except Exception as e:
-        print(f"[ensure_english] LLM translation failed: {e}")
-
+        logger.warning(f"[ensure_english] LLM translation failed: {e}")
     # Fallback: Remove remaining Chinese characters
     return _remove_remaining_chinese(text)
 
@@ -1896,6 +1771,49 @@ def _build_provenance_from_sentences(sentences: List[Dict]) -> Dict:
     }
 
 
+
+# ============================================
+# Step 1 checkpoints (M10)
+# ============================================
+
+def _step1_fingerprint(argument: Dict, provider: str, project_type: str,
+                       additional_instructions: Optional[str], cross_prong_context: Optional[str]) -> str:
+    """Structural fingerprint of one Argument's Step-1 request."""
+    payload = {
+        "id": argument.get("id"),
+        "title": argument.get("title"),
+        "sub_arguments": [
+            {"id": sa.get("id"), "title": sa.get("title"), "purpose": sa.get("purpose"),
+             "relationship": sa.get("relationship"),
+             "snippets": sorted(s.get("id", "") for s in sa.get("snippets", []))}
+            for sa in argument.get("sub_arguments", [])
+        ],
+        "provider": provider, "project_type": project_type,
+        "additional_instructions": additional_instructions or "",
+        "cross_prong_context": cross_prong_context or "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
+
+
+def _checkpoint_path(project_id: str, standard_key: str, fp: str) -> Path:
+    return project_path(project_id, "writing_v3", "checkpoints", f"{standard_key}_{fp}.json")
+
+
+def _load_step1_checkpoint(project_id: str, standard_key: str, fp: str) -> Optional[List[Dict]]:
+    data = read_json(_checkpoint_path(project_id, standard_key, fp))
+    if isinstance(data, dict) and isinstance(data.get("bodies"), list) and data["bodies"]:
+        return data["bodies"]
+    return None
+
+
+def _save_step1_checkpoint(project_id: str, standard_key: str, fp: str, bodies: List[Dict]) -> None:
+    try:
+        write_json(_checkpoint_path(project_id, standard_key, fp),
+                   {"fingerprint": fp, "saved_at": datetime.now(timezone.utc).isoformat(), "bodies": bodies})
+    except Exception as e:  # checkpoints are an optimisation, never fatal
+        logger.warning(f"Step1 checkpoint save failed: {e}")
+
+
 async def write_petition_section_v3(
     project_id: str,
     standard_key: str,
@@ -1903,7 +1821,9 @@ async def write_petition_section_v3(
     subargument_ids: List[str] = None,
     additional_instructions: str = None,
     provider: str = "deepseek",
-    exploration_writing: bool = False
+    exploration_writing: bool = False,
+    job=None,
+    use_checkpoints: bool = True,
 ) -> Dict:
     """
     V3.1 版本的写作入口 — OCR 回溯三步流水线
@@ -1918,7 +1838,13 @@ async def write_petition_section_v3(
         argument_ids: 可选，指定要生成的 Argument IDs
         subargument_ids: 可选，指定要生成的 SubArgument IDs（用于局部重新生成）
         additional_instructions: 可选，额外指令
+        job: 可选 JobHandle（M10）——每个 Argument 边界 checkpoint 进度 / 协作式取消
+        use_checkpoints: Step 1 每个 Argument 的产出即时落盘为 checkpoint；
+            结构指纹相同时直接复用，重试 Step 2/3 不必重烧最贵的 Step 1
     """
+    from ..core.jobs import NullJob
+    job = job or NullJob()
+
     # Detect project_type
     try:
         from .storage import get_project_type
@@ -1971,12 +1897,26 @@ async def write_petition_section_v3(
                 f"{len(cross_prong_exhibit_texts)} cross-prong exhibits"
             )
 
-    for argument in all_arguments:
+    total_args = len(all_arguments)
+    for arg_index, argument in enumerate(all_arguments):
         arg_id = argument.get("id", "")
         sub_arguments = argument.get("sub_arguments", [])
+        job.checkpoint(step="step1", detail=f"Step 1/3: Argument {arg_index + 1}/{total_args}",
+                       progress=0.05 + 0.60 * arg_index / max(total_args, 1))
 
         if not sub_arguments:
             all_warnings.append(f"Skipped argument {arg_id}: no sub_arguments")
+            continue
+
+        # Step 1 checkpoint: keyed by a fingerprint of the argument's structure
+        # (ids, titles, snippet ids) + generation params. A hit means the exact
+        # same request was already answered -- reuse it instead of paying again.
+        ckpt_fp = _step1_fingerprint(argument, provider, project_type, additional_instructions, cross_prong_context)
+        cached_bodies = _load_step1_checkpoint(project_id, standard_key, ckpt_fp) if use_checkpoints else None
+        if cached_bodies:
+            logger.info(f"Step1: checkpoint hit for argument {arg_id} ({ckpt_fp})")
+            per_argument_bodies.append(cached_bodies)
+            per_argument_refs.append(argument)
             continue
 
         # Load OCR pages for all exhibits referenced by this argument
@@ -2014,6 +1954,9 @@ async def write_petition_section_v3(
                     if _contains_non_ascii(sent["text"]):
                         sent["text"] = _remove_remaining_chinese(sent["text"])
 
+        if use_checkpoints:
+            _save_step1_checkpoint(project_id, standard_key, ckpt_fp, arg_bodies)
+
         per_argument_bodies.append(arg_bodies)
         per_argument_refs.append(argument)
 
@@ -2031,6 +1974,8 @@ async def write_petition_section_v3(
 
     for i, arg_bodies in enumerate(per_argument_bodies):
         argument_ref = per_argument_refs[i]
+        job.checkpoint(step="step2", detail=f"Step 2/3: Polishing {i + 1}/{len(per_argument_bodies)}",
+                       progress=0.65 + 0.20 * i / max(len(per_argument_bodies), 1))
         logger.info(f"Step2: Polishing argument group {i+1}/{len(per_argument_bodies)} ({len(arg_bodies)} subargs, arg={argument_ref.get('id', '')})")
 
         polished = await _step2_polish_argument(
@@ -2050,6 +1995,7 @@ async def write_petition_section_v3(
         polished_bodies.append(polished)
 
     # ========== Step 3: 生成 Opening/Closing ==========
+    job.checkpoint(step="step3", detail="Step 3/3: Opening/closing", progress=0.88)
     logger.info("Step3: Generating opening/closing")
     frame = await _step3_generate_section_frame(
         standard=standard,
@@ -2217,19 +2163,21 @@ async def write_petition_section_v3(
             logger.info(f"Exploration writing: discovered new snippets for {len(new_snippets_map)} subarguments")
             # Persist to legal_arguments.json
             try:
-                from .snippet_recommender import load_legal_arguments, save_legal_arguments
-                legal_data = load_legal_arguments(project_id)
+                from .snippet_recommender import update_legal_arguments
+                def _mutate(legal_data):
 
-                for sa_data in legal_data.get("sub_arguments", []):
-                    sa_id = sa_data.get("id", "")
-                    if sa_id in new_snippets_map:
-                        existing_ids = set(sa_data.get("snippet_ids", []))
-                        for new_sid in new_snippets_map[sa_id]:
-                            if new_sid not in existing_ids:
-                                sa_data.setdefault("snippet_ids", []).append(new_sid)
+                    for sa_data in legal_data.get("sub_arguments", []):
+                        sa_id = sa_data.get("id", "")
+                        if sa_id in new_snippets_map:
+                            existing_ids = set(sa_data.get("snippet_ids", []))
+                            for new_sid in new_snippets_map[sa_id]:
+                                if new_sid not in existing_ids:
+                                    sa_data.setdefault("snippet_ids", []).append(new_sid)
 
-                save_legal_arguments(project_id, legal_data)
-                logger.info(f"Persisted new snippet associations to legal_arguments.json")
+                    return legal_data
+
+                update_legal_arguments(project_id, _mutate)
+                logger.info("Persisted new snippet associations to legal_arguments.json")
             except Exception as e:
                 logger.warning(f"Failed to persist exploration snippets: {e}")
 
@@ -2285,7 +2233,7 @@ def save_writing_v3(
     result: Dict
 ) -> str:
     """保存 V3 写作结果"""
-    project_dir = PROJECTS_DIR / project_id
+    project_dir = project_path(project_id)
     writing_dir = project_dir / "writing_v3"
     writing_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2299,27 +2247,36 @@ def save_writing_v3(
     }
 
     filename = f"writing_{section}_{version_id}.json"
-    with open(writing_dir / filename, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(writing_dir / filename, data)
 
     return version_id
 
 
 def load_latest_writing_v3(
     project_id: str,
-    section: str
+    section: str,
+    full_only: bool = True,
 ) -> Optional[Dict]:
-    """加载最新的 V3 写作结果"""
-    writing_dir = PROJECTS_DIR / project_id / "writing_v3"
+    """加载最新的 V3 写作结果
+
+    ``full_only`` (default) skips versions saved by a partial regeneration
+    (``subargument_ids`` requests, marked ``partial: true``): those hold only
+    the regenerated SubArgument's sentences and are not a complete section.
+    The complete section is what the client persists via PUT .../sentences
+    once the user accepts the regeneration (M13 diff view).
+    """
+    writing_dir = project_path(project_id, "writing_v3")
     if not writing_dir.exists():
         return None
 
     files = sorted(writing_dir.glob(f"writing_{section}_*.json"), reverse=True)
-    if not files:
-        return None
-
-    with open(files[0], 'r', encoding='utf-8') as f:
-        return json.load(f)
+    for path in files:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if full_only and data.get("partial"):
+            continue
+        return data
+    return None
 
 
 # ============================================
@@ -2447,34 +2404,14 @@ async def analyze_change_impact(
 
     system_prompt = """You are a legal document editor. Analyze how a structural change to a petition letter section affects the remaining text. Return ONLY valid JSON."""
 
-    user_prompt = f"""A sub-argument was just {action} this petition letter section.
-
-CURRENT TEXT (after mechanical {change_type}):
-{indexed_text}
-
-CHANGE DESCRIPTION:
-- {change_type.capitalize()}d SubArgument: "{affected_title}"
-- SubArgument ID: {affected_subargument_id}
-
-TASK: Identify sentences that need adjustment due to this change.
-Check for:
-1. Opening paragraph references to deleted content (e.g., count changes like "three aspects" → "two aspects")
-2. Closing paragraph summaries that reference removed points
-3. Transition sentences ("Furthermore...", "In addition...") that now dangle
-4. Cross-references to removed exhibits
-
-Return JSON:
-{{
-  "suggestions": [
-    {{
-      "sentence_index": 0,
-      "original_text": "exact current text",
-      "suggested_text": "revised text",
-      "reason": "brief explanation"
-    }}
-  ]
-}}
-Only return suggestions where changes are actually needed. Return empty array if no changes needed."""
+    user_prompt = _prompt_render("writer/analyze_change_impact_user_prompt",
+        action=action,
+        change_type=change_type,
+        indexed_text=indexed_text,
+        change_type_capitalize=change_type.capitalize(),
+        affected_title=affected_title,
+        affected_subargument_id=affected_subargument_id,
+    )
 
     try:
         result = await call_llm(
@@ -2537,27 +2474,13 @@ async def edit_text_with_instruction(
             role = "用户" if msg["role"] == "user" else "助手"
             history_text += f"\n{role}: {msg['content']}"
 
-    system_prompt = """You are an expert legal writing editor specializing in EB-1A immigration petitions.
-Your task is to revise the provided text according to the user's instructions while:
-1. Maintaining professional legal tone
-2. Preserving factual accuracy and evidence citations
-3. Keeping the revised text similar in length unless instructed otherwise
-4. Ensuring proper grammar and clarity"""
+    system_prompt = _prompt_body("writer/edit_text_with_instruction_system_prompt")
 
-    user_prompt = f"""ORIGINAL TEXT:
-"{original_text}"
-
-{f"CONVERSATION HISTORY:{history_text}" if history_text else ""}
-
-CURRENT INSTRUCTION: {instruction}
-
-Please revise the text according to the instruction. Return a JSON object:
-{{
-    "revised_text": "the revised text",
-    "explanation": "brief explanation of changes made"
-}}
-
-Return ONLY valid JSON, no markdown or extra text."""
+    user_prompt = _prompt_render("writer/edit_text_with_instruction_user_prompt",
+        original_text=original_text,
+        history_block=f"CONVERSATION HISTORY:{history_text}" if history_text else "",
+        instruction=instruction,
+    )
 
     result = await call_llm(
         prompt=user_prompt,

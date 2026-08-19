@@ -11,13 +11,12 @@ Snippet Registry - 从 L1/EB1A 分析结果构建带 ID 的 snippet 注册表
 
 import hashlib
 import json
-from typing import List, Dict, Optional
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
-# 数据存储根目录
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-PROJECTS_DIR = DATA_DIR / "projects"
+from ..core.atomic_io import write_json
+from .storage import project_path
 
 
 def generate_snippet_id(exhibit_id: str, page: int, quote_text: str) -> str:
@@ -181,7 +180,7 @@ def build_registry_from_quote_index_map(project_id: str, quote_index_map: Dict) 
 
 def get_snippets_dir(project_id: str) -> Path:
     """获取 snippets 存储目录"""
-    snippets_dir = PROJECTS_DIR / project_id / "snippets"
+    snippets_dir = project_path(project_id, "snippets")
     snippets_dir.mkdir(parents=True, exist_ok=True)
     return snippets_dir
 
@@ -198,8 +197,7 @@ def save_registry(project_id: str, snippets: List[Dict]):
         "snippets": snippets
     }
 
-    with open(registry_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(registry_file, data)
 
 
 def load_registry(project_id: str) -> List[Dict]:
@@ -293,7 +291,7 @@ def build_registry_from_combined_extraction(project_id: str) -> List[Dict]:
     确保 provenance_engine 和 petition_writer 读同一份数据。
     snippet_id 保持不变（已在 unified_extractor 中确定性生成）。
     """
-    extraction_dir = PROJECTS_DIR / project_id / "extraction"
+    extraction_dir = project_path(project_id, "extraction")
     combined_file = extraction_dir / "combined_extraction.json"
 
     if not combined_file.exists():

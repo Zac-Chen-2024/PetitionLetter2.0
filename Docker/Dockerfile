@@ -6,11 +6,11 @@ FROM node:22-alpine AS build-frontend
 WORKDIR /build
 
 # Copy package files first for layer caching
-COPY frontend/frontend/package.json frontend/frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 # Copy source and build
-COPY frontend/frontend/ ./
+COPY frontend/ ./
 
 # Same-origin API requests in production
 ENV VITE_API_BASE=/api
@@ -37,11 +37,18 @@ COPY --from=build-frontend /build/dist/ ./frontend-dist/
 COPY Docker/serve.py ./serve.py
 
 # Copy project data (JSON: arguments, snippets, OCR results, etc.)
-# Only include selected demo cases
-COPY backend/data/projects/yaruo_qu/     ./data/projects/yaruo_qu/
-COPY backend/data/projects/dehuan_liu/   ./data/projects/dehuan_liu/
-COPY backend/data/projects/chen_zhen/    ./data/projects/chen_zhen/
-COPY backend/data/projects/liu_donglan/  ./data/projects/liu_donglan/
+# Only include selected demo cases. Since M5 projects live under
+# data/workspaces/<workspace>/projects/ (run scripts/migrate_to_workspaces.py
+# once on the source tree before building).
+COPY backend/data/workspaces/default/projects/yaruo_qu/     ./data/workspaces/default/projects/yaruo_qu/
+COPY backend/data/workspaces/default/projects/dehuan_liu/   ./data/workspaces/default/projects/dehuan_liu/
+COPY backend/data/workspaces/default/projects/chen_zhen/    ./data/workspaces/default/projects/chen_zhen/
+COPY backend/data/workspaces/default/projects/liu_donglan/  ./data/workspaces/default/projects/liu_donglan/
+
+# Portable/demo image is single-user: no workspace tokens. A server deployment
+# overrides this via env_file (AUTH_DISABLED=false + scripts/mint_token.py).
+ENV AUTH_DISABLED=true
+ENV SOURCE_DATA_DIR=/app/data
 
 # Copy source PDFs + OCR (selected cases only)
 COPY data/eb1a/ /app/data/eb1a/

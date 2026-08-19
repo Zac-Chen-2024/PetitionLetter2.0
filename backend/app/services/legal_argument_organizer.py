@@ -8,18 +8,22 @@ Legal Argument Organizer - LLM + 法律条例驱动的子论点组织器
 4. 输出数量与律师例文一致（~7-8个子论点）
 """
 
-import json
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
+import json
+import logging
 import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Tuple
 
+from ..core.atomic_io import write_json
+from ..core.prompt_loader import body as _prompt_body
+from ..core.prompt_loader import load_data as _prompt_data
+from ..core.prompt_loader import render as _prompt_render
 from .llm_client import call_llm
-from .subargument_generator import generate_sub_arguments_for_composed, GeneratedSubArgument
-from .standards_registry import get_standards_for_type
+from .storage import project_path
 
+logger = logging.getLogger(__name__)
 
 # ==================== EB-1A 法律条例定义 ====================
 
@@ -27,195 +31,57 @@ LEGAL_STANDARDS = {
     "awards": {
         "citation": "8 C.F.R. §204.5(h)(3)(i)",
         "name": "Nationally/Internationally Recognized Awards",
-        "requirements": """
-Legal requirements:
-1. Awards must have national or international recognition
-2. Awards must be for excellence in the field (not participation awards)
-3. Must demonstrate the prestige and selectivity of the award
-
-Argumentation structure (combine into ONE argument; sub-divide by individual award):
-- Each distinct award → one sub-argument with its own evidence chain:
-  1. Award name, year, and the applicant's specific honor
-  2. Awarding body's authority and reputation
-  3. Selection process rigor (jury composition, review methodology, duration)
-  4. Competitiveness (number of nominees vs. winners, acceptance rate)
-  5. Peer comparison (other distinguished recipients to show caliber)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_awards"),
     },
     "membership": {
         "citation": "8 C.F.R. §204.5(h)(3)(ii)",
         "name": "Membership in Associations",
-        "requirements": """
-Legal requirements:
-1. The association must require outstanding achievements for admission (not ordinary professional certification)
-2. Must demonstrate the association's selectivity and distinguished reputation
-3. Must show other distinguished members for peer comparison
-4. Ordinary industry certifications or licenses do NOT qualify
-
-Argumentation structure (one sub-argument per qualifying association):
-- Each association → its own evidence chain:
-  1. Association introduction (founding, mission, distinguished reputation)
-  2. Membership criteria (what outstanding achievements are required for admission)
-  3. Review/admission process (how rigorous the selection is)
-  4. Notable members (peer comparison to demonstrate selectivity)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_membership"),
     },
     "published_material": {
         "citation": "8 C.F.R. §204.5(h)(3)(iii)",
         "name": "Published Material in Major Media",
-        "requirements": """
-Legal requirements:
-1. Media must be "major media" — demonstrate circulation, awards, influence
-2. Coverage must be ABOUT the alien and the alien's work (not BY the alien)
-3. Must demonstrate the media outlet's authority and professionalism
-
-IMPORTANT: This is media coverage ABOUT the applicant, NOT articles written BY the applicant.
-Articles authored by the applicant belong under Scholarly Articles (vi).
-
-Argumentation structure (one sub-argument per media coverage):
-- Each media report → its own evidence chain:
-  1. Article title, publication date, and summary of coverage about the applicant
-  2. Media outlet's authority and reach (circulation, awards, history, intended audience)
-  3. Scope of the coverage (national/international reach, depth of reporting)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_published_material"),
     },
     "judging": {
         "citation": "8 C.F.R. §204.5(h)(3)(iv)",
         "name": "Judging the Work of Others",
-        "requirements": """
-Legal requirements:
-1. The applicant participated individually or as part of a panel in judging the work of others in the field
-2. Judging role must be based on professional expertise (invited, not obligatory)
-3. Must demonstrate the authority of the judging activity (journal peer review, grant review, competition judging, etc.)
-
-Argumentation structure (combine into ONE argument; sub-divide by judging role):
-- Each judging appointment → its own evidence chain:
-  1. Official role/title and appointing organization
-  2. Organization's prestige and authority in the field
-  3. Scope and scale of the judging process (submission count, jury size, review rounds)
-  4. The applicant's decision-making weight or influence
-  5. Other distinguished co-judges or panelists (peer comparison)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_judging"),
     },
     "original_contribution": {
         "citation": "8 C.F.R. §204.5(h)(3)(v)",
         "name": "Original Contributions of Major Significance",
-        "requirements": """
-Legal requirements:
-1. Contribution must be original
-2. Contribution must be of major significance to the field
-3. Requires quantified impact evidence (data, adoption rate, commercial success)
-4. Requires independent expert recommendation letters
-
-Argumentation structure (combine into ONE comprehensive argument; sub-divide by distinct contribution):
-- Each original contribution → its own evidence chain:
-  1. Description of the original work (invention, methodology, framework, product)
-  2. Quantified impact (adoption metrics, user count, revenue, citations)
-  3. Independent expert endorsements (recommendation letters with specific praise)
-  4. Institutional or industry adoption (organizations, government programs using the work)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_original_contribution"),
     },
     "scholarly_articles": {
         "citation": "8 C.F.R. §204.5(h)(3)(vi)",
         "name": "Authorship of Scholarly Articles",
-        "requirements": """
-Legal requirements:
-1. The applicant is the author of scholarly articles in professional or major trade publications or other major media
-2. Published in professional journals or major media outlets
-3. Must demonstrate the publication's impact (citation count, journal ranking, field influence)
-
-IMPORTANT: This is articles/books authored BY the applicant.
-This is DIFFERENT from Published Material (iii), which is media coverage ABOUT the applicant.
-
-Argumentation structure (combine into ONE argument; sub-divide by publication):
-- Each publication → its own evidence chain:
-  1. Article/book title, year, and authorship role
-  2. Publication venue prestige (impact factor, ranking, editorial standards)
-  3. Research contribution (what is novel or significant)
-  4. Citation data and impact metrics (total citations, field percentile, cross-disciplinary influence)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_scholarly_articles"),
     },
     "display": {
         "citation": "8 C.F.R. §204.5(h)(3)(vii)",
         "name": "Display of Work at Exhibitions",
-        "requirements": """
-Legal requirements:
-1. The applicant's work was displayed at artistic exhibitions or showcases
-2. The exhibition must have professional standing and recognition
-3. Applies to visual arts, performing arts, design, etc.
-
-Argumentation structure:
-- Exhibition/showcase introduction
-- Exhibition's prestige and influence
-- Form of display and reception of the applicant's work
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_display"),
     },
     "leading_role": {
         "citation": "8 C.F.R. §204.5(h)(3)(viii)",
         "name": "Leading/Critical Role for Distinguished Organizations",
-        "requirements": """
-Legal requirements:
-1. The role must be leading or critical
-2. The organization must have a distinguished reputation
-3. Must demonstrate the applicant's decision-making authority and influence
-
-Argumentation structure (one sub-argument per organization, select top 2-3):
-- Each organization → two-tier evidence chain:
-  Tier 1 — Organization's distinguished reputation (argued independently):
-    1. History, scale, rankings, and industry recognition
-    2. Notable achievements, partnerships, or awards
-  Tier 2 — Applicant's leading/critical role within it:
-    1. Title, appointment, scope of responsibilities
-    2. Decision-making authority and specific achievements
-    3. Testimonials or endorsements from colleagues/superiors
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_leading_role"),
     },
     "high_salary": {
         "citation": "8 C.F.R. §204.5(h)(3)(ix)",
         "name": "High Salary or Remuneration",
-        "requirements": """
-Legal requirements:
-1. Salary must be significantly higher than others in the field
-2. Must provide industry salary comparison data
-3. Can include wages, bonuses, royalties, consulting fees, or any form of remuneration
-
-Argumentation structure (single unified argument, typically no sub-division needed):
-  1. Applicant's compensation data (base salary, bonuses, other remuneration) with official documentation
-  2. Industry benchmark from authoritative third-party source (government statistics, salary surveys)
-  3. Comparative ratio analysis (how many times above the average)
-  4. Additional income streams if applicable (consulting, royalties, speaking fees)
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_high_salary"),
     },
     "commercial_success": {
         "citation": "8 C.F.R. §204.5(h)(3)(x)",
         "name": "Commercial Success in the Performing Arts",
-        "requirements": """
-Legal requirements:
-1. Applies to the performing arts field
-2. Must show box office revenue, record sales, ratings, or similar commercial data
-3. Commercial success must reach a significant level in the industry
-
-Argumentation structure:
-- Commercial data (box office, sales, ratings, etc.)
-- Industry benchmark comparison
-- Media or industry recognition of commercial success
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_commercial_success"),
     },
     "overall_merits": {
         "citation": "8 C.F.R. §204.5(h)(2) & Kazarian v. USCIS, 596 F.3d 1115 (9th Cir. 2010)",
         "name": "Final Merits Determination — Overall Merits",
-        "requirements": """
-Legal framework (Kazarian Step 2):
-After demonstrating eligibility under at least three of the ten criteria,
-the totality of evidence must demonstrate sustained national or international acclaim
-and that the beneficiary is among the small percentage at the very top of the field.
-
-Argumentation structure:
-- Totality declaration referencing all established criteria
-- Cross-criteria synthesis of supplemental evidence by theme
-- Expert testimonials and recognition spanning multiple criteria
-- Comprehensive conclusion tying all evidence to sustained acclaim
-""",
+        "requirements": _prompt_body("organizer/eb1a_requirements_overall_merits"),
     },
 }
 
@@ -228,311 +94,43 @@ NIW_LEGAL_STANDARDS = {
     "prong1_merit": {
         "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 889-890 (AAO 2016), Prong 1",
         "name": "Substantial Merit & National Importance",
-        "requirements": """
-Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 889-890):
-
-"The first prong, substantial merit and national importance, focuses on the specific
-endeavor that the foreign national proposes to undertake. The term 'endeavor' is more
-specific than the general occupation... [W]e focus on what the person proposes to work
-on rather than the general occupation."
-
-"The endeavor's merit may be demonstrated in a range of areas such as business,
-entrepreneurialism, science, technology, culture, health, or education. The merit of
-a proposed endeavor may be demonstrated by, among other things, showing potential
-prospective impact of the endeavor."
-
-National importance — geographic scope:
-"We understand 'national importance' more broadly... [The term] does not require that
-the endeavor have national or global reach. We look instead at whether the endeavor
-has 'national' ramifications — i.e., the potential to substantially impact or influence
-work or activity extending well beyond a particular locality."
-
-Argumentation structure:
-1. Define the proposed endeavor specifically (research direction, methodology, product, business plan)
-2. Substantial merit: the endeavor's value (advances the field, solves an important problem, creates economic value)
-3. National importance: ramifications beyond a particular locality (policy alignment, field-wide adoption potential, societal benefit)
-4. Supporting evidence: expert recommendations confirming significance, quantitative impact data, policy/industry alignment
-""",
+        "requirements": _prompt_body("organizer/niw_requirements_prong1_merit"),
     },
     "prong2_positioned": {
         "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 890 (AAO 2016), Prong 2",
         "name": "Well Positioned to Advance the Endeavor",
-        "requirements": """
-Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 890):
-
-"Under the second prong, petitioners must demonstrate that the foreign nationals are
-well positioned to advance their proposed endeavor. In determining whether petitioners
-have met this prong, we consider factors including, but not limited to: the individual's
-education, skills, knowledge and record of success in related or similar efforts; a model
-or plan for future activities; any progress towards achieving the proposed endeavor; and
-the interest of potential customers, users, investors, or other relevant entities or
-individuals."
-
-Key factors (non-exhaustive):
-- Education, skills, knowledge
-- Record of success in related or similar efforts
-- A model or plan for future activities
-- Progress towards achieving the proposed endeavor
-- Interest of potential customers, users, investors, or other relevant entities
-
-Argumentation structure:
-1. Education and professional qualifications (degrees, certifications, specialized training)
-2. Track record of success: publications, citations, awards, industry recognition, quantified achievements
-3. Expert endorsements: recommendation letters from authorities confirming qualifications
-4. Concrete plan and progress: current position, ongoing projects, measurable milestones
-5. External validation: customer adoption, investor interest, institutional partnerships
-""",
+        "requirements": _prompt_body("organizer/niw_requirements_prong2_positioned"),
     },
     "prong3_balance": {
         "citation": "Matter of Dhanasar, 26 I&N Dec. 884, 890-891 (AAO 2016), Prong 3",
         "name": "Balance of Equities Favors Waiver",
-        "requirements": """
-Legal standard (Matter of Dhanasar, 26 I&N Dec. 884, 890-891):
-
-"The third prong requires the petitioner to demonstrate that, on balance, it would be
-beneficial to the United States to waive the requirements of a job offer, and thus of
-a labor certification."
-
-"In performing this analysis, USCIS may evaluate factors such as: whether, in light of
-the nature of the foreign national's qualifications or proposed endeavor, it would be
-impractical either for the foreign national to secure a job offer or for the petitioner
-to obtain a labor certification; whether, even assuming that other qualified U.S. workers
-are available, the United States would still benefit from the foreign national's
-contributions; and whether the national interest in the foreign national's contributions
-is sufficiently urgent to warrant forgoing the labor certification process."
-
-"In evaluating the third prong, including whether the waiver would be in the national
-interest, USCIS may consider, as one factor among others, the degree to which other
-evidence of record — including evidence submitted to meet other prongs — supports the
-finding that the foreign national's entry will serve the national interest."
-
-Argumentation structure:
-1. Impracticality of labor certification: work transcends conventional employer-employee relationships
-2. National benefit despite available U.S. workers: unique qualifications, irreplaceable expertise
-3. Benefits beyond a single employer: field-wide impact, public interest, multi-sector applications
-4. Urgency: time-sensitive national priorities, policy alignment, critical workforce shortages
-5. Explicit balancing: totality of evidence from all three prongs supports waiver
-""",
+        "requirements": _prompt_body("organizer/niw_requirements_prong3_balance"),
     },
 }
 
 
 # ==================== Prompt Templates ====================
 
-ORGANIZE_SYSTEM_PROMPT = """You are an expert EB-1A immigration attorney with deep knowledge of 8 C.F.R. §204.5(h)(3).
+ORGANIZE_SYSTEM_PROMPT = _prompt_body("organizer/organize_system_prompt")
 
-Your task is to organize evidence snippets into powerful legal arguments,
-following the exact structure that immigration lawyers use in petition letters.
-
-KEY PRINCIPLES:
-1. You MUST create at least one argument for EVERY standard that has evidence snippets provided below
-2. Each argument must directly address the legal requirements of its standard
-3. Filter out weak evidence (e.g., ordinary professional certifications for Membership)
-4. Combine related evidence into cohesive arguments within each standard
-5. Follow the argumentation structure specified for each standard
-6. CRITICAL DISTINCTION — Published Material (iii) vs Scholarly Articles (vi):
-   - (iii) Published Material = media coverage ABOUT the alien by others
-   - (vi) Scholarly Articles = academic papers/articles authored BY the alien
-   These are completely different criteria. Never confuse them.
-
-OUTPUT LANGUAGE: ALL output must be in English. Do NOT use Chinese or any other language."""
-
-ORGANIZE_USER_PROMPT = """## EVIDENCE SUMMARY
-
-The following {standards_with_evidence_count} EB-1A criteria have supporting evidence.
-You MUST create at least one argument for EACH of them:
-
-{evidence_summary}
-
-## Legal Standards and Requirements (only those with evidence)
-
-{standards_text}
-
-## Evidence Snippets by Standard
-
-{snippets_by_standard}
-
-## Task
-
-Create arguments for ALL {standards_with_evidence_count} standards listed above. Do NOT skip any.
-
-Per-standard rules:
-- Awards (i): Combine into ONE argument containing all awards
-- Membership (ii): One argument per qualifying association (filter ordinary certifications)
-- Published Material (iii): Media ABOUT the alien — one argument per major media outlet
-- Judging (iv): Combine all judging roles into ONE argument
-- Original Contribution (v): Combine ALL into ONE comprehensive argument
-- Scholarly Articles (vi): Combine into ONE argument — articles authored BY the alien
-- Leading Role (viii): One argument per distinguished organization (select top 2-3)
-- High Salary (ix): ONE argument — only if significantly above field average
-
-The "standard" field MUST exactly match one of: {valid_standard_keys}
-
-Return JSON:
-{{
-  "arguments": [
-    {{
-      "id": "arg-001",
-      "standard": "membership",
-      "title": "[Applicant]'s Membership in [Association Name]",
-      "rationale": "Why this argument is strong",
-      "snippet_ids": ["snp-001", "snp-002"],
-      "evidence_strength": "strong|medium|weak"
-    }}
-  ],
-  "filtered_out": [
-    {{
-      "snippet_ids": ["snp-xxx"],
-      "reason": "Ordinary certification, does not meet membership requirements"
-    }}
-  ],
-  "summary": {{
-    "total_arguments": 7,
-    "by_standard": {{"membership": 1, "scholarly_articles": 1, "judging": 1}}
-  }}
-}}"""
+ORGANIZE_USER_PROMPT = _prompt_body("organizer/organize_user_prompt")
 
 
-NIW_ORGANIZE_SYSTEM_PROMPT = """You are an expert NIW (National Interest Waiver) immigration attorney with deep knowledge of Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
-
-Your task is to organize evidence snippets into powerful legal arguments under the Dhanasar three-prong framework.
-
-KEY PRINCIPLES:
-1. Each argument must directly address one of the three Dhanasar prongs
-2. Prong 1 (Substantial Merit & National Importance): Focus on the proposed endeavor's value
-3. Prong 2 (Well Positioned): Focus on qualifications, track record, and plans
-4. Prong 3 (Balance): Focus on why waiving labor certification benefits the US
-5. Combine related evidence into cohesive, well-supported arguments
-
-OUTPUT LANGUAGE: Use English for argument titles (following lawyer style), Chinese for internal notes."""
+NIW_ORGANIZE_SYSTEM_PROMPT = _prompt_body("organizer/niw_organize_system_prompt")
 
 
-NIW_ORGANIZE_USER_PROMPT = """## EVIDENCE SUMMARY
-
-{standards_with_evidence_count} prongs have supporting evidence:
-
-{evidence_summary}
-
-## Dhanasar Three-Prong Framework
-
-{standards_text}
-
-## Evidence Snippets by Prong
-
-{snippets_by_standard}
-
-## Task
-
-Organize these snippets into powerful legal arguments under the Dhanasar framework.
-Aim for 3-6 arguments total, with at least one per prong.
-Valid standard keys: {valid_standard_keys}
-
-Return JSON:
-{{
-  "arguments": [
-    {{
-      "id": "arg-001",
-      "standard": "prong1_merit",
-      "title": "Applicant's Research in X Addresses National Need for Y",
-      "rationale": "Why this argument is strong",
-      "snippet_ids": ["snp-001", "snp-002"],
-      "evidence_strength": "strong|medium|weak"
-    }}
-  ],
-  "filtered_out": [
-    {{
-      "snippet_ids": ["snp-xxx"],
-      "reason": "Not relevant to any Dhanasar prong"
-    }}
-  ],
-  "summary": {{
-    "total_arguments": 5,
-    "by_standard": {{"prong1_merit": 2, "prong2_positioned": 2, "prong3_balance": 1}}
-  }}
-}}"""
+NIW_ORGANIZE_USER_PROMPT = _prompt_body("organizer/niw_organize_user_prompt")
 
 
 # ==================== NIW v2 Prompts ====================
 
-NIW_CLASSIFY_OTHER_SYSTEM_PROMPT = """You are an expert NIW immigration attorney. Classify each evidence snippet
-into the most appropriate Dhanasar prong based on its content.
-ALL output must be in English."""
+NIW_CLASSIFY_OTHER_SYSTEM_PROMPT = _prompt_body("organizer/niw_classify_other_system_prompt")
 
-NIW_CLASSIFY_OTHER_USER_PROMPT = """Classify each of the following evidence snippets into the most appropriate
-Dhanasar prong for an NIW petition.
+NIW_CLASSIFY_OTHER_USER_PROMPT = _prompt_body("organizer/niw_classify_other_user_prompt")
 
-Prong definitions:
-- prong1_merit: The proposed endeavor has substantial merit and national importance
-  (e.g., endeavor descriptions, field impact, national importance evidence, contributions)
-- prong2_positioned: The applicant is well positioned to advance the endeavor
-  (e.g., education, work experience, publications, awards, certifications, expert endorsements)
-- prong3_balance: On balance, waiving labor certification benefits the US
-  (e.g., national benefit arguments, beyond-employer impact, urgency)
-- skip: Not relevant to any prong (e.g., pure formatting, boilerplate, table of contents)
+NIW_PRONG_ORGANIZE_SYSTEM_PROMPT = _prompt_body("organizer/niw_prong_organize_system_prompt")
 
-## Snippets to classify
-
-{snippets_text}
-
-Return JSON:
-{{
-  "classifications": [
-    {{"snippet_id": "snp-xxx", "prong": "prong1_merit"}},
-    {{"snippet_id": "snp-yyy", "prong": "prong2_positioned"}},
-    {{"snippet_id": "snp-zzz", "prong": "skip"}}
-  ]
-}}
-
-RULES:
-1. Every snippet MUST appear exactly once in the output
-2. Prefer prong1_merit or prong2_positioned over skip — only skip truly irrelevant content
-3. Recommendation letters discussing the applicant's qualifications → prong2_positioned
-4. Recommendation letters discussing the endeavor's importance → prong1_merit
-5. General professional achievements without clear prong fit → prong2_positioned"""
-
-NIW_PRONG_ORGANIZE_SYSTEM_PROMPT = """You are an expert NIW immigration attorney organizing evidence for one prong
-of the Dhanasar three-prong test.
-Your task: organize ALL provided evidence snippets into coherent sub-arguments.
-ALL output must be in English."""
-
-NIW_PRONG_ORGANIZE_USER_PROMPT = """## Prong: {prong_name}
-## Legal Standard: {prong_citation}
-## Applicant: {applicant_name}
-
-{prong_description}
-
-## Evidence Snippets ({snippet_count} total)
-
-{snippets_text}
-
-## Task
-
-Organize ALL the above snippets into coherent sub-arguments for this prong.
-
-RULES:
-1. Each sub-argument should be a distinct legal point with a clear theme
-2. Cross-reference evidence from different exhibits when they support the same point
-3. Recommendation letter content should be distributed to the relevant sub-argument topics
-   (do NOT create a separate "recommendation letters" sub-argument)
-4. EVERY snippet must be assigned to exactly one sub-argument — 100% coverage required
-5. Aim for {target_subargs} sub-arguments depending on evidence volume
-6. Title should be a concise legal argument heading (e.g., "Applicant's Research Addresses Critical National Need in X")
-7. Purpose should explain what legal point this sub-argument establishes
-8. Relationship should be 3-8 words explaining how it supports the prong
-
-Return JSON:
-{{
-  "sub_arguments": [
-    {{
-      "title": "Applicant's Research Addresses Critical Need in Renewable Energy",
-      "claim": "Brief statement of the legal claim this sub-argument makes",
-      "purpose": "Establishes that the applicant's proposed endeavor in X has substantial merit because...",
-      "relationship": "Demonstrates substantial merit of endeavor",
-      "snippet_ids": ["S1", "S3", "S7", "S12"],
-      "reasoning": "These snippets collectively show... grouped because..."
-    }}
-  ]
-}}"""
+NIW_PRONG_ORGANIZE_USER_PROMPT = _prompt_body("organizer/niw_prong_organize_user_prompt")
 
 
 # ==================== L-1A 法律条例定义 ====================
@@ -541,135 +139,30 @@ L1A_LEGAL_STANDARDS = {
     "qualifying_relationship": {
         "citation": "INA §101(a)(15)(L); 8 CFR §214.2(l)(1)(ii)",
         "name": "Qualifying Corporate Relationship",
-        "requirements": """
-Legal requirements:
-1. A qualifying relationship (parent, subsidiary, branch, or affiliate) must exist between the foreign and U.S. entities
-2. Ownership and control must be documented (e.g., majority shareholding, corporate registration, tax filings)
-3. Both entities must have sufficient physical premises
-
-Argumentation structure (single unified argument):
-  1. U.S. entity incorporation and registration details
-  2. Ownership chain — share transfer, percentage held, documentation (stock certificates, IRS Schedule G)
-  3. Physical premises — lease terms, square footage, office/warehouse photos
-  4. Parent company investment — capital transfer amount, bank statements
-""",
+        "requirements": _prompt_body("organizer/l1a_requirements_qualifying_relationship"),
     },
     "doing_business": {
         "citation": "8 CFR §214.2(l)(1)(ii)(H)",
         "name": "Active Business Operations",
-        "requirements": """
-Legal requirements:
-1. Both the U.S. and foreign entities must be doing business (regular, systematic, continuous provision of goods and/or services)
-2. Mere presence of an agent or office is not sufficient
-
-Argumentation structure (combine into ONE argument):
-  1. U.S. entity's nature of business, product lines, and service offerings
-  2. Financial performance — revenue, tax returns, bank statements
-  3. Business plan — projected growth, hiring plan, financial targets
-  4. Customer/partner relationships — contracts, invoices, purchase orders
-  5. Parent company operations — revenue, departments, client base, geographic reach
-""",
+        "requirements": _prompt_body("organizer/l1a_requirements_doing_business"),
     },
     "executive_capacity": {
         "citation": "INA §101(a)(44); 8 CFR §214.2(l)(1)(ii)(B)-(C)",
         "name": "Executive/Managerial Capacity in the U.S.",
-        "requirements": """
-Legal requirements:
-1. The beneficiary will serve in an executive or managerial capacity
-2. Must show the organizational structure supports an executive role
-3. Must describe specific duties with time allocation percentages
-4. Must show subordinate managers/professionals handle day-to-day operations
-
-Argumentation structure (single unified argument):
-  1. Organizational chart showing reporting hierarchy
-  2. Executive duties with percentage time allocation (5 segments)
-  3. Direct subordinates — names, titles, qualifications, specific duties
-  4. How subordinates alleviate the beneficiary from routine operational tasks
-""",
+        "requirements": _prompt_body("organizer/l1a_requirements_executive_capacity"),
     },
     "qualifying_employment": {
         "citation": "8 CFR §214.2(l)(1)(ii)(A)",
         "name": "Qualifying Employment Abroad",
-        "requirements": """
-Legal requirements:
-1. The beneficiary must have been employed in an executive or managerial capacity abroad for at least one continuous year within the three years preceding the petition
-2. Must demonstrate the beneficiary's qualifications and achievements
-
-Argumentation structure (single unified argument):
-  1. Beneficiary's educational background and relevant degrees
-  2. Employment history — positions, dates, executive duties at the foreign entity
-  3. Specific achievements — contracts signed, revenue growth, partnerships established
-  4. Subordinate management — departments supervised, managerial staff credentials
-  5. Evidence of executive decision-making authority
-""",
+        "requirements": _prompt_body("organizer/l1a_requirements_qualifying_employment"),
     },
 }
 
 
-L1A_ORGANIZE_SYSTEM_PROMPT = """You are an expert L-1A immigration attorney with deep knowledge of INA §101(a)(15)(L) and 8 CFR §214.2(l).
-
-Your task is to organize evidence snippets into powerful legal arguments for an L-1A intracompany transferee petition (executive/managerial capacity).
-
-KEY PRINCIPLES:
-1. You MUST create at least one argument for EVERY standard that has evidence snippets
-2. Each argument must directly address the legal requirements of its standard
-3. Combine related evidence into cohesive arguments within each standard
-4. Follow the argumentation structure specified for each standard
-5. Focus on corporate relationship, business operations, executive capacity, and qualifying employment abroad
-
-OUTPUT LANGUAGE: ALL output must be in English. Do NOT use Chinese or any other language."""
+L1A_ORGANIZE_SYSTEM_PROMPT = _prompt_body("organizer/l1a_organize_system_prompt")
 
 
-L1A_ORGANIZE_USER_PROMPT = """## EVIDENCE SUMMARY
-
-The following {standards_with_evidence_count} L-1A standards have supporting evidence.
-You MUST create at least one argument for EACH of them:
-
-{evidence_summary}
-
-## Legal Standards and Requirements (only those with evidence)
-
-{standards_text}
-
-## Evidence Snippets by Standard
-
-{snippets_by_standard}
-
-## Task
-
-Create arguments for ALL {standards_with_evidence_count} standards listed above. Do NOT skip any.
-
-Per-standard rules:
-- Qualifying Relationship: ONE unified argument covering ownership, premises, and investment
-- Doing Business: ONE argument covering both U.S. and foreign entity operations
-- Executive Capacity: ONE argument with org chart, duties, and subordinate management
-- Qualifying Employment: ONE argument covering background, employment history, and achievements
-
-The "standard" field MUST exactly match one of: {valid_standard_keys}
-
-Return JSON:
-{{
-  "arguments": [
-    {{
-      "id": "arg-001",
-      "standard": "qualifying_relationship",
-      "title": "Qualifying Relationship Between [Foreign Co.] and [U.S. Co.]",
-      "rationale": "Why this argument is strong",
-      "snippet_ids": ["snp-001", "snp-002"],
-      "evidence_strength": "strong|medium|weak"
-    }}
-  ],
-  "filtered_out": [
-    {{
-      "snippet_ids": ["snp-xxx"],
-      "reason": "Not relevant to any L-1A standard"
-    }}
-  ],
-  "summary": {{
-    "total_arguments": 4,
-    "by_standard": {{"qualifying_relationship": 1, "doing_business": 1, "executive_capacity": 1, "qualifying_employment": 1}}
-  }}
-}}"""
+L1A_ORGANIZE_USER_PROMPT = _prompt_body("organizer/l1a_organize_user_prompt")
 
 
 # ==================== L-1A snippet grouping ====================
@@ -798,8 +291,7 @@ async def organize_arguments_with_legal_framework(
     Returns:
         (arguments, filtered_snippets)
     """
-    print(f"[LegalOrganizer] Organizing {len(snippets)} snippets with {project_type} legal framework...")
-
+    logger.info(f"[LegalOrganizer] Organizing {len(snippets)} snippets with {project_type} legal framework...")
     # Select standards and prompts based on project type
     if project_type == "NIW":
         legal_stds = NIW_LEGAL_STANDARDS
@@ -864,9 +356,8 @@ async def organize_arguments_with_legal_framework(
         filtered_out = result.get('filtered_out', [])
         summary = result.get('summary', {})
 
-        print(f"[LegalOrganizer] LLM organized into {len(raw_arguments)} arguments")
-        print(f"[LegalOrganizer] Summary: {summary}")
-
+        logger.info(f"[LegalOrganizer] LLM organized into {len(raw_arguments)} arguments")
+        logger.info(f"[LegalOrganizer] Summary: {summary}")
         # 转换为 LegalArgument
         arguments = []
         for raw_arg in raw_arguments:
@@ -895,17 +386,16 @@ async def organize_arguments_with_legal_framework(
             covered_standards.add(canonical)
             covered_standards.add(arg.standard)  # also add the raw form
 
-        print(f"[LegalOrganizer] Covered standards: {covered_standards}")
+        logger.info(f"[LegalOrganizer] Covered standards: {covered_standards}")
         stds_with_evidence = [k for k, v in snippets_by_std.items() if v]
-        print(f"[LegalOrganizer] Standards with evidence: {stds_with_evidence}")
-
+        logger.info(f"[LegalOrganizer] Standards with evidence: {stds_with_evidence}")
         arg_counter = len(arguments)
         for std_key, std_snippets in snippets_by_std.items():
             if not std_snippets:
                 continue
             if std_key in covered_standards:
                 continue
-            print(f"[LegalOrganizer] FALLBACK: '{std_key}' has {len(std_snippets)} snippets but no LLM argument")
+            logger.warning(f"[LegalOrganizer] FALLBACK: '{std_key}' has {len(std_snippets)} snippets but no LLM argument")
             # This standard has evidence but no LLM argument — create a fallback
             arg_counter += 1
             std_info = legal_stds.get(std_key, {})
@@ -920,12 +410,11 @@ async def organize_arguments_with_legal_framework(
                 subject=applicant_name,
             )
             arguments.append(fallback_arg)
-            print(f"[LegalOrganizer] Added fallback argument for '{std_key}' with {len(snippet_ids)} snippets")
-
+            logger.warning(f"[LegalOrganizer] Added fallback argument for '{std_key}' with {len(snippet_ids)} snippets")
         return arguments, filtered_out
 
     except Exception as e:
-        print(f"[LegalOrganizer] Error: {e}")
+        logger.warning(f"[LegalOrganizer] Error: {e}")
         raise
 
 
@@ -976,259 +465,15 @@ _EB1A_EVIDENCE_TYPE_MAPPING = {
 }
 
 
-# Per-standard pickup criteria for top-down evidence selection
-_TOPDOWN_PICKUP_CRITERIA = {
-    "awards": {
-        "include_direct": [
-            "Snippets where subject IS the applicant AND describes a specific award/prize received",
-            "Award name, year, and the applicant's specific honor",
-        ],
-        "include_supporting": [
-            "Awarding body's background, authority, and reputation",
-            "Selection process details: jury, methodology, acceptance rate",
-            "Other distinguished recipients of the SAME award (peer comparison)",
-        ],
-        "exclude": [
-            "Certifications earned by passing an exam — the regulation requires 'prizes or awards for excellence', not test-based credentials",
-            "Awards received by other people for DIFFERENT awards (only same-award recipients are relevant as peer comparison)",
-        ],
-        "subject_rule": "Subject must be the applicant OR the awarding organization OR a peer comparison recipient of the SAME award",
-    },
-    "membership": {
-        "include_direct": [
-            "Snippets about the applicant's membership or election into an association",
-            "Applicant's membership application, admission, or election records",
-        ],
-        "include_supporting": [
-            "Association's founding, history, mission, and distinguished reputation",
-            "Membership criteria: what outstanding achievements are required for admission",
-            "Admission/review process rigor (judged by recognized experts)",
-            "Other notable members of the SAME association (peer comparison)",
-        ],
-        "exclude": [
-            "Membership/certification where admission does NOT require outstanding achievements as judged by recognized experts",
-            "Members of OTHER associations not relevant to applicant's membership",
-        ],
-        "subject_rule": "Subject must be the applicant, the qualifying association, or a distinguished member of the SAME association",
-    },
-    "published_material": {
-        "include_direct": [
-            "Articles/reports ABOUT the applicant and the applicant's work",
-            "Interview or feature content where applicant is the subject of coverage",
-        ],
-        "include_supporting": [
-            "Media outlet's credibility: circulation, history, awards, editorial standards",
-            "Media outlet's ownership group or parent company reputation",
-            "Publication date, title, author of the article about the applicant",
-        ],
-        "exclude": [
-            "Articles written BY the applicant -- belongs to standard (vi) scholarly_articles",
-            "Media coverage about other people (unless the applicant is also featured)",
-            "Social media posts or non-professional publications",
-        ],
-        "subject_rule": "Subject must be the applicant (for coverage) OR the media outlet (for credibility linked to coverage about the applicant)",
-    },
-    "judging": {
-        "include_direct": [
-            "Snippets about the applicant serving as judge, reviewer, evaluator, or examiner",
-            "Invitation or appointment letters for judging roles",
-        ],
-        "include_supporting": [
-            "The organization/event where applicant judged: prestige, scale, authority",
-            "Scope of judging: number of submissions, jury size, review rounds",
-            "Other distinguished co-judges or panelists (peer comparison)",
-        ],
-        "exclude": [
-            "Teaching or training activities -- being a trainer is NOT judging",
-            "Mentoring students -- unless formally judging/examining their work",
-            "The applicant being judged by others",
-        ],
-        "subject_rule": "Subject must be the applicant (as judge) OR the judging organization/event OR co-judges for peer comparison",
-    },
-    "original_contribution": {
-        "include_direct": [
-            "Description of the applicant's original contribution (methodology, system, product)",
-            "Evidence of originality: what is new/novel about the contribution",
-            "Evidence of major significance: widespread adoption, industry change",
-        ],
-        "include_supporting": [
-            "Quantified impact data: adoption rate, user count, revenue, citations",
-            "Independent expert recommendation letters praising the specific contribution",
-            "Institutional or industry adoption of the applicant's work",
-        ],
-        "exclude": [
-            "General professional experience not tied to an original contribution",
-            "Routine business operations without innovation element",
-            "Other people's contributions or inventions",
-        ],
-        "subject_rule": "Subject must be the applicant OR an expert/institution commenting on the applicant's contribution",
-    },
-    "scholarly_articles": {
-        "include_direct": [
-            "Articles, books, papers, or educational content authored BY the applicant",
-            "Publication details: title, year, venue, authorship role",
-        ],
-        "include_supporting": [
-            "Publication venue's prestige: impact factor, ranking, editorial standards",
-            "Citation data and impact metrics of the applicant's publications",
-        ],
-        "exclude": [
-            "Articles written ABOUT the applicant -- belongs to standard (iii)",
-            "Content created by others",
-        ],
-        "subject_rule": "Subject must be the applicant (as author) OR the publication venue",
-    },
-    "display": {
-        "include_direct": [
-            "The applicant's work being displayed, exhibited, demonstrated, or showcased",
-            "Event details: name, date, location, type of display",
-        ],
-        "include_supporting": [
-            "Exhibition/showcase's prestige, scale, and professional standing",
-            "Audience reach, attendance figures, industry recognition of the event",
-        ],
-        "exclude": [
-            "Attending an event as a visitor (not displaying work)",
-            "Sponsoring or funding an event without displaying work",
-        ],
-        "subject_rule": "Subject must be the applicant (as exhibitor) OR the exhibition/event",
-    },
-    "leading_role": {
-        "include_direct": [
-            # Prong 1: Leading/Critical Role
-            "The applicant's title, position, founding role, ownership, or executive authority within an organization",
-            "Evidence of decision-making authority, management scope, and day-to-day leadership responsibilities",
-            "Company letters or testimonials confirming the applicant's critical role and leadership impact",
-        ],
-        "include_supporting": [
-            # Prong 2: Distinguished Reputation of the Organization
-            "Organization's founding, history, scale, industry standing, and notable achievements",
-            "Government or national authority endorsements, approval letters, or official replies directed at the organization",
-            "The organization's charter, articles of incorporation, or official registration demonstrating formal standing",
-            "Press releases or media coverage about the organization's events, competitions, or milestones (attendance figures, participant counts, geographic reach)",
-            "Partnerships with nationally/internationally recognized bodies (e.g., national sports associations, government agencies, industry federations)",
-            "Third-party listings, profiles, or websites describing the organization as a recognized entity or business partner",
-            "Recommendation letters that describe BOTH the applicant's leadership AND the organization's significance",
-        ],
-        "exclude": [
-            "Entry-level or routine positions without leadership function",
-            "Other people's roles at unrelated organizations",
-        ],
-        "subject_rule": "Subject may be: (1) the applicant in a leadership capacity, (2) the organization where the applicant serves, (3) a government/industry authority that endorses or partners with the organization, or (4) third-party sources documenting the organization's reputation. NOTE: evidence about the organization's distinguished reputation is equally important as evidence about the applicant's role — do NOT skip it.",
-    },
-    "high_salary": {
-        "include_direct": [
-            "The applicant's salary, compensation, contract amounts, consulting fees",
-            "Employment contracts, pay stubs, tax records showing remuneration",
-        ],
-        "include_supporting": [
-            "Industry salary benchmarks from authoritative sources",
-            "Comparison data showing applicant earns significantly above average",
-        ],
-        "exclude": [
-            "Company revenue not tied to applicant's personal remuneration",
-            "Other people's salaries (unless used as industry comparison)",
-            "Projected/future earnings without current documentation",
-        ],
-        "subject_rule": "Subject must be the applicant (for compensation) OR an industry benchmark source",
-    },
-    "commercial_success": {
-        "include_direct": [
-            "Sales data, revenue figures, attendance for applicant's work",
-            "Business metrics directly tied to applicant's professional output",
-        ],
-        "include_supporting": [
-            "Industry benchmarks for commercial performance comparison",
-            "Media or industry recognition of commercial success",
-        ],
-        "exclude": [
-            "General company financials not tied to applicant's specific work",
-            "Other people's commercial achievements",
-        ],
-        "subject_rule": "Subject must be the applicant OR the applicant's business/venture",
-    },
-    "overall_merits": {
-        "include_direct": [
-            "Cross-criteria evidence demonstrating overall extraordinary ability",
-            "Expert testimonials spanning multiple criteria",
-        ],
-        "include_supporting": [
-            "Industry-wide recognition not fitting neatly into other categories",
-        ],
-        "exclude": [
-            "Evidence that clearly belongs to a specific standard (i)-(x)",
-        ],
-        "subject_rule": "Subject must be the applicant",
-    },
-}
+# Per-standard pickup criteria for top-down evidence selection.
+# Structured prompt content: lives in prompts/organizer/*_topdown_pickup_criteria@vN.json
+# (versioned + hash-snapshotted like every other prompt); edit there, in a prompt: commit.
+_TOPDOWN_PICKUP_CRITERIA = _prompt_data("organizer/eb1a_topdown_pickup_criteria")
 
 
 # ==================== NIW Top-Down Pickup Criteria ====================
 
-_NIW_TOPDOWN_PICKUP_CRITERIA = {
-    "prong1_merit": {
-        "include_direct": [
-            "Description of the applicant's proposed endeavor: specific research direction, methodology, technology, product, or business plan",
-            "Evidence of substantial merit: the endeavor's value to its field (advances knowledge, solves important problems, creates economic value)",
-            "Evidence of national importance: the endeavor's potential impact beyond a particular locality (policy alignment, field-wide adoption, societal benefit)",
-            "Field-level context: the significance of the problem the endeavor addresses, industry trends, market need",
-        ],
-        "include_supporting": [
-            "Expert recommendation letters that describe and endorse the significance of the ENDEAVOR (not just the person)",
-            "Quantitative impact data demonstrating the endeavor's reach or potential (adoption metrics, revenue, citations, users)",
-            "Government policy documents, industry reports, or news articles showing alignment between the endeavor and national priorities",
-            "Media coverage or published material about the applicant's work and its field-level importance",
-        ],
-        "exclude": [
-            "Personal biographical details with NO connection to the proposed endeavor (e.g., hobbies, unrelated work history)",
-            "Purely administrative documents (visa stamps, passport pages, address records)",
-            "Evidence that ONLY describes the applicant's qualifications without linking them to the endeavor's merit or importance — belongs in Prong 2",
-        ],
-        "subject_rule": "Subject may be: the applicant's proposed endeavor, the field/industry the endeavor impacts, experts endorsing the endeavor's significance, or policy/market context supporting national importance. Focus is on WHAT the applicant proposes to do, not WHO the applicant is.",
-    },
-    "prong2_positioned": {
-        "include_direct": [
-            "Education: degrees, universities, specialized training, certifications",
-            "Skills and knowledge: domain expertise, technical competencies, language abilities",
-            "Record of success: publications, patents, awards, honors, citation metrics, industry recognition",
-            "Track record in related or similar efforts: prior projects, previous positions, measurable achievements",
-        ],
-        "include_supporting": [
-            "Expert recommendation letters that attest to the applicant's qualifications, expertise, and track record",
-            "A model or plan for future activities: research proposals, business plans, collaboration agreements",
-            "Progress towards achieving the proposed endeavor: current position, ongoing projects, milestones reached",
-            "Interest of potential customers, users, investors, or relevant entities: adoption data, letters of intent, partnerships",
-            "Recommender credentials that establish authority to evaluate the applicant (credibility proof)",
-        ],
-        "exclude": [
-            "Evidence about the endeavor's merit/importance without connection to the applicant's ability to advance it — belongs in Prong 1",
-            "Purely administrative documents (visa stamps, passport pages, address records)",
-        ],
-        "subject_rule": "Subject may be: the applicant (education, skills, achievements), experts evaluating the applicant's qualifications, institutions where the applicant has worked or studied, or entities showing interest in the applicant's work. Focus is on WHO the applicant is and WHY they can succeed.",
-    },
-    "prong3_balance": {
-        "include_direct": [
-            "Evidence that labor certification is impractical: self-directed research, entrepreneurial ventures, multi-institutional collaborations, work that cannot be captured in a PERM job description",
-            "Evidence that the U.S. would benefit even if qualified U.S. workers are available: unique expertise, irreplaceable contributions, specialized knowledge that others lack",
-            "Evidence that benefits extend beyond a single employer: field-wide impact, public interest, multi-sector applications, open-source or publicly available work",
-            "Evidence of urgency: time-sensitive national priorities, critical workforce shortages, government policy alignment",
-        ],
-        "include_supporting": [
-            "Government policy initiatives aligned with the applicant's work (executive orders, legislation, federal funding programs)",
-            "Industry demand data or workforce shortage reports in the applicant's field",
-            "Expert statements that EXPLICITLY address why the applicant's contributions serve the NATIONAL INTEREST or why waiver is justified",
-            "Evidence of the applicant's work benefiting MULTIPLE institutions, organizations, or the public (not just one employer)",
-        ],
-        "exclude": [
-            "Generic statements about immigration benefits without specific connection to this applicant",
-            "Evidence that only shows the applicant is qualified (Prong 2) without linking to why waiver serves national interest",
-            "General biographical details, routine education records, or employment history that do not speak to waiver justification",
-            "Recommendation letters that only praise the applicant's skills without addressing national interest or waiver — these belong in Prong 2",
-            "Publication lists, citation counts, or award names without context connecting them to the waiver argument",
-        ],
-        "subject_rule": "Subject may be: the applicant's work and its BROADER societal impact, government/policy context supporting urgency, industry demand for the applicant's expertise, or institutions that benefit from the applicant's contributions. Focus is on WHY the national interest is better served by waiving labor certification. Be SELECTIVE — only include evidence with a clear connection to the waiver argument.",
-    },
-}
+_NIW_TOPDOWN_PICKUP_CRITERIA = _prompt_data("organizer/niw_topdown_pickup_criteria")
 
 
 async def _topdown_pickup_for_standard(
@@ -1308,37 +553,19 @@ async def _topdown_pickup_for_standard(
         for item in exclude_rules:
             exclude_text += f"  - {item}\n"
 
-    system_prompt = f"""You are an immigration law expert specializing in EB-1A petitions.
-Your task: select snippets relevant to a specific EB-1A evidentiary standard.
+    system_prompt = _prompt_render("organizer/topdown_pickup_for_standard_system_prompt",
+        include_text=include_text,
+        exclude_text=exclude_text,
+        subject_rule=subject_rule,
+    )
 
-SELECTION RULES:
-{include_text}
-{exclude_text}
-SUBJECT RULE: {subject_rule}
-
-Group selected snippets into "chains" — a chain is a group of snippets about the same
-media outlet, award, organization, event, or publication.
-
-Return COMPACT JSON (to avoid output truncation):
-{{
-  "chains": {{
-    "chain label": ["snippet_id_1", "snippet_id_2", ...]
-  }}
-}}
-
-If no snippets are relevant, return {{"chains": {{}}}}.
-"""
-
-    user_prompt = f"""## Standard: {standard_info.get('name', standard_key)}
-**Citation**: {standard_info.get('citation', '')}
-**Legal Requirements**:
-{standard_info.get('requirements', '')}
-
-## All Available Snippets ({len(all_snippets)} total)
-{snippets_text}
-
-Select snippets relevant to "{standard_info.get('name', standard_key)}" following the selection rules above.
-"""
+    user_prompt = _prompt_render("organizer/topdown_pickup_for_standard_user_prompt",
+        standard_info_get_name_standard_key=standard_info.get('name', standard_key),
+        standard_info_get_citation=standard_info.get('citation', ''),
+        standard_info_get_requirements=standard_info.get('requirements', ''),
+        len_all_snippets=len(all_snippets),
+        snippets_text=snippets_text,
+    )
 
     try:
         result = await call_llm(
@@ -1374,10 +601,9 @@ Select snippets relevant to "{standard_info.get('name', standard_key)}" followin
                     if ids:
                         chains_data[chain_label] = ids
                 if chains_data:
-                    print(f"[TopDown] {standard_key}: recovered {len(chains_data)} chains from truncated response")
+                    logger.info(f"[TopDown] {standard_key}: recovered {len(chains_data)} chains from truncated response")
             except Exception as recover_err:
-                print(f"[TopDown] {standard_key}: recovery failed: {recover_err}")
-
+                logger.warning(f"[TopDown] {standard_key}: recovery failed: {recover_err}")
         selected_snippets = []
         for chain_label, snippet_ids in chains_data.items():
             for sid in snippet_ids:
@@ -1387,12 +613,12 @@ Select snippets relevant to "{standard_info.get('name', standard_key)}" followin
                     snp_copy['_topdown_relevance'] = 'direct'
                     selected_snippets.append(snp_copy)
 
-        print(f"[TopDown] {standard_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+        logger.info(f"[TopDown] {standard_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
               f"{len(chains_data)} chains")
         return selected_snippets
 
     except Exception as e:
-        print(f"[TopDown] Error for {standard_key}: {e}, falling back to bottom-up mapping")
+        logger.warning(f"[TopDown] Error for {standard_key}: {e}, falling back to bottom-up mapping")
         return []  # caller handles fallback
 
 
@@ -1418,7 +644,7 @@ async def _group_snippets_by_standard_topdown(
     # 使用全量 snippet
     _STANDARDS_NEED_ALL_SNIPPETS = {"leading_role", "display"}
 
-    print(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
+    logger.info(f"[TopDown] Starting top-down pickup for {len(legal_stds)} standards "
           f"with {len(applicant_snippets)} applicant snippets "
           f"(+{len(snippets) - len(applicant_snippets)} non-applicant for org-reputation standards)")
 
@@ -1439,7 +665,7 @@ async def _group_snippets_by_standard_topdown(
 
     for std_key, result in zip(std_keys, results):
         if isinstance(result, Exception):
-            print(f"[TopDown] {std_key} FAILED: {result}")
+            logger.warning(f"[TopDown] {std_key} FAILED: {result}")
             raise RuntimeError(f"Top-down pickup failed for {std_key}: {result}")
         grouped[std_key] = result
 
@@ -1450,7 +676,7 @@ async def _group_snippets_by_standard_topdown(
             chains = set(s.get('_topdown_chain', '') for s in snps)
             chains.discard('')
             chain_info = f", chains: {chains}" if chains else ""
-            print(f"[TopDown] {std_key}: {len(snps)} snippets{chain_info}")
+            logger.info(f"[TopDown] {std_key}: {len(snps)} snippets{chain_info}")
             pickup_report[std_key] = {
                 "count": len(snps),
                 "chains": sorted(chains),
@@ -1471,21 +697,18 @@ async def _group_snippets_by_standard_topdown(
     # Save intermediate pickup results for evaluation
     if project_id:
         try:
-            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-            args_dir = projects_dir / project_id / "arguments"
+            args_dir = project_path(project_id, "arguments")
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "topdown_pickup.json"
-            with open(pickup_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "total_applicant_snippets": len(applicant_snippets),
-                    "standards_count": len(legal_stds),
-                    "pickup_by_standard": pickup_report,
-                }, f, ensure_ascii=False, indent=2)
-            print(f"[TopDown] Saved pickup results to {pickup_file}")
+            write_json(pickup_file, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "total_applicant_snippets": len(applicant_snippets),
+                "standards_count": len(legal_stds),
+                "pickup_by_standard": pickup_report,
+            })
+            logger.info(f"[TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
-            print(f"[TopDown] Warning: could not save pickup results: {e}")
-
+            logger.warning(f"[TopDown] Warning: could not save pickup results: {e}")
     return grouped
 
 
@@ -1566,60 +789,24 @@ async def _niw_topdown_pickup_for_prong(
 
     cross_prong_section = ""
     if cross_prong_context:
-        cross_prong_section = f"""
-CROSS-PRONG CONTEXT (evidence already selected for Prong 1 & 2):
-{cross_prong_context}
+        cross_prong_section = _prompt_render("organizer/niw_topdown_pickup_for_prong_cross_prong_section",
+            cross_prong_context=cross_prong_context,
+        )
 
-INSTRUCTIONS FOR PRONG 3 PICKUP:
-- Dhanasar allows cross-prong consideration: "USCIS may consider... the degree to which
-  other evidence of record — including evidence submitted to meet other prongs — supports
-  the finding that the foreign national's entry will serve the national interest."
-- You MAY selectively include a SMALL number of the STRONGEST Prong 1/2 snippets that
-  directly support a specific waiver argument (e.g., a policy document showing urgency,
-  an expert quote about irreplaceable expertise). Do NOT bulk-include all Prong 1/2 evidence.
-- Your PRIMARY focus is evidence that specifically addresses: impracticality of labor cert,
-  national benefit despite available U.S. workers, benefits beyond a single employer, and urgency.
-- Target: select roughly 30-50% of total snippets for Prong 3, NOT 80-100%.
-"""
+    system_prompt = _prompt_render("organizer/niw_topdown_pickup_for_prong_system_prompt",
+        include_text=include_text,
+        exclude_text=exclude_text,
+        subject_rule=subject_rule,
+        cross_prong_section=cross_prong_section,
+    )
 
-    system_prompt = f"""You are an immigration law expert specializing in NIW (National Interest Waiver) petitions under Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
-
-Your task: select snippets relevant to a specific Dhanasar prong from the full evidence pool.
-
-SELECTION RULES:
-{include_text}
-{exclude_text}
-SUBJECT RULE: {subject_rule}
-
-IMPORTANT NIW CONTEXT:
-- NIW has three prongs under Dhanasar. You are selecting for ONE prong.
-- For Prong 1 & 2: be INCLUSIVE — if a snippet is arguably relevant, include it.
-- For Prong 3 (waiver): be SELECTIVE — only include evidence with a CLEAR connection to the waiver argument. Do NOT bulk-include everything.
-- Recommendation letters often support multiple prongs — include them if they contain content relevant to THIS prong.
-{cross_prong_section}
-Group selected snippets into "chains" — a chain is a group of snippets about the same
-topic, recommender, organization, or evidence theme.
-
-Return COMPACT JSON (to avoid output truncation):
-{{
-  "chains": {{
-    "chain label": ["snippet_id_1", "snippet_id_2", ...]
-  }}
-}}
-
-If no snippets are relevant, return {{"chains": {{}}}}.
-"""
-
-    user_prompt = f"""## Dhanasar Prong: {prong_info.get('name', prong_key)}
-**Citation**: {prong_info.get('citation', '')}
-**Legal Requirements**:
-{prong_info.get('requirements', '')}
-
-## All Available Snippets ({len(all_snippets)} total)
-{snippets_text}
-
-Select snippets relevant to "{prong_info.get('name', prong_key)}" following the selection rules above.
-"""
+    user_prompt = _prompt_render("organizer/niw_topdown_pickup_for_prong_user_prompt",
+        prong_info_get_name_prong_key=prong_info.get('name', prong_key),
+        prong_info_get_citation=prong_info.get('citation', ''),
+        prong_info_get_requirements=prong_info.get('requirements', ''),
+        len_all_snippets=len(all_snippets),
+        snippets_text=snippets_text,
+    )
 
     try:
         result = await call_llm(
@@ -1653,10 +840,9 @@ Select snippets relevant to "{prong_info.get('name', prong_key)}" following the 
                     if ids:
                         chains_data[chain_label] = ids
                 if chains_data:
-                    print(f"[NIW-TopDown] {prong_key}: recovered {len(chains_data)} chains from truncated response")
+                    logger.info(f"[NIW-TopDown] {prong_key}: recovered {len(chains_data)} chains from truncated response")
             except Exception as recover_err:
-                print(f"[NIW-TopDown] {prong_key}: recovery failed: {recover_err}")
-
+                logger.warning(f"[NIW-TopDown] {prong_key}: recovery failed: {recover_err}")
         selected_snippets = []
         for chain_label, snippet_ids in chains_data.items():
             for sid in snippet_ids:
@@ -1666,12 +852,12 @@ Select snippets relevant to "{prong_info.get('name', prong_key)}" following the 
                     snp_copy['_topdown_relevance'] = 'direct'
                     selected_snippets.append(snp_copy)
 
-        print(f"[NIW-TopDown] {prong_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
+        logger.info(f"[NIW-TopDown] {prong_key}: selected {len(selected_snippets)}/{len(all_snippets)} snippets, "
               f"{len(chains_data)} chains")
         return selected_snippets
 
     except Exception as e:
-        print(f"[NIW-TopDown] Error for {prong_key}: {e}")
+        logger.warning(f"[NIW-TopDown] Error for {prong_key}: {e}")
         return []  # caller handles fallback
 
 
@@ -1688,13 +874,13 @@ async def _niw_group_snippets_by_prong_topdown(
 
     Returns {prong_key: [selected_snippets]}.
     """
-    print(f"[NIW-TopDown] Starting top-down pickup for 3 Dhanasar prongs "
+    logger.info(f"[NIW-TopDown] Starting top-down pickup for 3 Dhanasar prongs "
           f"with {len(snippets)} total snippets")
 
     grouped = {prong: [] for prong in NIW_LEGAL_STANDARDS.keys()}
 
     # Phase 1: Prong 1 & Prong 2 in parallel
-    print("[NIW-TopDown] Phase 1: Prong 1 & 2 in parallel...")
+    logger.info("[NIW-TopDown] Phase 1: Prong 1 & 2 in parallel...")
     p1_info = NIW_LEGAL_STANDARDS["prong1_merit"]
     p2_info = NIW_LEGAL_STANDARDS["prong2_positioned"]
     p1_task = _niw_topdown_pickup_for_prong("prong1_merit", p1_info, snippets, provider)
@@ -1704,12 +890,12 @@ async def _niw_group_snippets_by_prong_topdown(
 
     for prong_key, result in zip(["prong1_merit", "prong2_positioned"], results_12):
         if isinstance(result, Exception):
-            print(f"[NIW-TopDown] {prong_key} FAILED: {result}")
+            logger.warning(f"[NIW-TopDown] {prong_key} FAILED: {result}")
             raise RuntimeError(f"NIW top-down pickup failed for {prong_key}: {result}")
         grouped[prong_key] = result
 
     # Phase 2: Build cross-prong context from Prong 1/2 results for Prong 3
-    print("[NIW-TopDown] Phase 2: Prong 3 with Prong 1/2 context...")
+    logger.info("[NIW-TopDown] Phase 2: Prong 3 with Prong 1/2 context...")
     cross_prong_lines = []
     for pk in ["prong1_merit", "prong2_positioned"]:
         snps = grouped[pk]
@@ -1746,7 +932,7 @@ async def _niw_group_snippets_by_prong_topdown(
             chains = set(s.get('_topdown_chain', '') for s in snps)
             chains.discard('')
             chain_info = f", chains: {sorted(chains)}" if chains else ""
-            print(f"[NIW-TopDown] {prong_key}: {len(snps)} snippets{chain_info}")
+            logger.info(f"[NIW-TopDown] {prong_key}: {len(snps)} snippets{chain_info}")
             pickup_report[prong_key] = {
                 "count": len(snps),
                 "chains": sorted(chains),
@@ -1755,21 +941,18 @@ async def _niw_group_snippets_by_prong_topdown(
 
     if project_id:
         try:
-            projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-            args_dir = projects_dir / project_id / "arguments"
+            args_dir = project_path(project_id, "arguments")
             args_dir.mkdir(parents=True, exist_ok=True)
             pickup_file = args_dir / "niw_topdown_pickup.json"
-            with open(pickup_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "total_snippets": len(snippets),
-                    "prongs_count": len(NIW_LEGAL_STANDARDS),
-                    "pickup_by_prong": pickup_report,
-                }, f, ensure_ascii=False, indent=2)
-            print(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
+            write_json(pickup_file, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "total_snippets": len(snippets),
+                "prongs_count": len(NIW_LEGAL_STANDARDS),
+                "pickup_by_prong": pickup_report,
+            })
+            logger.info(f"[NIW-TopDown] Saved pickup results to {pickup_file}")
         except Exception as e:
-            print(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
-
+            logger.warning(f"[NIW-TopDown] Warning: could not save pickup results: {e}")
     return grouped
 
 
@@ -1885,11 +1068,11 @@ async def niw_classify_other_snippets(
                 else:
                     result_map[sid] = 'prong2_positioned'  # default fallback
 
-            print(f"[NIW-v2] Classified batch {batch_start//batch_size + 1}: "
+            logger.info(f"[NIW-v2] Classified batch {batch_start//batch_size + 1}: "
                   f"{len(classifications)} snippets")
 
         except Exception as e:
-            print(f"[NIW-v2] Error classifying other snippets batch: {e}")
+            logger.warning(f"[NIW-v2] Error classifying other snippets batch: {e}")
             # Fallback: assign all to prong2
             for snp in batch:
                 sid = snp.get('snippet_id', snp.get('id', ''))
@@ -1902,8 +1085,7 @@ async def niw_classify_other_snippets(
     prong_counts = {}
     for prong in result_map.values():
         prong_counts[prong] = prong_counts.get(prong, 0) + 1
-    print(f"[NIW-v2] Other snippet classification: {prong_counts}")
-
+    logger.info(f"[NIW-v2] Other snippet classification: {prong_counts}")
     return result_map
 
 
@@ -1988,7 +1170,7 @@ async def niw_organize_per_prong(
             sub_argument_ids=[sa["id"] for sa in sub_arguments],
             subject=applicant_name,
         )
-        print(f"[NIW-v2] Prong3 template: {len(sub_arguments)} sub-args "
+        logger.info(f"[NIW-v2] Prong3 template: {len(sub_arguments)} sub-args "
               f"(snippet count {len(prong_snippets)} <= 3, using legal components)")
         return argument, sub_arguments
 
@@ -2040,8 +1222,7 @@ async def niw_organize_per_prong(
         )
 
         raw_sub_args = result.get('sub_arguments', [])
-        print(f"[NIW-v2] Prong {prong_key}: LLM returned {len(raw_sub_args)} sub-arguments")
-
+        logger.info(f"[NIW-v2] Prong {prong_key}: LLM returned {len(raw_sub_args)} sub-arguments")
         if not raw_sub_args:
             # Fallback: single sub-argument with all snippets
             raw_sub_args = [{
@@ -2080,8 +1261,7 @@ async def niw_organize_per_prong(
                      "relationship": single.get('relationship', f'Supports {prong_name}'),
                      "snippet_ids": all_sids[mid:]},
                 ]
-            print(f"[NIW-v2] Prong {prong_key}: forced split from 1 → {len(raw_sub_args)} sub-args (minimum floor)")
-
+            logger.info(f"[NIW-v2] Prong {prong_key}: forced split from 1 → {len(raw_sub_args)} sub-args (minimum floor)")
         # Convert sub-arguments, mapping simple IDs back to real IDs
         sub_arguments = []
         all_assigned_real_ids = set()
@@ -2118,7 +1298,7 @@ async def niw_organize_per_prong(
         all_real_ids = set(id_mapping.values())
         unassigned = all_real_ids - all_assigned_real_ids
         if unassigned:
-            print(f"[NIW-v2] Prong {prong_key}: {len(unassigned)} unassigned snippets, adding catch-all")
+            logger.info(f"[NIW-v2] Prong {prong_key}: {len(unassigned)} unassigned snippets, adding catch-all")
             catch_all = {
                 "id": f"subarg-{uuid.uuid4().hex[:8]}",
                 "argument_id": arg_id,
@@ -2148,12 +1328,12 @@ async def niw_organize_per_prong(
             subject=applicant_name,
         )
 
-        print(f"[NIW-v2] Prong {prong_key}: {len(sub_arguments)} sub-args, "
+        logger.info(f"[NIW-v2] Prong {prong_key}: {len(sub_arguments)} sub-args, "
               f"{len(all_snippet_ids)} snippets assigned")
         return argument, sub_arguments
 
     except Exception as e:
-        print(f"[NIW-v2] Error organizing prong {prong_key}: {e}")
+        logger.warning(f"[NIW-v2] Error organizing prong {prong_key}: {e}")
         # Fallback: single sub-argument
         all_ids = [snp.get('snippet_id', snp.get('id', '')) for snp in prong_snippets]
         sa_id = f"subarg-{uuid.uuid4().hex[:8]}"
@@ -2195,17 +1375,16 @@ async def niw_organize_arguments_v2(
     Returns:
         (arguments, sub_arguments, filtered_out)
     """
-    print(f"[NIW-v2] Starting with {len(snippets)} total snippets")
-
+    logger.info(f"[NIW-v2] Starting with {len(snippets)} total snippets")
     # Step 1: Top-down pickup — LLM selects per prong from full snippet pool
-    print("[NIW-v2] Step 1: Top-down Dhanasar pickup...")
+    logger.info("[NIW-v2] Step 1: Top-down Dhanasar pickup...")
     try:
         prong_buckets = await _niw_group_snippets_by_prong_topdown(
             snippets, provider, project_id=project_id
         )
     except RuntimeError as e:
         # Fallback to rule-based if top-down fails completely
-        print(f"[NIW-v2] Top-down pickup failed ({e}), falling back to rule-based mapping")
+        logger.warning(f"[NIW-v2] Top-down pickup failed ({e}), falling back to rule-based mapping")
         prong_buckets = {
             "prong1_merit": [],
             "prong2_positioned": [],
@@ -2222,10 +1401,9 @@ async def niw_organize_arguments_v2(
                 prong_buckets['prong2_positioned'].append(snp)
 
     prong_counts = {k: len(v) for k, v in prong_buckets.items()}
-    print(f"[NIW-v2] After pickup: {prong_counts}")
-
+    logger.info(f"[NIW-v2] After pickup: {prong_counts}")
     # Step 2: Per-prong organization (parallel)
-    print("[NIW-v2] Step 2: Organizing per prong...")
+    logger.info("[NIW-v2] Step 2: Organizing per prong...")
     filtered_out = []
     tasks = []
     active_prongs = []
@@ -2235,7 +1413,7 @@ async def niw_organize_arguments_v2(
             tasks.append(niw_organize_per_prong(prong_key, prong_snps, applicant_name, provider))
 
     if not tasks:
-        print("[NIW-v2] No snippets to organize!")
+        logger.info("[NIW-v2] No snippets to organize!")
         return [], [], filtered_out
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2245,7 +1423,7 @@ async def niw_organize_arguments_v2(
 
     for prong_key, result in zip(active_prongs, results):
         if isinstance(result, Exception):
-            print(f"[NIW-v2] Prong {prong_key} failed: {result}")
+            logger.warning(f"[NIW-v2] Prong {prong_key} failed: {result}")
             continue
         arg, sub_args = result
         arguments.append(arg)
@@ -2257,9 +1435,8 @@ async def niw_organize_arguments_v2(
         all_assigned_ids.update(a.snippet_ids)
     total_input = len(snippets)
     coverage = (len(all_assigned_ids) / total_input * 100) if total_input > 0 else 0
-    print(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
-    print(f"[NIW-v2] Coverage: {len(all_assigned_ids)}/{total_input} unique snippets ({coverage:.1f}%)")
-
+    logger.info(f"[NIW-v2] Final: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+    logger.info(f"[NIW-v2] Coverage: {len(all_assigned_ids)}/{total_input} unique snippets ({coverage:.1f}%)")
     return arguments, all_sub_arguments, filtered_out
 
 
@@ -2268,7 +1445,8 @@ async def full_legal_pipeline(
     project_id: str,
     applicant_name: str = "the Applicant",
     provider: str = "deepseek",
-    project_type: str = "EB-1A"
+    project_type: str = "EB-1A",
+    job=None,
 ) -> Dict[str, Any]:
     """
     完整的法律论点组织流程
@@ -2284,11 +1462,9 @@ async def full_legal_pipeline(
             "stats": {...}
         }
     """
-    from pathlib import Path
 
     # 加载 snippets
-    projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-    project_dir = projects_dir / project_id
+    project_dir = project_path(project_id)
 
     combined_file = project_dir / "extraction" / "combined_extraction.json"
     enriched_file = project_dir / "enriched" / "enriched_snippets.json"
@@ -2313,8 +1489,7 @@ async def full_legal_pipeline(
                     d = json.load(fp)
                     snippets.extend(d.get("snippets", []))
 
-    print(f"[LegalPipeline] Loaded {len(snippets)} snippets")
-
+    logger.info(f"[LegalPipeline] Loaded {len(snippets)} snippets")
     # Resolve project_type from storage if not provided
     if not project_type or project_type == "EB-1A":
         try:
@@ -2323,33 +1498,39 @@ async def full_legal_pipeline(
         except Exception:
             project_type = "EB-1A"
 
+    from ..core.jobs import NullJob
+    job = job or NullJob()
+
     if project_type == "NIW":
         # NIW v2: top-down Dhanasar pickup + per-prong organize (one-step, no separate subdivide)
-        print(f"\n[NIW-v2] Running NIW v2 pipeline...")
+        job.checkpoint(step="organize", detail="Organizing NIW prongs", progress=0.1)
+        logger.info("\n[NIW-v2] Running NIW v2 pipeline...")
         arguments, all_sub_arguments, filtered = await niw_organize_arguments_v2(
             snippets, applicant_name, provider, project_id=project_id
         )
-        print(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
+        logger.info(f"[NIW-v2] Done: {len(arguments)} arguments, {len(all_sub_arguments)} sub-arguments")
     else:
         # EB-1A: original two-step flow
         # Step 1: 组织子论点
-        print(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
+        job.checkpoint(step="organize", detail="Step 1/2: Organizing arguments", progress=0.1)
+        logger.info(f"\n[Step 1] Organizing arguments with {project_type} legal framework...")
         arguments, filtered = await organize_arguments_with_legal_framework(
             snippets, applicant_name, provider, project_type, project_id=project_id
         )
 
-        print(f"[Step 1] Generated {len(arguments)} arguments")
-
+        logger.info(f"[Step 1] Generated {len(arguments)} arguments")
         # Build snippet lookup
         snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
 
         # Step 2: 划分次级子论点
-        print("\n[Step 2] Subdividing into sub-arguments...")
+        logger.info("\n[Step 2] Subdividing into sub-arguments...")
         all_sub_arguments = []
 
         from .subargument_generator import subdivide_argument
 
-        for arg in arguments:
+        for arg_i, arg in enumerate(arguments):
+            job.checkpoint(step="subdivide", detail=f"Step 2/2: SubArguments {arg_i + 1}/{len(arguments)}",
+                           progress=0.5 + 0.45 * arg_i / max(len(arguments), 1))
             # Get snippets for this argument
             arg_snippets = [snippet_map[sid] for sid in arg.snippet_ids if sid in snippet_map]
 
@@ -2367,8 +1548,7 @@ async def full_legal_pipeline(
 
             await asyncio.sleep(0.2)
 
-        print(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
-
+        logger.info(f"[Step 2] Generated {len(all_sub_arguments)} sub-arguments")
     # 统计
     by_standard = {}
     for arg in arguments:
@@ -2392,11 +1572,9 @@ async def full_legal_pipeline(
     # 保存结果
     output_file = project_dir / "arguments" / "legal_arguments.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    write_json(output_file, result)
 
-    print(f"\n[LegalPipeline] Results saved to {output_file}")
-
+    logger.info(f"\n[LegalPipeline] Results saved to {output_file}")
     return result
 
 
@@ -2411,12 +1589,11 @@ async def regenerate_standard_pipeline(
     按单个 standard 重新生成 Arguments + SubArguments，
     只替换该 standard 下的数据，其余保持不动。
     """
-    from .snippet_recommender import load_legal_arguments, save_legal_arguments
+    from .snippet_recommender import update_legal_arguments
     from .subargument_generator import subdivide_argument
 
     # --- 加载 snippets (复用 full_legal_pipeline 的逻辑) ---
-    projects_dir = Path(__file__).parent.parent.parent / "data" / "projects"
-    project_dir = projects_dir / project_id
+    project_dir = project_path(project_id)
 
     combined_file = project_dir / "extraction" / "combined_extraction.json"
     enriched_file = project_dir / "enriched" / "enriched_snippets.json"
@@ -2439,8 +1616,7 @@ async def regenerate_standard_pipeline(
                     d = json.load(fp)
                     snippets.extend(d.get("snippets", []))
 
-    print(f"[RegenerateStandard] Loaded {len(snippets)} snippets, target standard: {standard_key}")
-
+    logger.info(f"[RegenerateStandard] Loaded {len(snippets)} snippets, target standard: {standard_key}")
     # --- Resolve project_type ---
     if not project_type or project_type == "EB-1A":
         try:
@@ -2491,23 +1667,21 @@ async def regenerate_standard_pipeline(
                      f"Check that snippets have matching evidence_type."
         }
 
-    print(f"[RegenerateStandard] Found {len(target_snippets)} snippets for '{standard_key}'")
-
+    logger.info(f"[RegenerateStandard] Found {len(target_snippets)} snippets for '{standard_key}'")
     if project_type == "NIW":
         # NIW v2: use per-prong organizer directly (includes sub-argument generation)
         argument, all_sub_arguments = await niw_organize_per_prong(
             standard_key, target_snippets, applicant_name, provider
         )
         arguments = [argument]
-        print(f"[RegenerateStandard] NIW v2: {len(all_sub_arguments)} sub-arguments")
+        logger.info(f"[RegenerateStandard] NIW v2: {len(all_sub_arguments)} sub-arguments")
     else:
         # EB-1A: original two-step flow
         # --- Step 1: organize arguments (仅含该 standard 的 snippets) ---
         arguments, filtered = await organize_arguments_with_legal_framework(
             target_snippets, applicant_name, provider, project_type
         )
-        print(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
-
+        logger.info(f"[RegenerateStandard] Step 1: generated {len(arguments)} arguments")
         # --- Step 2: subdivide into sub-arguments ---
         snippet_map = {s.get('snippet_id', s.get('id', '')): s for s in snippets}
         all_sub_arguments = []
@@ -2527,43 +1701,46 @@ async def regenerate_standard_pipeline(
             all_sub_arguments.extend([asdict(sa) for sa in sub_args])
             await asyncio.sleep(0.2)
 
-        print(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
-
+        logger.info(f"[RegenerateStandard] Step 2: generated {len(all_sub_arguments)} sub-arguments")
     new_arguments = [a.to_dict() for a in arguments]
 
     # --- 合并到现有 legal_arguments.json ---
-    existing = load_legal_arguments(project_id)
+    by_standard = None
+    old_arg_ids = None
+    def _mutate(existing):
+        nonlocal by_standard, old_arg_ids
 
-    # 删除旧的该 standard 下的 arguments 和关联的 sub_arguments
-    old_arg_ids = {
-        a["id"] for a in existing.get("arguments", [])
-        if (a.get("standard_key") or a.get("standard")) == standard_key
-    }
-    existing["arguments"] = [
-        a for a in existing.get("arguments", [])
-        if a["id"] not in old_arg_ids
-    ]
-    existing["sub_arguments"] = [
-        sa for sa in existing.get("sub_arguments", [])
-        if sa.get("argument_id") not in old_arg_ids
-    ]
+        # 删除旧的该 standard 下的 arguments 和关联的 sub_arguments
+        old_arg_ids = {
+            a["id"] for a in existing.get("arguments", [])
+            if (a.get("standard_key") or a.get("standard")) == standard_key
+        }
+        existing["arguments"] = [
+            a for a in existing.get("arguments", [])
+            if a["id"] not in old_arg_ids
+        ]
+        existing["sub_arguments"] = [
+            sa for sa in existing.get("sub_arguments", [])
+            if sa.get("argument_id") not in old_arg_ids
+        ]
 
-    # 插入新的
-    existing["arguments"].extend(new_arguments)
-    existing["sub_arguments"].extend(all_sub_arguments)
+        # 插入新的
+        existing["arguments"].extend(new_arguments)
+        existing["sub_arguments"].extend(all_sub_arguments)
 
-    # 更新 stats
-    by_standard = {}
-    for a in existing["arguments"]:
-        std = a.get("standard_key") or a.get("standard", "")
-        by_standard[std] = by_standard.get(std, 0) + 1
-    existing.setdefault("stats", {})["by_standard"] = by_standard
-    existing["stats"]["argument_count"] = len(existing["arguments"])
-    existing["stats"]["sub_argument_count"] = len(existing["sub_arguments"])
+        # 更新 stats
+        by_standard = {}
+        for a in existing["arguments"]:
+            std = a.get("standard_key") or a.get("standard", "")
+            by_standard[std] = by_standard.get(std, 0) + 1
+        existing.setdefault("stats", {})["by_standard"] = by_standard
+        existing["stats"]["argument_count"] = len(existing["arguments"])
+        existing["stats"]["sub_argument_count"] = len(existing["sub_arguments"])
 
-    save_legal_arguments(project_id, existing)
-    print(f"[RegenerateStandard] Merged and saved. Removed {len(old_arg_ids)} old args, added {len(new_arguments)} new args.")
+        return existing
 
+    existing = update_legal_arguments(project_id, _mutate)
+    logger.info(f"[RegenerateStandard] Merged and saved. Removed {len(old_arg_ids)} old args, added {len(new_arguments)} new args.")
     return {
         "success": True,
         "standard_key": standard_key,

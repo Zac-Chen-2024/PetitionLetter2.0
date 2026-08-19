@@ -7,16 +7,20 @@ node_modules/
 
 # Build output
 dist/
+dist-ssr/
 build/
+*.tsbuildinfo
 
 # Environment files
 .env
 .env.local
 .env.*.local
+*.local
 
 # IDE
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 *.swp
 *.swo
 
@@ -25,5 +29,9 @@ build/
 Thumbs.db
 
 # Logs
+logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

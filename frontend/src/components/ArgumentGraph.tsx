@@ -1,0 +1,2918 @@
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { logInteraction } from '../services/interactionLogger';
+import { useHistoryQuery, useInferArgumentTitle, useInferRelationship, useRecommendSnippets, useRedo, useUndo } from '../api';
+import { FlowCanvas, type FlowCanvasApi } from './ArgumentCanvas/FlowCanvas';
+import { CoveragePanel } from './ArgumentCanvas/CoveragePanel';
+
+// Canvas renderer flag (M12): ?canvas=v2 or localStorage pl_canvas=v2 selects the
+// react-flow renderer; default stays on the legacy hand-written canvas until
+// the parity checklist (Doc/14) is signed off.
+function useFlowCanvasFlag(): boolean {
+  return useMemo(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get('canvas');
+      if (q === 'v2') { localStorage.setItem('pl_canvas', 'v2'); return true; }
+      if (q === 'v1') { localStorage.removeItem('pl_canvas'); return false; }
+      return localStorage.getItem('pl_canvas') === 'v2';
+    } catch { return false; }
+  }, []);
+}
+import { useApp } from '../context/AppContext';
+import { useLegalStandards } from '../hooks/useLegalStandards';
+import { STANDARD_KEY_TO_ID, STANDARD_ID_TO_KEY } from '../constants/colors';
+import toast from 'react-hot-toast';
+import StandardActionModal from './StandardActionModal';
+import { Portal } from './Portal';
+import type { Position, Argument, SubArgument } from '../types';
+
+// ============================================
+// Types for internal use
+// ============================================
+
+export interface ArgumentNode {
+  id: string;
+  type: 'argument';
+  position: Position;
+  data: {
+    title: string;
+    subject: string;
+    standardKey?: string;
+    snippetCount: number;
+    isAIGenerated: boolean;
+    completenessScore?: number;
+  };
+}
+
+export interface StandardNode {
+  id: string;
+  type: 'standard';
+  position: Position;
+  data: {
+    name: string;
+    shortName: string;
+    color: string;
+    argumentCount: number;
+  };
+}
+
+export interface SubArgumentNode {
+  id: string;
+  type: 'subargument';
+  position: Position;
+  data: {
+    title: string;
+    purpose: string;
+    relationship: string;  // LLM 生成的关系描述
+    argumentId: string;
+    snippetCount: number;
+    isAIGenerated: boolean;
+    needsSnippetConfirmation?: boolean;  // 红点提示：有推荐snippets待确认
+    pendingSnippetCount?: number;  // 推荐的snippets数量
+  };
+}
+
+type NodeType = ArgumentNode | StandardNode | SubArgumentNode;
+
+// ============================================
+// Icons
+// ============================================
+
+const ZoomInIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
+  </svg>
+);
+
+const ZoomOutIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+  </svg>
+);
+
+const ArrangeIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+  </svg>
+);
+
+// ============================================
+// Node Components
+// ============================================
+
+interface DraggableNodeProps {
+  node: NodeType;
+  isSelected: boolean;
+  onSelect: () => void;
+  onDrag: (id: string, position: Position) => void;
+  scale: number;
+}
+
+function ArgumentNodeComponent({
+  node,
+  isSelected,
+  onSelect,
+  onDrag,
+  scale,
+  onPositionReport,
+  t,
+  transformVersion,
+  onAddSubArgument,
+  onDelete,
+  onAITitle,
+  onRewrite,
+  isRewriting,
+  isMoveTarget,
+  isMoveMode,
+  onMoveTarget,
+  onContextMenu,
+}: DraggableNodeProps & {
+  node: ArgumentNode;
+  onPositionReport?: (id: string, rect: DOMRect) => void;
+  t: TFunction;
+  transformVersion?: number;  // Triggers position update when canvas transforms
+  onAddSubArgument?: (argumentId: string) => void;
+  onDelete?: (argumentId: string) => void;
+  onAITitle?: (argumentId: string) => void;
+  onRewrite?: (argumentId: string) => void;
+  isRewriting?: boolean;
+  isMoveTarget?: boolean;
+  isMoveMode?: boolean;
+  onMoveTarget?: (argumentId: string) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartPos = useRef<Position | null>(null);
+  const nodeStartPos = useRef<Position | null>(null);
+  const nodeRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDragging(true);
+    dragStartPos.current = { x: e.clientX, y: e.clientY };
+    nodeStartPos.current = { ...node.position };
+    onSelect();
+  };
+
+  // Report position to parent for connection lines
+  // Re-report when canvas transforms (scale/offset changes)
+  useEffect(() => {
+    if (!nodeRef.current || !onPositionReport) return;
+
+    const reportPosition = () => {
+      if (!nodeRef.current) return;
+      const rect = nodeRef.current.getBoundingClientRect();
+      onPositionReport(node.id, rect);
+    };
+
+    // Initial report with requestAnimationFrame to ensure DOM is ready
+    requestAnimationFrame(reportPosition);
+
+    // Listen for scroll/resize events
+    window.addEventListener('resize', reportPosition);
+    window.addEventListener('scroll', reportPosition, true);
+
+    return () => {
+      window.removeEventListener('resize', reportPosition);
+      window.removeEventListener('scroll', reportPosition, true);
+    };
+  }, [node.id, node.position.x, node.position.y, onPositionReport, transformVersion]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartPos.current || !nodeStartPos.current) return;
+      const dx = (e.clientX - dragStartPos.current.x) / scale;
+      const dy = (e.clientY - dragStartPos.current.y) / scale;
+      onDrag(node.id, {
+        x: nodeStartPos.current.x + dx,
+        y: nodeStartPos.current.y + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      dragStartPos.current = null;
+      nodeStartPos.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, node.id, onDrag, scale]);
+
+  // Completeness indicator color
+  const getCompletenessColor = (score?: number) => {
+    if (!score) return 'bg-slate-200';
+    if (score >= 80) return 'bg-green-500';
+    if (score >= 50) return 'bg-yellow-500';
+    return 'bg-red-400';
+  };
+
+  const handleNodeMouseDown = (e: React.MouseEvent) => {
+    if (isMoveMode && isMoveTarget && onMoveTarget) {
+      e.stopPropagation();
+      onMoveTarget(node.id);
+      return;
+    }
+    handleMouseDown(e);
+  };
+
+  return (
+    <div
+      ref={nodeRef}
+      className={`
+        absolute select-none
+        ${isMoveMode
+          ? (isMoveTarget ? 'cursor-pointer z-40' : 'cursor-not-allowed z-20')
+          : `cursor-grab active:cursor-grabbing ${isDragging ? 'z-50' : 'z-20'}`
+        }
+      `}
+      style={{
+        left: node.position.x,
+        top: node.position.y,
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'auto',
+        opacity: isMoveMode && !isMoveTarget ? 0.4 : 1,
+      }}
+      onMouseDown={handleNodeMouseDown}
+      onContextMenu={onContextMenu}
+    >
+      <div
+        className={`
+          w-[400px] p-4 rounded-xl border-2 shadow-md transition-all
+          ${isMoveMode && isMoveTarget
+            ? 'border-purple-500 bg-purple-100 ring-2 ring-purple-400 ring-offset-2 shadow-lg'
+            : isMoveMode && !isMoveTarget
+              ? 'border-slate-300 bg-slate-100'
+              : isSelected
+                ? 'ring-2 ring-offset-2 ring-purple-500 shadow-lg border-purple-500 bg-purple-50'
+                : 'border-purple-400 bg-purple-50 hover:shadow-lg hover:border-purple-500'
+          }
+        `}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <span className="text-base font-bold text-purple-800 line-clamp-3">{node.data.title}</span>
+          <div className="flex items-center gap-0.5 flex-shrink-0 -mt-1 -mr-1">
+            {/* Add SubArgument button */}
+            {onAddSubArgument && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddSubArgument(node.id);
+                }}
+                className="p-1 rounded hover:bg-purple-200 transition-colors"
+                title="Add Sub-Argument"
+              >
+                <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            )}
+            {/* AI title button */}
+            {onAITitle && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onAITitle(node.id); }}
+                className="p-1 rounded hover:bg-purple-100 transition-colors"
+                title="AI generate title"
+              >
+                <svg className="w-3.5 h-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </button>
+            )}
+            {/* Rewrite button */}
+            {onRewrite && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRewrite(node.id); }}
+                disabled={isRewriting}
+                className="p-1 rounded hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                title="Rewrite letter content"
+              >
+                {isRewriting ? (
+                  <svg className="w-3.5 h-3.5 text-emerald-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+              </button>
+            )}
+            {/* Delete button */}
+            {onDelete && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(node.id); }}
+                className="p-1 rounded hover:bg-red-100 transition-colors"
+                title="Delete this argument"
+              >
+                <svg className="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Bottom row: standard tag (left) + stats (right) */}
+        <div className="mt-auto pt-2 flex items-end justify-between">
+          {node.data.standardKey ? (
+            <span className="text-xs px-2 py-1 bg-purple-200 text-purple-700 rounded-full">
+              {node.data.standardKey}
+            </span>
+          ) : <span />}
+          <div className="flex items-center gap-2 text-xs">
+            {node.data.completenessScore !== undefined && (
+              <div className="flex items-center gap-1">
+                <div className={`w-2.5 h-2.5 rounded-full ${getCompletenessColor(node.data.completenessScore)}`} />
+                <span className="text-purple-500">{node.data.completenessScore}%</span>
+              </div>
+            )}
+            <span className="text-purple-500">{t('graph.node.snippets', { count: node.data.snippetCount })}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StandardNodeComponent({
+  node, isSelected, onSelect, onDrag, scale, t,
+  onRewrite, onRemove, onRegenerate, onAddArgument, isRewriting, hasLetterContent,
+  onContextMenu,
+}: DraggableNodeProps & {
+  node: StandardNode;
+  t: TFunction;
+  onRewrite?: (standardKey: string) => void;
+  onRemove?: (standardKey: string) => void;
+  onRegenerate?: (standardKey: string) => void;
+  onAddArgument?: (standardKey: string) => void;
+  isRewriting?: boolean;
+  hasLetterContent?: boolean;
+  onContextMenu?: (e: React.MouseEvent) => void;
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartPos = useRef<Position | null>(null);
+  const nodeStartPos = useRef<Position | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDragging(true);
+    dragStartPos.current = { x: e.clientX, y: e.clientY };
+    nodeStartPos.current = { ...node.position };
+    onSelect();
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartPos.current || !nodeStartPos.current) return;
+      const dx = (e.clientX - dragStartPos.current.x) / scale;
+      const dy = (e.clientY - dragStartPos.current.y) / scale;
+      onDrag(node.id, {
+        x: nodeStartPos.current.x + dx,
+        y: nodeStartPos.current.y + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      dragStartPos.current = null;
+      nodeStartPos.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, node.id, onDrag, scale]);
+
+  return (
+    <div
+      className={`
+        absolute cursor-grab active:cursor-grabbing select-none
+        ${isDragging ? 'z-50' : 'z-30'}
+      `}
+      style={{
+        left: node.position.x,
+        top: node.position.y,
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'auto',
+      }}
+      onMouseDown={handleMouseDown}
+      onContextMenu={onContextMenu}
+    >
+      <div
+        className={`
+          w-[240px] p-4 rounded-xl bg-white shadow-lg transition-all
+          ${isSelected ? 'ring-2 ring-offset-2 shadow-xl scale-105' : 'hover:shadow-xl'}
+        `}
+        style={{
+          borderColor: node.data.color,
+          borderWidth: '3px',
+          borderStyle: 'solid',
+        }}
+      >
+        {/* Top-right action buttons */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-5 h-5 rounded-full flex-shrink-0"
+              style={{ backgroundColor: node.data.color }}
+            />
+            <span className="text-base font-bold text-slate-800">{node.data.shortName}</span>
+          </div>
+          <div className="flex items-center gap-0.5 flex-shrink-0 -mt-1 -mr-1">
+            {/* Add Argument button */}
+            {onAddArgument && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onAddArgument(node.id); }}
+                className="p-1 rounded hover:bg-purple-100 transition-colors"
+                title={t('graph.standard.addArgument', 'Add Argument')}
+              >
+                <svg className="w-3.5 h-3.5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            )}
+            {/* Rewrite button */}
+            {onRewrite && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRewrite(node.id); }}
+                disabled={isRewriting}
+                className="p-1 rounded hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                title={t('graph.standard.rewrite', 'Rewrite')}
+              >
+                {isRewriting ? (
+                  <svg className="w-3.5 h-3.5 text-emerald-600 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+              </button>
+            )}
+            {/* Regenerate arguments (single standard) button */}
+            {onRegenerate && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRegenerate(node.id); }}
+                className="p-1 rounded hover:bg-amber-100 transition-colors"
+                title={t('graph.standard.regenerate', 'Regenerate arguments for this standard')}
+              >
+                <svg className="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </button>
+            )}
+            {/* Remove button */}
+            {onRemove && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRemove(node.id); }}
+                className="p-1 rounded hover:bg-red-100 transition-colors"
+                title={t('graph.standard.remove', 'Remove')}
+              >
+                <svg className="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="mt-2 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400">{t('graph.legend.standard')}</span>
+            {/* Letter content status indicator */}
+            {hasLetterContent ? (
+              <svg className="w-3.5 h-3.5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                <title>{t('graph.standard.written', 'Written')}</title>
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <title>{t('graph.standard.pending', 'Not written')}</title>
+                <circle cx="12" cy="12" r="9" strokeWidth={2} />
+              </svg>
+            )}
+          </div>
+          {node.data.argumentCount > 0 && (
+            <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">
+              {t('graph.node.args', { count: node.data.argumentCount })}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubArgumentNodeComponent({
+  node,
+  isSelected,
+  onSelect,
+  onDrag,
+  scale,
+  t,
+  onPositionReport,
+  transformVersion,
+  onRegenerate,
+  onTitleChange,
+  onDelete,
+  onCancelCreate,
+  autoEdit,
+  onAutoEditComplete,
+  mergeMode,
+  mergeChecked,
+  mergeDisabled,
+  projectId,
+  onContextMenu,
+}: DraggableNodeProps & {
+  node: SubArgumentNode;
+  t: TFunction;
+  onPositionReport?: (id: string, rect: DOMRect) => void;
+  transformVersion?: number;  // Triggers position update when canvas transforms
+  onRegenerate?: (subArgumentId: string) => void;
+  onTitleChange?: (subArgumentId: string, newTitle: string) => void;
+  onDelete?: (subArgumentId: string) => void;  // Delete callback
+  onCancelCreate?: (subArgumentId: string) => void;  // Silent delete for untitled new nodes
+  autoEdit?: boolean;  // Auto-enter edit mode for newly created nodes
+  onAutoEditComplete?: () => void;  // Callback when auto-edit is acknowledged
+  mergeMode?: boolean;
+  mergeChecked?: boolean;
+  mergeDisabled?: boolean;
+  projectId?: string;
+  onContextMenu?: (e: React.MouseEvent) => void;
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(node.data.title);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isGeneratingAITitle, setIsGeneratingAITitle] = useState(false);
+  const dragStartPos = useRef<Position | null>(null);
+  const nodeStartPos = useRef<Position | null>(null);
+  const nodeRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isEditing) return; // Don't start drag when editing
+    e.stopPropagation();
+    if (mergeMode) {
+      // In merge mode: just toggle selection, no drag
+      if (!mergeDisabled) onSelect();
+      return;
+    }
+    setIsDragging(true);
+    dragStartPos.current = { x: e.clientX, y: e.clientY };
+    nodeStartPos.current = { ...node.position };
+    onSelect();
+  };
+
+  // Handle double-click to edit title
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setEditTitle(node.data.title);
+  };
+
+  // Handle title edit completion
+  const handleTitleSave = () => {
+    if (editTitle.trim() && editTitle !== node.data.title) {
+      onTitleChange?.(node.id, editTitle.trim());
+      setIsEditing(false);
+    } else if (!editTitle.trim() && !node.data.title) {
+      // Newly created node with no title — silently cancel creation
+      onCancelCreate?.(node.id);
+    } else {
+      setIsEditing(false);
+    }
+  };
+
+  // Handle title edit cancel
+  const handleTitleCancel = () => {
+    if (!node.data.title) {
+      // Newly created node — cancel means discard
+      onCancelCreate?.(node.id);
+    } else {
+      setEditTitle(node.data.title);
+      setIsEditing(false);
+    }
+  };
+
+  // Handle key events in edit mode
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleTitleSave();
+    } else if (e.key === 'Escape') {
+      handleTitleCancel();
+    }
+  };
+
+  // Handle regenerate click
+  const handleRegenerateClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRegenerating) return;
+    setIsRegenerating(true);
+    try {
+      await onRegenerate?.(node.id);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  // Handle delete click — delegate to parent (modal confirmation)
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDelete?.(node.id);
+  };
+
+  // Handle AI title generation
+  const inferRelationship = useInferRelationship().mutateAsync;
+  const handleAITitle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isGeneratingAITitle || !projectId) return;
+    setIsGeneratingAITitle(true);
+    try {
+      const response = await inferRelationship({
+        projectId,
+        argument_id: node.data.argumentId,
+        subargument_title: node.data.title || editTitle || 'merged sub-argument',
+      });
+      if (response.success && response.relationship) {
+        const newTitle = response.relationship;
+        setEditTitle(newTitle);
+        // If not in edit mode, save directly
+        if (!isEditing) {
+          onTitleChange?.(node.id, newTitle);
+        }
+      }
+    } catch (error) {
+      console.error('AI title generation failed:', error);
+    } finally {
+      setIsGeneratingAITitle(false);
+    }
+  };
+
+  // Auto-enter edit mode for newly created nodes
+  useEffect(() => {
+    if (autoEdit && !isEditing) {
+      setIsEditing(true);
+      setEditTitle('');  // Start with empty title for new nodes
+      onAutoEditComplete?.();
+    }
+  }, [autoEdit, isEditing, onAutoEditComplete]);
+
+  // Focus input when entering edit mode
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  // Report position to parent for connection lines
+  // Re-report when canvas transforms (scale/offset changes)
+  useEffect(() => {
+    if (!nodeRef.current || !onPositionReport) return;
+
+    const reportPosition = () => {
+      if (!nodeRef.current) return;
+      const rect = nodeRef.current.getBoundingClientRect();
+      onPositionReport(node.id, rect);
+    };
+
+    requestAnimationFrame(reportPosition);
+    window.addEventListener('resize', reportPosition);
+    window.addEventListener('scroll', reportPosition, true);
+
+    return () => {
+      window.removeEventListener('resize', reportPosition);
+      window.removeEventListener('scroll', reportPosition, true);
+    };
+  }, [node.id, node.position.x, node.position.y, onPositionReport, transformVersion]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartPos.current || !nodeStartPos.current) return;
+      const dx = (e.clientX - dragStartPos.current.x) / scale;
+      const dy = (e.clientY - dragStartPos.current.y) / scale;
+      onDrag(node.id, {
+        x: nodeStartPos.current.x + dx,
+        y: nodeStartPos.current.y + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      dragStartPos.current = null;
+      nodeStartPos.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, node.id, onDrag, scale]);
+
+  return (
+    <div
+      ref={nodeRef}
+      className={`
+        absolute cursor-grab active:cursor-grabbing select-none
+        ${isDragging ? 'z-50' : 'z-15'}
+      `}
+      style={{
+        left: node.position.x,
+        top: node.position.y,
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'auto',
+      }}
+      onMouseDown={handleMouseDown}
+      onContextMenu={onContextMenu}
+    >
+      <div
+        className={`
+          w-[320px] p-3 rounded-lg border-2 shadow-sm transition-all
+          ${mergeMode && mergeDisabled ? 'border-slate-300 bg-slate-100 opacity-40 cursor-not-allowed' : ''}
+          ${mergeMode && !mergeDisabled && mergeChecked ? 'border-amber-500 bg-amber-50 ring-2 ring-offset-2 ring-amber-400 shadow-md' : ''}
+          ${mergeMode && !mergeDisabled && !mergeChecked ? 'border-emerald-400 bg-emerald-50 hover:border-amber-400 cursor-pointer' : ''}
+          ${!mergeMode && isSelected ? 'border-emerald-500 ring-2 ring-offset-2 ring-emerald-500 shadow-md bg-emerald-50' : ''}
+          ${!mergeMode && !isSelected ? 'border-emerald-400 bg-emerald-50 hover:shadow-md hover:border-emerald-500' : ''}
+        `}
+      >
+        {/* Header with title and actions */}
+        <div className="flex items-start justify-between gap-2 mb-1">
+          {/* Merge checkbox */}
+          {mergeMode && !mergeDisabled && (
+            <div className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+              mergeChecked ? 'border-amber-500 bg-amber-500' : 'border-slate-300'
+            }`}>
+              {mergeChecked && (
+                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+          )}
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              type="text"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onBlur={handleTitleSave}
+              className="flex-1 text-sm font-semibold text-emerald-800 bg-white border border-emerald-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span
+              className="text-sm font-semibold text-emerald-800 line-clamp-2 cursor-text hover:bg-emerald-100 rounded px-1 -mx-1"
+              onDoubleClick={handleDoubleClick}
+              title="Double-click to edit"
+            >
+              {node.data.title}
+            </span>
+          )}
+          {!mergeMode && (
+          <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5 -mr-0.5">
+            {/* Red dot indicator for pending snippet confirmation */}
+            {node.data.needsSnippetConfirmation && (
+              <span
+                className="relative flex items-center justify-center w-5 h-5"
+                title={`${node.data.pendingSnippetCount || 0} snippets to confirm`}
+              >
+                <span className="absolute inline-flex h-3 w-3 rounded-full bg-red-500 opacity-75 animate-ping" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+              </span>
+            )}
+            {/* AI title button */}
+            <button
+              onClick={handleAITitle}
+              disabled={isGeneratingAITitle}
+              className="p-1 rounded hover:bg-purple-100 transition-colors disabled:opacity-50"
+              title="AI generate title"
+            >
+              {isGeneratingAITitle ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-purple-500" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              )}
+            </button>
+            {/* Regenerate button */}
+            <button
+              onClick={handleRegenerateClick}
+              disabled={isRegenerating}
+              className="p-1 rounded hover:bg-emerald-200 transition-colors disabled:opacity-50"
+              title="Regenerate this section"
+            >
+              {isRegenerating ? (
+                <svg className="w-3.5 h-3.5 animate-spin text-emerald-600" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              )}
+            </button>
+            {/* Delete button — rightmost */}
+            <button
+              onClick={handleDeleteClick}
+              className="p-1 rounded hover:bg-red-100 transition-colors"
+              title="Delete this sub-argument"
+            >
+              <svg className="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+          )}
+        </div>
+
+        {/* Purpose */}
+        <p className="text-xs text-emerald-600 mb-2 line-clamp-2">{node.data.purpose}</p>
+
+        {/* Relationship label */}
+        <div className="flex items-center justify-between text-xs">
+          <span className="px-2 py-0.5 bg-emerald-200 text-emerald-700 rounded-full text-[10px]">
+            {node.data.relationship}
+          </span>
+          <span className="text-emerald-500">{t('graph.node.snippets', { count: node.data.snippetCount })}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Connection Lines (Internal)
+// ============================================
+
+interface InternalConnectionLinesProps {
+  argumentNodes: ArgumentNode[];
+  standardNodes: StandardNode[];
+  subArgumentNodes: SubArgumentNode[];
+}
+
+function InternalConnectionLines({ argumentNodes, standardNodes, subArgumentNodes }: InternalConnectionLinesProps) {
+  const standardPositions = new Map(standardNodes.map(n => [n.id, n.position]));
+  const argumentPositions = new Map(argumentNodes.map(n => [n.id, n.position]));
+
+  return (
+    <svg className="absolute" style={{ zIndex: 35, pointerEvents: 'none', left: 0, top: 0, width: '4000px', height: '3000px', overflow: 'visible' }}>
+      <defs>
+        <marker id="arg-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7" />
+        </marker>
+        <marker id="subarg-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#10b981" />
+        </marker>
+      </defs>
+
+      {/* SubArgument → Argument connections (with relationship labels) */}
+      {subArgumentNodes.map(subArgNode => {
+        const argPos = argumentPositions.get(subArgNode.data.argumentId);
+        if (!argPos) return null;
+
+        const x1 = subArgNode.position.x + 160; // Right edge of subargument node (320px / 2)
+        const y1 = subArgNode.position.y;
+        const x2 = argPos.x - 200; // Left edge of argument node (400px / 2)
+        const y2 = argPos.y;
+
+        const midX = (x1 + x2) / 2;
+        const pathD = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+        // Label position (middle of the curve)
+        const labelX = midX;
+        const labelY = (y1 + y2) / 2 - 8;
+
+        return (
+          <g key={`${subArgNode.id}-${subArgNode.data.argumentId}`}>
+            <path
+              d={pathD}
+              fill="none"
+              stroke="#10b981"
+              strokeWidth={2}
+              markerEnd="url(#subarg-arrowhead)"
+              opacity={0.6}
+            />
+            {/* Relationship label */}
+            <rect
+              x={labelX - 40}
+              y={labelY - 8}
+              width={80}
+              height={16}
+              rx={4}
+              fill="white"
+              stroke="#10b981"
+              strokeWidth={1}
+              opacity={0.9}
+            />
+            <text
+              x={labelX}
+              y={labelY + 3}
+              textAnchor="middle"
+              fontSize={11}
+              fill="#059669"
+              fontWeight={500}
+            >
+              {subArgNode.data.relationship.slice(0, 12)}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Argument → Standard connections */}
+      {argumentNodes.map(argNode => {
+        if (!argNode.data.standardKey) return null;
+
+        const standardId = STANDARD_KEY_TO_ID[argNode.data.standardKey];
+        const standardPos = standardPositions.get(standardId);
+        if (!standardPos) return null;
+
+        const x1 = argNode.position.x + 200; // Right edge of argument node (400px / 2)
+        const y1 = argNode.position.y;
+        const x2 = standardPos.x - 120; // Left edge of standard node (240px / 2)
+        const y2 = standardPos.y;
+
+        const midX = (x1 + x2) / 2;
+        const pathD = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+        return (
+          <path
+            key={`${argNode.id}-${standardId}`}
+            d={pathD}
+            fill="none"
+            stroke="#a855f7"
+            strokeWidth={2}
+            markerEnd="url(#arg-arrowhead)"
+            opacity={0.6}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+// ============================================
+// Auto Layout Helper
+// ============================================
+
+function calculateTreeLayout(
+  arguments_: Argument[],
+  subArguments: SubArgument[],
+  savedPositions: Map<string, Position>,
+  legalStandards: import('../types').LegalStandard[],
+  projectType?: string
+): { argumentNodes: ArgumentNode[]; standardNodes: StandardNode[]; subArgumentNodes: SubArgumentNode[] } {
+  // Position layout with sub-arguments on the left
+  const SUBARG_X = 200;          // Base X for sub-arguments
+  const SUBARG_X_OFFSET = 80;    // Horizontal offset for staggered layout
+  const ARGUMENT_X = 800;
+  const STANDARD_X = 1200;
+  const START_Y = 100;
+  const MIN_ARGUMENT_SPACING = 280;  // Minimum spacing between argument centers
+  const SUBARG_SPACING = 140;    // Vertical spacing between sub-argument centers
+  const SUBARG_CARD_HEIGHT = 200; // Conservative max height of sub-argument card
+  const BETWEEN_GROUP_GAP = 120; // Visual gap between standard groups
+  const WITHIN_GROUP_GAP = 60;   // Visual gap between arguments within same standard
+
+  // Pre-calculate sub-argument counts per argument
+  const subArgCountByArgument = new Map<string, number>();
+  subArguments.forEach(sa => {
+    const count = subArgCountByArgument.get(sa.argumentId) || 0;
+    subArgCountByArgument.set(sa.argumentId, count + 1);
+  });
+
+  // Helper: calculate full visual height of an argument's sub-arg group
+  // (from top edge of first card to bottom edge of last card)
+  const getArgumentHeight = (argId: string): number => {
+    const subArgCount = subArgCountByArgument.get(argId) || 0;
+    if (subArgCount <= 1) return SUBARG_CARD_HEIGHT;
+    return (subArgCount - 1) * SUBARG_SPACING + SUBARG_CARD_HEIGHT;
+  };
+
+  // Group arguments by standardKey
+  const argumentsByStandard = new Map<string, Argument[]>();
+  const unmappedArguments: Argument[] = [];
+
+  arguments_.forEach(arg => {
+    if (arg.standardKey) {
+      const list = argumentsByStandard.get(arg.standardKey) || [];
+      list.push(arg);
+      argumentsByStandard.set(arg.standardKey, list);
+    } else {
+      unmappedArguments.push(arg);
+    }
+  });
+
+  // Helper: count arguments for a standard
+  const getArgumentCount = (standardId: string): number => {
+    let count = 0;
+    argumentsByStandard.forEach((args, key) => {
+      if (STANDARD_KEY_TO_ID[key] === standardId) {
+        count += args.length;
+      }
+    });
+    return count;
+  };
+
+  // Get standards that have arguments, sorted by argument count (descending)
+  // EB-1A: always include overall_merits (even when empty) as the last standard
+  const standardsWithArgs = legalStandards
+    .filter(s => {
+      if (projectType === 'EB-1A' && s.id === 'std-overall_merits') return true;
+      return Array.from(argumentsByStandard.keys()).some(key => STANDARD_KEY_TO_ID[key] === s.id);
+    })
+    .sort((a, b) => {
+      // overall_merits always last
+      if (a.id === 'std-overall_merits') return 1;
+      if (b.id === 'std-overall_merits') return -1;
+      return getArgumentCount(b.id) - getArgumentCount(a.id);
+    });
+
+  // Build nodes with aligned positions:
+  // - Arguments for each standard are grouped together
+  // - Standard is positioned at the vertical center of its argument group
+  const argumentNodes: ArgumentNode[] = [];
+  const standardNodes: StandardNode[] = [];
+
+  let currentY = START_Y;
+
+  // Process each standard in order (from legalStandards array)
+  standardsWithArgs.forEach((standard) => {
+    // Find all arguments for this standard
+    const standardArgs: Argument[] = [];
+    argumentsByStandard.forEach((args, key) => {
+      if (STANDARD_KEY_TO_ID[key] === standard.id) {
+        standardArgs.push(...args);
+      }
+    });
+
+    if (standardArgs.length === 0) {
+      // Empty standard (e.g. overall_merits placeholder) — show as standalone node
+      const savedStandardPos = savedPositions.get(standard.id);
+      standardNodes.push({
+        id: standard.id,
+        type: 'standard' as const,
+        position: savedStandardPos || { x: STANDARD_X, y: currentY },
+        data: {
+          name: standard.name,
+          shortName: standard.shortName,
+          color: standard.color,
+          argumentCount: 0,
+        },
+      });
+      currentY += BETWEEN_GROUP_GAP;
+      return;
+    }
+
+    // Calculate how far the first arg's sub-args extend above its center
+    const firstArgTopExtent = getArgumentHeight(standardArgs[0].id) / 2;
+    // Place first argument so its top sub-arg card starts at currentY
+    const groupStartY = currentY + firstArgTopExtent;
+    const argPositions: number[] = [];
+    let argY = groupStartY;
+
+    standardArgs.forEach((arg, idx) => {
+      argPositions.push(argY);
+      if (idx < standardArgs.length - 1) {
+        // Spacing = half-heights of adjacent args + visual gap
+        const currentHeight = getArgumentHeight(arg.id);
+        const nextHeight = getArgumentHeight(standardArgs[idx + 1].id);
+        const spacing = Math.max(currentHeight / 2 + nextHeight / 2 + WITHIN_GROUP_GAP, MIN_ARGUMENT_SPACING);
+        argY += spacing;
+      }
+    });
+
+    const groupEndY = argPositions[argPositions.length - 1];
+    const standardY = (groupStartY + groupEndY) / 2;  // Standard at center of its argument group
+
+    // Add argument nodes for this standard
+    standardArgs.forEach((arg, idx) => {
+      const savedPos = savedPositions.get(arg.id);
+      argumentNodes.push({
+        id: arg.id,
+        type: 'argument' as const,
+        position: savedPos || { x: ARGUMENT_X, y: argPositions[idx] },
+        data: {
+          title: arg.title,
+          subject: arg.subject,
+          standardKey: arg.standardKey,
+          snippetCount: subArguments.filter(sa => sa.argumentId === arg.id).reduce((sum, sa) => sum + (sa.snippetIds?.length || 0), 0) || arg.snippetIds?.length || 0,
+          isAIGenerated: arg.isAIGenerated,
+          completenessScore: arg.completeness?.score,
+        },
+      });
+    });
+
+    // Add standard node at vertical center of its arguments
+    const savedStandardPos = savedPositions.get(standard.id);
+    standardNodes.push({
+      id: standard.id,
+      type: 'standard' as const,
+      position: savedStandardPos || { x: STANDARD_X, y: standardY },
+      data: {
+        name: standard.name,
+        shortName: standard.shortName,
+        color: standard.color,
+        argumentCount: standardArgs.length,
+      },
+    });
+
+    // Move currentY to the bottom edge of this group + gap
+    const lastArgBottomExtent = getArgumentHeight(standardArgs[standardArgs.length - 1].id) / 2;
+    currentY = groupEndY + lastArgBottomExtent + BETWEEN_GROUP_GAP;
+  });
+
+  // Add unmapped arguments at the end
+  unmappedArguments.forEach(arg => {
+    const savedPos = savedPositions.get(arg.id);
+    const argHeight = getArgumentHeight(arg.id);
+    const topExtent = argHeight / 2;
+    const argY = currentY + topExtent;
+    argumentNodes.push({
+      id: arg.id,
+      type: 'argument' as const,
+      position: savedPos || { x: ARGUMENT_X, y: argY },
+      data: {
+        title: arg.title,
+        subject: arg.subject,
+        standardKey: arg.standardKey,
+        snippetCount: arg.snippetIds?.length || 0,
+        isAIGenerated: arg.isAIGenerated,
+        completenessScore: arg.completeness?.score,
+      },
+    });
+    currentY = argY + argHeight / 2 + BETWEEN_GROUP_GAP;
+  });
+
+  // Build sub-argument nodes
+  // Group sub-arguments by their parent argument
+  const subArgsByArgument = new Map<string, SubArgument[]>();
+  subArguments.forEach(sa => {
+    const list = subArgsByArgument.get(sa.argumentId) || [];
+    list.push(sa);
+    subArgsByArgument.set(sa.argumentId, list);
+  });
+
+  const subArgumentNodes: SubArgumentNode[] = [];
+
+  // Position sub-arguments aligned with their parent argument
+  // Stagger groups horizontally based on argument index
+  argumentNodes.forEach((argNode, argIndex) => {
+    const argSubArgs = subArgsByArgument.get(argNode.id) || [];
+    if (argSubArgs.length === 0) return;
+
+    // Calculate vertical range for sub-arguments
+    const totalHeight = (argSubArgs.length - 1) * SUBARG_SPACING;
+    const startY = argNode.position.y - totalHeight / 2;
+
+    // Staggered X position for the entire group based on argument index
+    const groupStaggerX = SUBARG_X + (argIndex % 2) * SUBARG_X_OFFSET;
+
+    argSubArgs.forEach((sa, idx) => {
+      const savedPos = savedPositions.get(sa.id);
+      subArgumentNodes.push({
+        id: sa.id,
+        type: 'subargument' as const,
+        position: savedPos || { x: groupStaggerX, y: startY + idx * SUBARG_SPACING },
+        data: {
+          title: sa.title,
+          purpose: sa.purpose,
+          relationship: sa.relationship,
+          argumentId: sa.argumentId,
+          snippetCount: sa.snippetIds?.length || 0,
+          isAIGenerated: sa.isAIGenerated,
+          needsSnippetConfirmation: sa.needsSnippetConfirmation,
+          pendingSnippetCount: sa.pendingSnippetIds?.length || 0,
+        },
+      });
+    });
+  });
+
+  return { argumentNodes, standardNodes, subArgumentNodes };
+}
+
+// ============================================
+// Standard Minimap — quick navigation chips
+// ============================================
+
+function StandardMinimap({ standardNodes, onNavigate }: {
+  standardNodes: StandardNode[];
+  onNavigate: (id: string) => void;
+}) {
+  if (standardNodes.length === 0) return null;
+  return (
+    <div className="absolute bottom-3 right-3 z-50 flex flex-col gap-1 opacity-40 hover:opacity-100 transition-opacity">
+      {standardNodes.map(node => (
+        <button
+          key={node.id}
+          onClick={() => onNavigate(node.id)}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/90 backdrop-blur-sm border border-slate-200
+                     hover:bg-slate-50 transition-colors text-[10px] text-slate-600 shadow-sm"
+          title={node.data.name}
+        >
+          <span
+            className="w-2 h-2 rounded-full flex-shrink-0"
+            style={{ backgroundColor: node.data.color }}
+          />
+          <span className="truncate max-w-[80px]">{node.data.shortName}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ============================================
+// Main Component
+// ============================================
+
+export function ArgumentGraph() {
+  const { t } = useTranslation();
+  const legalStandards = useLegalStandards();
+  const inferRelationshipMain = useInferRelationship().mutateAsync;
+  const recommendSnippets = useRecommendSnippets().mutateAsync;
+  const inferArgumentTitle = useInferArgumentTitle().mutateAsync;
+  const useFlow = useFlowCanvasFlag();
+  const flowApiRef = useRef<FlowCanvasApi>(null);
+  const [flowZoom, setFlowZoom] = useState(0.7);
+  const {
+    arguments: contextArguments,
+    subArguments: contextSubArguments,
+    argumentGraphPositions,
+    updateArgumentGraphPosition,
+    clearArgumentGraphPositions,
+    setFocusState,
+    focusState,
+    updateArgumentPosition2,
+    updateSubArgumentPosition,
+    setSelectedSnippetId,
+    setSelectedDocumentId,
+    allSnippets,
+    markSectionStale,
+    updateSubArgument,
+    saveSubArgument,
+    regenerateSubArgument,
+    removeSubArgument,
+    addSubArgument,
+    mergeSubArguments,
+    moveSubArguments,
+    consolidateSubArguments,
+    createArgument,
+    rewriteStandard,
+    removeStandard,
+    regenerateStandard,
+    moveToOverallMerits,
+    removeArgument,
+    updateArgument,
+    letterSections,
+    projectId,
+    llmProvider,
+    setWritingTreePanelBounds,
+    writingTreePanelBounds,
+    workMode,
+    projectType,
+  } = useApp();
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.7);  // Start at 70% zoom
+  const scaleRef = useRef(0.7);
+  const offsetRef = useRef<Position>({ x: 0, y: 0 });
+  const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [newlyCreatedSubArgId, setNewlyCreatedSubArgId] = useState<string | null>(null);
+  // Standard action state
+  const [rewritingStandardKey, setRewritingStandardKey] = useState<string | null>(null);
+  const [removeModalStandardKey, setRemoveModalStandardKey] = useState<string | null>(null);
+  const [isRemovingStandard, setIsRemovingStandard] = useState(false);
+  const [regenerateModalStandardKey, setRegenerateModalStandardKey] = useState<string | null>(null);
+  const [isRegeneratingStandard, setIsRegeneratingStandard] = useState(false);
+  // SubArgument delete modal state
+  const [deleteSubArgModalId, setDeleteSubArgModalId] = useState<string | null>(null);
+  // Argument delete modal state
+  const [deleteArgModalId, setDeleteArgModalId] = useState<string | null>(null);
+  // Batch delete confirmation
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  // Merge mode state
+  const [isMergeMode, setIsMergeMode] = useState(false);
+  const [showCoverage, setShowCoverage] = useState(false);
+  const [mergeSelectedIds, setMergeSelectedIds] = useState<Set<string>>(new Set());
+  const [isMerging, setIsMerging] = useState(false);
+  // Move mode state (within merge mode)
+  const [isMoveMode, setIsMoveMode] = useState(false);
+  const [isMoving, setIsMoving] = useState(false);
+  // Consolidate mode state (within merge mode)
+  const [isConsolidateMode, setIsConsolidateMode] = useState(false);
+  const [isConsolidating, setIsConsolidating] = useState(false);
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number; y: number;
+    nodeType: 'standard' | 'argument' | 'subargument';
+    nodeId: string;
+    standardKey?: string;
+  } | null>(null);
+  // Overall Merits move confirmation
+  const [omMoveConfirm, setOmMoveConfirm] = useState<{
+    level: 'standard' | 'argument' | 'subargument';
+    targetId: string;
+    label: string;
+  } | null>(null);
+  const [isMovingToOM, setIsMovingToOM] = useState(false);
+  const panStartPos = useRef<Position | null>(null);
+  const offsetStartPos = useRef<Position | null>(null);
+
+  // Transform version - increments on scale/offset changes to trigger position updates
+  const [transformVersion, setTransformVersion] = useState(0);
+
+  // Keep refs in sync with state
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+
+  // Update transformVersion when scale, offset, or workMode changes
+  // workMode change causes layout shift — nodes need to re-report positions
+  useEffect(() => {
+    setTransformVersion(v => v + 1);
+  }, [scale, offset.x, offset.y, workMode]);
+
+  // Calculate layout
+  const { argumentNodes, standardNodes, subArgumentNodes } = calculateTreeLayout(
+    contextArguments,
+    contextSubArguments,
+    argumentGraphPositions,
+    legalStandards,
+    projectType
+  );
+
+  // Which standards have generated letter content
+  const generatedStandardIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const section of letterSections) {
+      if (section.standardId && section.isGenerated) {
+        const stdId = STANDARD_KEY_TO_ID[section.standardId];
+        if (stdId) ids.add(stdId);
+      }
+    }
+    return ids;
+  }, [letterSections]);
+
+  // Handle node drag
+  const handleNodeDrag = useCallback((id: string, position: Position) => {
+    updateArgumentGraphPosition(id, position);
+  }, [updateArgumentGraphPosition]);
+
+  // Handle argument position report for main page connection lines
+  // Note: ConnectionLines expects x to be RIGHT edge (same as EvidenceCardPool)
+  const handleArgumentPositionReport = useCallback((id: string, rect: DOMRect) => {
+    updateArgumentPosition2(id, {
+      id,
+      x: rect.right,  // Right edge (ConnectionLines calculates left edge as x - width)
+      y: rect.top + rect.height / 2,
+      width: rect.width,
+      height: rect.height,
+    });
+  }, [updateArgumentPosition2]);
+
+  // Handle sub-argument position report for connection lines
+  // ConnectionLines connects snippets to sub-arguments (not arguments)
+  const handleSubArgumentPositionReport = useCallback((id: string, rect: DOMRect) => {
+    updateSubArgumentPosition(id, {
+      id,
+      x: rect.right,  // Right edge
+      y: rect.top + rect.height / 2,
+      width: rect.width,
+      height: rect.height,
+    });
+  }, [updateSubArgumentPosition]);
+
+  // Handle argument selection - set focusState
+  const handleArgumentSelect = useCallback((argumentId: string) => {
+    setSelectedNodeId(argumentId);
+    setFocusState({ type: 'argument', id: argumentId });
+    setSelectedSnippetId(null);  // Clear snippet selection when focusing argument
+  }, [setFocusState, setSelectedSnippetId]);
+
+  // Handle sub-argument selection - set focusState and clear snippet selection
+  const handleSubArgumentSelect = useCallback((subArgumentId: string) => {
+    setSelectedNodeId(subArgumentId);
+    setFocusState({ type: 'subargument', id: subArgumentId });
+    setSelectedSnippetId(null);  // Clear snippet selection when focusing sub-argument
+  }, [setFocusState, setSelectedSnippetId]);
+
+  // Handle sub-argument title change - infer relationship and recommend snippets
+  const handleSubArgumentTitleChange = useCallback(async (subArgumentId: string, newTitle: string) => {
+    // Find the sub-argument to get its argumentId
+    const subArg = contextSubArguments.find(sa => sa.id === subArgumentId);
+    if (!subArg) return;
+
+    // Update title first (frontend state)
+    updateSubArgument(subArgumentId, { title: newTitle });
+    logInteraction('node_rename', 'tree', {
+      level: 'subargument', id: subArgumentId, title_len: newTitle.length, prev_title_len: subArg.title?.length ?? 0,
+    });
+
+    // Run both API calls in parallel: infer relationship + recommend snippets
+    try {
+      const [relationshipResponse, snippetsResponse] = await Promise.all([
+        // 1. Infer relationship
+        inferRelationshipMain({ projectId, argument_id: subArg.argumentId, subargument_title: newTitle }),
+        // 2. Recommend snippets
+        recommendSnippets({
+          projectId,
+          argument_id: subArg.argumentId,
+          title: newTitle,
+          description: subArg.purpose || undefined,
+          exclude_snippet_ids: subArg.snippetIds || [],
+        }),
+      ]);
+
+      // Collect all updates
+      let relationship = subArg.relationship;
+      let pendingSnippetIds: string[] = [];
+      let needsSnippetConfirmation = false;
+
+      // Update relationship
+      if (relationshipResponse.success && relationshipResponse.relationship) {
+        relationship = relationshipResponse.relationship;
+        updateSubArgument(subArgumentId, { relationship });
+      }
+
+      // Update pending snippets (recommendations) — only if there are actual results
+      if (snippetsResponse.success && snippetsResponse.recommended_snippets && snippetsResponse.recommended_snippets.length > 0) {
+        pendingSnippetIds = snippetsResponse.recommended_snippets.map(s => s.snippet_id);
+        needsSnippetConfirmation = true;
+        updateSubArgument(subArgumentId, {
+          pendingSnippetIds,
+          needsSnippetConfirmation,
+        });
+      }
+
+      // Persist to backend - save title, relationship, and pending snippets
+      await saveSubArgument(subArgumentId, {
+        title: newTitle,
+        relationship,
+        pendingSnippetIds,
+        needsSnippetConfirmation,
+      }, projectId);
+      console.log('[ArgumentGraph] SubArgument title/relationship/pendingSnippets saved to backend');
+
+    } catch (error) {
+      console.error('Failed to infer relationship or recommend snippets:', error);
+    }
+  }, [updateSubArgument, saveSubArgument, contextSubArguments, projectId, inferRelationshipMain, recommendSnippets]);
+
+  // Handle sub-argument regenerate
+  const handleSubArgumentRegenerate = useCallback(async (subArgumentId: string) => {
+    if (regenerateSubArgument) {
+      await regenerateSubArgument(subArgumentId);
+    }
+  }, [regenerateSubArgument]);
+
+  // Handle add SubArgument - directly create on the tree
+  const handleAddSubArgument = useCallback(async (argumentId: string) => {
+    if (!addSubArgument) return;
+
+    try {
+      const newSubArg = await addSubArgument({
+        argumentId,
+        title: '',  // Start with empty title - user will type directly
+        purpose: '',
+        relationship: '',
+        snippetIds: [],
+        isAIGenerated: false,
+        status: 'draft' as const,
+      });
+
+      // Set the newly created ID to trigger auto-edit mode
+      if (newSubArg) {
+        setNewlyCreatedSubArgId(newSubArg.id);
+        setSelectedNodeId(newSubArg.id);
+        setFocusState({ type: 'subargument', id: newSubArg.id });
+      }
+    } catch (error) {
+      console.error('Failed to create SubArgument:', error);
+    }
+  }, [addSubArgument, setFocusState]);
+
+  // Handle delete SubArgument — open modal
+  const handleSubArgumentDelete = useCallback((subArgumentId: string) => {
+    setDeleteSubArgModalId(subArgumentId);
+  }, []);
+
+  // Handle cancel creation of untitled SubArgument — silent delete, no confirmation
+  const handleSubArgumentCancelCreate = useCallback((subArgumentId: string) => {
+    removeSubArgument(subArgumentId);
+    if (focusState.type === 'subargument' && focusState.id === subArgumentId) {
+      setFocusState({ type: 'none', id: null });
+    }
+    setSelectedNodeId(null);
+    toast('Sub-argument discarded — no title entered', { duration: 2000 });
+  }, [removeSubArgument, focusState, setFocusState]);
+
+  // Confirm delete SubArgument from modal (with undo)
+  const handleSubArgumentDeleteConfirm = useCallback(() => {
+    if (!deleteSubArgModalId || !removeSubArgument) return;
+    const sa = contextSubArguments.find(s => s.id === deleteSubArgModalId);
+    const label = (sa?.title || '').slice(0, 30);
+    const idToDelete = deleteSubArgModalId;
+
+    // Optimistic: remove from UI immediately
+    removeSubArgument(idToDelete);
+    if (focusState.type === 'subargument' && focusState.id === idToDelete) {
+      setFocusState({ type: 'none', id: null });
+    }
+    setSelectedNodeId(null);
+    setDeleteSubArgModalId(null);
+
+    toast.success(
+      (toastObj) => (
+        <span className="flex items-center gap-2">
+          <span>Removed "{label}"</span>
+          <button
+            className="text-emerald-400 font-semibold hover:text-emerald-300 ml-1"
+            onClick={() => { toast.dismiss(toastObj.id); }}
+          >
+            OK
+          </button>
+        </span>
+      ),
+      { duration: 3000 },
+    );
+  }, [deleteSubArgModalId, removeSubArgument, focusState, setFocusState, contextSubArguments]);
+
+  // Handle delete Argument — open modal
+  const handleArgumentDelete = useCallback((argumentId: string) => {
+    setDeleteArgModalId(argumentId);
+  }, []);
+
+  // Confirm delete Argument from modal
+  const handleArgumentDeleteConfirm = useCallback(() => {
+    if (!deleteArgModalId || !removeArgument) return;
+    const arg = contextArguments.find(a => a.id === deleteArgModalId);
+    removeArgument(deleteArgModalId);
+    if (focusState.type === 'argument' && focusState.id === deleteArgModalId) {
+      setFocusState({ type: 'none', id: null });
+    }
+    setSelectedNodeId(null);
+    setDeleteArgModalId(null);
+    toast.success(`Argument "${(arg?.title || '').slice(0, 30)}" removed`);
+  }, [deleteArgModalId, removeArgument, focusState, setFocusState, contextArguments]);
+
+  // Handle AI title for Argument
+  const [aiTitleArgId, setAiTitleArgId] = useState<string | null>(null);
+  const handleArgumentAITitle = useCallback(async (argumentId: string) => {
+    if (aiTitleArgId || !projectId) return;
+    setAiTitleArgId(argumentId);
+    try {
+      const response = await inferArgumentTitle({ projectId, argument_id: argumentId, provider: llmProvider });
+      if (response.success && response.title) {
+        updateArgument(argumentId, { title: response.title });
+        toast.success('Title generated');
+      }
+    } catch (error) {
+      toast.error('Failed to generate title');
+    } finally {
+      setAiTitleArgId(null);
+    }
+  }, [aiTitleArgId, projectId, llmProvider, updateArgument, inferArgumentTitle]);
+
+  // AI title for a SubArgument (used by the react-flow node; legacy node calls the API itself)
+  const handleSubArgAITitle = useCallback(async (_subArgumentId: string, argumentId: string, currentTitle: string): Promise<string | null> => {
+    if (!projectId) return null;
+    try {
+      const response = await inferRelationshipMain({ projectId, argument_id: argumentId, subargument_title: currentTitle });
+      return response.success && response.relationship ? response.relationship : null;
+    } catch (error) {
+      console.error('AI title generation failed:', error);
+      return null;
+    }
+  }, [projectId, inferRelationshipMain]);
+
+  // Handle rewrite Argument (regenerate all sub-arguments' letter content)
+  const [rewritingArgId, setRewritingArgId] = useState<string | null>(null);
+  const handleArgumentRewrite = useCallback(async (argumentId: string) => {
+    if (rewritingArgId || !rewriteStandard) return;
+    const arg = contextArguments.find(a => a.id === argumentId);
+    if (!arg?.standardKey) return;
+    setRewritingArgId(argumentId);
+    try {
+      await rewriteStandard(arg.standardKey);
+      toast.success('Letter content rewritten');
+    } catch (error) {
+      toast.error('Rewrite failed');
+    } finally {
+      setRewritingArgId(null);
+    }
+  }, [rewritingArgId, contextArguments, rewriteStandard]);
+
+  // ==================== Standard Action Handlers ====================
+
+  const handleStandardRewrite = useCallback(async (standardKey: string) => {
+    setRewritingStandardKey(standardKey);
+    try {
+      await rewriteStandard(standardKey);
+      toast.success(`${standardKey.replace(/_/g, ' ')} section rewritten`);
+    } catch (err) {
+      toast.error('Failed to rewrite section');
+    } finally {
+      setRewritingStandardKey(null);
+    }
+  }, [rewriteStandard]);
+
+  const handleStandardRemoveConfirm = useCallback(async () => {
+    if (!removeModalStandardKey) return;
+    setIsRemovingStandard(true);
+    try {
+      await removeStandard(removeModalStandardKey);
+      toast.success(`${removeModalStandardKey.replace(/_/g, ' ')} removed`);
+      setRemoveModalStandardKey(null);
+    } catch (err) {
+      toast.error('Failed to remove standard');
+    } finally {
+      setIsRemovingStandard(false);
+    }
+  }, [removeModalStandardKey, removeStandard]);
+
+  const handleStandardRegenerateConfirm = useCallback(async () => {
+    if (!regenerateModalStandardKey) return;
+    setIsRegeneratingStandard(true);
+    try {
+      await regenerateStandard(regenerateModalStandardKey);
+      toast.success(`${regenerateModalStandardKey.replace(/_/g, ' ')} regenerated`);
+      setRegenerateModalStandardKey(null);
+    } catch {
+      toast.error('Failed to regenerate standard');
+    } finally {
+      setIsRegeneratingStandard(false);
+    }
+  }, [regenerateModalStandardKey, regenerateStandard]);
+
+  // ==================== Context Menu & Overall Merits ====================
+
+  const handleContextMenu = useCallback((
+    e: React.MouseEvent,
+    nodeType: 'standard' | 'argument' | 'subargument',
+    nodeId: string,
+    standardKey?: string
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, nodeType, nodeId, standardKey });
+  }, []);
+
+  const handleContextMenuMoveToOM = useCallback(() => {
+    if (!contextMenu) return;
+    const { nodeType, nodeId, standardKey } = contextMenu;
+    let label = '';
+    if (nodeType === 'standard') {
+      label = `all arguments under "${(standardKey || nodeId).replace(/_/g, ' ')}"`;
+    } else if (nodeType === 'argument') {
+      const arg = contextArguments.find(a => a.id === nodeId);
+      label = `argument "${arg?.title || nodeId}"`;
+    } else {
+      const sa = contextSubArguments.find(s => s.id === nodeId);
+      label = `sub-argument "${sa?.title || nodeId}"`;
+    }
+    // For standard nodes, convert display ID (std-awards) to backend key (awards)
+    const rawTargetId = nodeType === 'standard'
+      ? (STANDARD_ID_TO_KEY[standardKey || nodeId] || standardKey || nodeId)
+      : nodeId;
+    setOmMoveConfirm({
+      level: nodeType,
+      targetId: rawTargetId,
+      label,
+    });
+    setContextMenu(null);
+  }, [contextMenu, contextArguments, contextSubArguments]);
+
+  const handleOmMoveConfirm = useCallback(async () => {
+    if (!omMoveConfirm) return;
+    setIsMovingToOM(true);
+    try {
+      await moveToOverallMerits(omMoveConfirm.level, omMoveConfirm.targetId);
+      toast.success(`Moved ${omMoveConfirm.label} to Overall Merits`);
+      setOmMoveConfirm(null);
+    } catch (err) {
+      toast.error('Failed to move to Overall Merits');
+    } finally {
+      setIsMovingToOM(false);
+    }
+  }, [omMoveConfirm, moveToOverallMerits]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [contextMenu]);
+
+  // ==================== Merge Mode Logic ====================
+
+  // Determine which standard_key the first selected sub-arg belongs to (for same-standard constraint)
+  const mergeLockedStandardKey = useMemo(() => {
+    if (mergeSelectedIds.size === 0) return null;
+    const firstId = mergeSelectedIds.values().next().value;
+    const sa = contextSubArguments.find(s => s.id === firstId);
+    if (!sa) return null;
+    const parentArg = contextArguments.find(a => a.id === sa.argumentId);
+    return parentArg?.standardKey || null;
+  }, [mergeSelectedIds, contextSubArguments, contextArguments]);
+
+  // Toggle merge selection for a sub-argument
+  const handleMergeToggle = useCallback((subArgId: string) => {
+    setMergeSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(subArgId)) {
+        next.delete(subArgId);
+      } else {
+        next.add(subArgId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Exit merge mode
+  const exitMergeMode = useCallback(() => {
+    setIsMergeMode(false);
+    setMergeSelectedIds(new Set());
+    setBatchDeleteConfirm(false);
+    setIsMoveMode(false);
+    setIsConsolidateMode(false);
+  }, []);
+
+  // Batch delete selected sub-arguments
+  const handleBatchDeleteConfirm = useCallback(() => {
+    if (!removeSubArgument || mergeSelectedIds.size === 0) return;
+    const count = mergeSelectedIds.size;
+    for (const id of mergeSelectedIds) {
+      removeSubArgument(id);
+    }
+    setBatchDeleteConfirm(false);
+    setIsMergeMode(false);
+    setMergeSelectedIds(new Set());
+    setSelectedNodeId(null);
+    toast.success(`Removed ${count} sub-argument${count > 1 ? 's' : ''}`);
+  }, [removeSubArgument, mergeSelectedIds]);
+
+  // Handle merge: directly merge with defaults, no modal
+  const handleMergeConfirm = useCallback(async () => {
+    if (!mergeSubArguments || mergeSelectedIds.size < 2) return;
+    setIsMerging(true);
+    try {
+      // Pick defaults from the sub-arg with most snippets
+      const selectedSAs = contextSubArguments.filter(sa => mergeSelectedIds.has(sa.id));
+      const bestSA = [...selectedSAs].sort(
+        (a, b) => (b.snippetIds?.length || 0) - (a.snippetIds?.length || 0)
+      )[0];
+      const defaultTitle = bestSA?.title || 'Merged argument';
+      const purposes = selectedSAs.map(sa => sa.purpose?.trim()).filter(Boolean);
+      const defaultPurpose = [...new Set(purposes)].join('; ');
+      const defaultRelationship = bestSA?.relationship || 'Combined evidence';
+
+      const result = await mergeSubArguments(
+        Array.from(mergeSelectedIds),
+        defaultTitle,
+        defaultPurpose,
+        defaultRelationship,
+      );
+
+      // Focus the new Argument node (sub-args are moved, not fused)
+      setSelectedNodeId(result.newArgument.id);
+      setFocusState({ type: 'argument', id: result.newArgument.id });
+
+      // Exit merge mode & re-layout to avoid overlap
+      setIsMergeMode(false);
+      setMergeSelectedIds(new Set());
+      clearArgumentGraphPositions();
+      centerOnNode(result.newArgument.id);
+      toast.success(`Merged ${mergeSelectedIds.size} sub-arguments`);
+    } catch (error) {
+      toast.error('Merge failed');
+    } finally {
+      setIsMerging(false);
+    }
+  }, [mergeSubArguments, mergeSelectedIds, contextSubArguments, setFocusState, clearArgumentGraphPositions]);
+
+  // Handle move: move selected sub-args to an existing argument
+  const handleMoveConfirm = useCallback(async (targetArgumentId: string) => {
+    if (!moveSubArguments || mergeSelectedIds.size < 1) return;
+    setIsMoving(true);
+    try {
+      const count = mergeSelectedIds.size;
+      await moveSubArguments(Array.from(mergeSelectedIds), targetArgumentId);
+      setSelectedNodeId(targetArgumentId);
+      setFocusState({ type: 'argument', id: targetArgumentId });
+      setIsMergeMode(false);
+      setMergeSelectedIds(new Set());
+      setIsMoveMode(false);
+      centerOnNode(targetArgumentId);
+      toast.success(`Moved ${count} sub-argument${count > 1 ? 's' : ''}`);
+    } catch (error) {
+      toast.error('Move failed');
+    } finally {
+      setIsMoving(false);
+    }
+  }, [moveSubArguments, mergeSelectedIds, setFocusState]);
+
+  // Handle consolidate: fuse selected sub-args into one new sub-arg under target argument
+  const handleConsolidateConfirm = useCallback(async (targetArgumentId: string) => {
+    if (!consolidateSubArguments || mergeSelectedIds.size < 2) return;
+    setIsConsolidating(true);
+    try {
+      const count = mergeSelectedIds.size;
+      const result = await consolidateSubArguments(Array.from(mergeSelectedIds), targetArgumentId);
+      setSelectedNodeId(result.newSubArgument.id);
+      setFocusState({ type: 'subargument', id: result.newSubArgument.id });
+      setIsMergeMode(false);
+      setMergeSelectedIds(new Set());
+      setIsConsolidateMode(false);
+      centerOnNode(result.newSubArgument.id);
+      toast.success(`Consolidated ${count} sub-arguments`);
+    } catch (error) {
+      toast.error('Consolidation failed');
+    } finally {
+      setIsConsolidating(false);
+    }
+  }, [consolidateSubArguments, mergeSelectedIds, setFocusState]);
+
+  // Handle add Argument under a Standard
+  const handleAddArgument = useCallback(async (standardKey: string) => {
+    if (!createArgument) return;
+    try {
+      const newArg = await createArgument(standardKey);
+      if (newArg) {
+        setSelectedNodeId(newArg.id);
+        setFocusState({ type: 'argument', id: newArg.id });
+        toast.success('Added new argument');
+      }
+    } catch (error) {
+      toast.error('Failed to add argument');
+    }
+  }, [createArgument, setFocusState]);
+
+  // Compute valid move/consolidate targets (all arguments)
+  const moveTargetArgumentIds = useMemo(() => {
+    if ((!isMoveMode && !isConsolidateMode) || mergeSelectedIds.size === 0) return new Set<string>();
+    return new Set(contextArguments.map(a => a.id));
+  }, [isMoveMode, isConsolidateMode, mergeSelectedIds, contextArguments]);
+
+  // Handle standard selection
+  const handleStandardSelect = useCallback((standardId: string) => {
+    setSelectedNodeId(standardId);
+    setFocusState({ type: 'standard', id: standardId });
+  }, [setFocusState]);
+
+  // Check if a sub-argument should be highlighted (when its parent argument is focused)
+  const isSubArgumentHighlighted = useCallback((subArgNode: SubArgumentNode): boolean => {
+    // Highlighted if directly selected
+    if (selectedNodeId === subArgNode.id) return true;
+    // Highlighted if its parent argument is focused
+    if (focusState.type === 'argument' && focusState.id === subArgNode.data.argumentId) return true;
+    // Highlighted if this sub-argument is focused
+    if (focusState.type === 'subargument' && focusState.id === subArgNode.id) return true;
+    return false;
+  }, [selectedNodeId, focusState]);
+
+  // Handle canvas mouse events
+  const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    const target = e.target as Element;
+    const isCanvasClick = e.target === e.currentTarget || target.closest('svg') !== null;
+
+    if (isCanvasClick) {
+      setIsPanning(true);
+      panStartPos.current = { x: e.clientX, y: e.clientY };
+      offsetStartPos.current = { ...offset };
+      setSelectedNodeId(null);
+    }
+  };
+
+  // Handle mouse move for panning
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isPanning && panStartPos.current && offsetStartPos.current) {
+        setOffset({
+          x: offsetStartPos.current.x + (e.clientX - panStartPos.current.x),
+          y: offsetStartPos.current.y + (e.clientY - panStartPos.current.y),
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isPanning) {
+        setIsPanning(false);
+        panStartPos.current = null;
+        offsetStartPos.current = null;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isPanning]);
+
+  // Handle zoom (toolbar +/- buttons) — zoom toward container center
+  const handleZoom = useCallback((delta: number) => {
+    if (useFlow) { flowApiRef.current?.zoomBy(delta); return; }
+    const container = containerRef.current;
+    const oldScale = scaleRef.current;
+    const oldOffset = offsetRef.current;
+    const newScale = Math.max(0.5, Math.min(2, oldScale + delta));
+    if (newScale === oldScale) return;
+
+    if (!container) {
+      setScale(newScale);
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const ratio = newScale / oldScale;
+    setScale(newScale);
+    setOffset({
+      x: cx - (cx - oldOffset.x) * ratio,
+      y: cy - (cy - oldOffset.y) * ratio,
+    });
+  }, [useFlow]);
+
+  // Handle auto-arrange nodes
+  const handleArrangeNodes = useCallback(() => {
+    clearArgumentGraphPositions();
+    if (useFlow) { setTimeout(() => flowApiRef.current?.fitView(), 50); return; }
+    setScale(0.7);
+    setOffset({ x: 0, y: 0 });
+  }, [clearArgumentGraphPositions, useFlow]);
+
+  // Handle mouse wheel zoom — zoom toward mouse cursor
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const oldScale = scaleRef.current;
+    const oldOffset = offsetRef.current;
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    const newScale = Math.max(0.5, Math.min(2, oldScale + delta));
+    if (newScale === oldScale) return;
+
+    const ratio = newScale / oldScale;
+    setScale(newScale);
+    setOffset({
+      x: mx - (mx - oldOffset.x) * ratio,
+      y: my - (my - oldOffset.y) * ratio,
+    });
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [handleWheel]);
+
+  // Report container bounds for connection line clipping
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateBounds = () => {
+      const rect = container.getBoundingClientRect();
+      setWritingTreePanelBounds({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+    };
+    requestAnimationFrame(updateBounds);
+    window.addEventListener('resize', updateBounds);
+    return () => window.removeEventListener('resize', updateBounds);
+  }, [setWritingTreePanelBounds, workMode]);
+
+  // Auto-center on SubArgument when focused from LetterPanel
+  // Track last centered ID to avoid re-centering on every render
+  const lastCenteredSubArgId = useRef<string | null>(null);
+  useEffect(() => {
+    if (focusState.type !== 'subargument' || !focusState.id) {
+      lastCenteredSubArgId.current = null;
+      return;
+    }
+
+    // Only center once per focus change
+    if (lastCenteredSubArgId.current === focusState.id) return;
+
+    // Find the focused SubArgument node
+    const targetNode = subArgumentNodes.find(n => n.id === focusState.id);
+    if (!targetNode) return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    lastCenteredSubArgId.current = focusState.id;
+
+    // Get container dimensions
+    const containerRect = container.getBoundingClientRect();
+    const containerHeight = containerRect.height;
+
+    // Set scale to 70%
+    const targetScale = 0.7;
+    setScale(targetScale);
+
+    // Calculate offset to center the node vertically only
+    const targetY = targetNode.position.y;
+    const newOffsetY = (containerHeight / 2) - (targetY * targetScale);
+
+    // Keep horizontal offset at default (0) like auto-arrange button
+    setOffset({ x: 0, y: newOffsetY });
+  }, [focusState.type, focusState.id, subArgumentNodes]);
+
+  // Navigate to a standard node from the minimap
+  const handleNavigateToStandard = useCallback((standardId: string) => {
+    const targetNode = standardNodes.find(n => n.id === standardId);
+    if (!targetNode) return;
+
+    // Clear focus state so the full tree is visible
+    setFocusState({ type: 'none', id: null });
+
+    if (useFlow) { flowApiRef.current?.centerOn(targetNode.position.x, targetNode.position.y, 0.7); return; }
+    if (!containerRef.current) return;
+
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const targetScale = 0.7;
+    setScale(targetScale);
+
+    const newOffsetX = (containerRect.width / 2) - (targetNode.position.x * targetScale);
+    const newOffsetY = (containerRect.height / 2) - (targetNode.position.y * targetScale);
+    setOffset({ x: newOffsetX, y: newOffsetY });
+  }, [standardNodes, setFocusState, useFlow]);
+
+  // Deferred center: set a pending node ID, effect will center once layout updates
+  const pendingCenterNodeId = useRef<string | null>(null);
+
+  const centerOnNode = useCallback((nodeId: string) => {
+    pendingCenterNodeId.current = nodeId;
+  }, []);
+
+  useEffect(() => {
+    const nodeId = pendingCenterNodeId.current;
+    if (!nodeId) return;
+    const target = argumentNodes.find(n => n.id === nodeId)
+      || subArgumentNodes.find(n => n.id === nodeId);
+    if (!target) return;
+
+    pendingCenterNodeId.current = null;
+    if (useFlow) { flowApiRef.current?.centerOn(target.position.x, target.position.y, 0.7); return; }
+    if (!containerRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const targetScale = 0.7;
+    setScale(targetScale);
+    setOffset({
+      x: (containerRect.width / 2) - (target.position.x * targetScale),
+      y: (containerRect.height / 2) - (target.position.y * targetScale),
+    });
+  }, [argumentNodes, subArgumentNodes, useFlow]);
+
+  // ---- Structural undo / redo (M13) ----
+  const historyQuery = useHistoryQuery(projectId);
+  const undoM = useUndo();
+  const redoM = useRedo();
+  const runHistoryStep = useCallback(async (direction: 'undo' | 'redo') => {
+    if (!projectId) return;
+    const m = direction === 'undo' ? undoM : redoM;
+    if (m.isPending) return;
+    try {
+      const res = await m.mutateAsync({ projectId });
+      logInteraction('undo', 'tree', { direction, applied: res.applied, label: res.label ?? null, affected: res.affected_standard_keys ?? [] });
+      if (!res.applied) { toast(`Nothing to ${direction}`); return; }
+      (res.affected_standard_keys ?? []).forEach(k => markSectionStale(k));
+      toast.success(`${direction === 'undo' ? 'Undid' : 'Redid'}: ${(res.label ?? 'change').replace(/_/g, ' ')}`);
+    } catch (err) {
+      toast.error(`${direction} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [projectId, undoM, redoM, markSectionStale]);
+
+  // ---- Keyboard: Esc (modes / selection), j/k (walk SubArguments), v (cycle evidence), Ctrl/Cmd+Z / Shift+Z / Y ----
+  const focusStateRef = useRef(focusState);
+  focusStateRef.current = focusState;
+  const evidenceCursorRef = useRef<{ subArgumentId: string; idx: number } | null>(null);
+  useEffect(() => {
+    const isTyping = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+    const focusSubArgument = (id: string) => {
+      setSelectedNodeId(id);
+      setFocusState({ type: 'subargument', id });
+      centerOnNode(id);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isConsolidateMode) {
+          setIsConsolidateMode(false);
+        } else if (isMoveMode) {
+          setIsMoveMode(false);
+        } else if (isMergeMode) {
+          exitMergeMode();
+        } else if (selectedNodeId || focusStateRef.current.type !== 'none') {
+          setSelectedNodeId(null);
+          setFocusState({ type: 'none', id: null });
+          setSelectedSnippetId(null);
+        }
+        return;
+      }
+      if (isTyping(e.target)) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        void runHistoryStep(e.shiftKey ? 'redo' : 'undo');
+        return;
+      }
+      if (mod && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        void runHistoryStep('redo');
+        return;
+      }
+      if (mod || e.altKey) return;
+
+      if (e.key === 'j' || e.key === 'k') {
+        if (subArgumentNodes.length === 0) return;
+        e.preventDefault();
+        const fs = focusStateRef.current;
+        const currentIdx = fs.type === 'subargument' && fs.id ? subArgumentNodes.findIndex(n => n.id === fs.id) : -1;
+        const delta = e.key === 'j' ? 1 : -1;
+        const nextIdx = currentIdx < 0
+          ? (delta > 0 ? 0 : subArgumentNodes.length - 1)
+          : (currentIdx + delta + subArgumentNodes.length) % subArgumentNodes.length;
+        focusSubArgument(subArgumentNodes[nextIdx].id);
+        return;
+      }
+      if (e.key === 'v') {
+        // View evidence: cycle through the focused SubArgument's snippets in the PDF
+        const fs = focusStateRef.current;
+        if (fs.type !== 'subargument' || !fs.id) return;
+        const sub = contextSubArguments.find(sa => sa.id === fs.id);
+        const ids = sub?.snippetIds ?? [];
+        if (ids.length === 0) { toast('No evidence on this sub-argument'); return; }
+        e.preventDefault();
+        const cursor = evidenceCursorRef.current;
+        const idx = cursor && cursor.subArgumentId === fs.id ? (cursor.idx + 1) % ids.length : 0;
+        evidenceCursorRef.current = { subArgumentId: fs.id, idx };
+        const snippetId = ids[idx];
+        const snippet = allSnippets.find(sn => sn.id === snippetId);
+        if (snippet) setSelectedDocumentId(snippet.documentId);
+        setSelectedSnippetId(snippetId);
+        logInteraction('citation_click', 'tree', { via: 'keyboard_v', subargument_id: fs.id, snippet_id: snippetId, idx, total: ids.length });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMergeMode, isMoveMode, isConsolidateMode, exitMergeMode, selectedNodeId, subArgumentNodes, contextSubArguments, allSnippets, setFocusState, setSelectedSnippetId, setSelectedDocumentId, centerOnNode, runHistoryStep]);
+
+  // Get generateArguments from context
+  const { generateArguments, isGeneratingArguments } = useApp();
+
+  // Modal backdrop positioning: scoped to writing tree canvas area
+  const modalOverlayStyle = useMemo((): React.CSSProperties => {
+    if (!writingTreePanelBounds) return { inset: 0 };
+    const b = writingTreePanelBounds;
+    return {
+      top: b.top,
+      left: b.left,
+      width: b.right - b.left,
+      height: b.bottom - b.top,
+    };
+  }, [writingTreePanelBounds]);
+
+  return (
+    <div className="flex flex-col h-full bg-slate-50">
+      {/* Header */}
+      <div className="flex-shrink-0 px-4 py-2 bg-white border-b border-slate-200 relative">
+        {/* Center: Focus mode indicator (absolute center) */}
+        {focusState.type !== 'none' && (
+          <button
+            onClick={() => setFocusState({ type: 'none', id: null })}
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <span>{t('header.focusModeActive')}</span>
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+        <div className="flex items-center justify-between">
+          {/* Left side: Title */}
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800">{t('header.writingTree')}</h2>
+              <p className="text-xs text-slate-500">
+                {t('graph.argumentCount', { arguments: contextArguments.length, subArguments: contextSubArguments.length })}
+              </p>
+            </div>
+          </div>
+
+          {/* Right side: Undo / Redo (M13) + Generate button */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                onClick={() => runHistoryStep('undo')}
+                disabled={!historyQuery.data?.undo_depth || undoM.isPending}
+                className="px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={historyQuery.data?.undo[0] ? `Undo: ${historyQuery.data.undo[0].label.replace(/_/g, ' ')} (Ctrl+Z)` : 'Nothing to undo'}
+              >
+                ↶ Undo{historyQuery.data?.undo_depth ? ` (${historyQuery.data.undo_depth})` : ''}
+              </button>
+              <button
+                onClick={() => runHistoryStep('redo')}
+                disabled={!historyQuery.data?.redo_depth || redoM.isPending}
+                className="px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 border-l border-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={historyQuery.data?.redo[0] ? `Redo: ${historyQuery.data.redo[0].label.replace(/_/g, ' ')} (Ctrl+Shift+Z)` : 'Nothing to redo'}
+              >
+                ↷
+              </button>
+            </div>
+          <button
+              onClick={() => generateArguments(true)}
+              disabled={isGeneratingArguments}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGeneratingArguments ? (
+                <>
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span>Generating...</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span>Generate</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Merge mode banner */}
+      {isMergeMode && (
+        <div className="flex-shrink-0 px-4 py-1.5 bg-amber-50 border-b border-amber-200 text-xs text-amber-700">
+          Click sub-argument cards to select them for merging. All selected must be under the same standard (can be from different arguments). Press Escape to cancel.
+        </div>
+      )}
+
+      {/* Canvas area */}
+      <div className="flex-1 relative overflow-hidden">
+        {/* Zoom controls */}
+        <div className="absolute top-3 right-3 z-50 flex flex-col gap-1 bg-white rounded-lg shadow-lg border border-slate-200 p-1">
+          <button onClick={() => handleZoom(0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom In">
+            <ZoomInIcon />
+          </button>
+          <span className="text-[10px] text-slate-500 text-center select-none">{Math.round((useFlow ? flowZoom : scale) * 100)}%</span>
+          <button onClick={() => handleZoom(-0.1)} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Zoom Out">
+            <ZoomOutIcon />
+          </button>
+          <div className="border-t border-slate-200 my-0.5" />
+          <button onClick={handleArrangeNodes} className="p-1.5 hover:bg-slate-100 rounded transition-colors" title="Auto Arrange">
+            <ArrangeIcon />
+          </button>
+          <button
+            onClick={() => {
+              if (isMergeMode) {
+                exitMergeMode();
+              } else {
+                setIsMergeMode(true);
+                setMergeSelectedIds(new Set());
+              }
+            }}
+            className={`p-1.5 rounded transition-colors ${
+              isMergeMode ? 'bg-amber-100 text-amber-700' : 'hover:bg-slate-100'
+            }`}
+            title={isMergeMode ? 'Exit Merge' : 'Merge'}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => { setShowCoverage(v => !v); logInteraction('coverage_view', 'tree', { open: !showCoverage }); }}
+            className={`p-1.5 rounded transition-colors ${showCoverage ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100'}`}
+            title="Evidence coverage"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V9m4 8V5m4 12v-4M4 20h16" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Evidence coverage overview (M13) */}
+        {showCoverage && projectId && (
+          <CoveragePanel
+            projectId={projectId}
+            standards={standardNodes.map(n => ({ id: n.id, name: n.data.name, shortName: n.data.shortName, color: n.data.color }))}
+            onClose={() => setShowCoverage(false)}
+            onNavigateToStandard={handleNavigateToStandard}
+            onSelectSubArgument={(id) => { setFocusState({ type: 'subargument', id }); centerOnNode(id); }}
+            onSelectSnippet={(id) => setFocusState({ type: 'snippet', id })}
+          />
+        )}
+
+        {/* Standard minimap */}
+        <StandardMinimap
+          standardNodes={standardNodes}
+          onNavigate={handleNavigateToStandard}
+        />
+
+        {/* Legend */}
+        <div className="absolute top-3 left-3 z-50 bg-white/90 backdrop-blur-sm p-2 rounded-lg border border-slate-200 text-[10px] space-y-1.5">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-lg bg-emerald-100 border-2 border-emerald-400" />
+            <span>{t('graph.legend.subArgument')}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-lg bg-purple-100 border-2 border-purple-400" />
+            <span>{t('graph.legend.argument')}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-lg border-2 border-blue-500 bg-white" />
+            <span>{t('graph.legend.standard')}</span>
+          </div>
+          <div className="pt-1 border-t border-slate-200 text-slate-400 font-mono" title="Keyboard: j/k next/prev sub-argument · v cycle its evidence · Esc clear · Ctrl+Z undo · Ctrl+Shift+Z redo">
+            j k v Esc ⌃Z
+          </div>
+        </div>
+
+        {/* Canvas: react-flow renderer (M12) behind ?canvas=v2, legacy otherwise */}
+        {useFlow ? (
+          <div className="absolute inset-0">
+            <FlowCanvas
+              ref={flowApiRef}
+              t={t}
+              standardNodes={standardNodes}
+              argumentNodes={argumentNodes}
+              subArgumentNodes={subArgumentNodes}
+              contextArguments={contextArguments}
+              projectId={projectId}
+              focusState={focusState}
+              selectedNodeId={selectedNodeId}
+              isSubArgumentHighlighted={isSubArgumentHighlighted}
+              isMergeMode={isMergeMode}
+              isMoveMode={isMoveMode}
+              isConsolidateMode={isConsolidateMode}
+              mergeSelectedIds={mergeSelectedIds}
+              mergeLockedStandardKey={mergeLockedStandardKey}
+              moveTargetArgumentIds={moveTargetArgumentIds}
+              rewritingStandardKey={rewritingStandardKey}
+              rewritingArgId={rewritingArgId}
+              generatedStandardIds={generatedStandardIds}
+              newlyCreatedSubArgId={newlyCreatedSubArgId}
+              transformVersion={transformVersion}
+              onNodeDrag={handleNodeDrag}
+              onArgumentPositionReport={handleArgumentPositionReport}
+              onSubArgumentPositionReport={handleSubArgumentPositionReport}
+              onStandardSelect={handleStandardSelect}
+              onArgumentSelect={handleArgumentSelect}
+              onSubArgumentSelect={handleSubArgumentSelect}
+              onMergeToggle={handleMergeToggle}
+              onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
+              onSubArgumentTitleChange={handleSubArgumentTitleChange}
+              onSubArgumentRegenerate={handleSubArgumentRegenerate}
+              onSubArgumentDelete={handleSubArgumentDelete}
+              onSubArgumentCancelCreate={handleSubArgumentCancelCreate}
+              onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
+              onAddSubArgument={handleAddSubArgument}
+              onArgumentDelete={handleArgumentDelete}
+              onArgumentAITitle={handleArgumentAITitle}
+              onArgumentRewrite={handleArgumentRewrite}
+              onStandardRewrite={handleStandardRewrite}
+              onStandardRemove={(key) => setRemoveModalStandardKey(key)}
+              onStandardRegenerate={(key) => setRegenerateModalStandardKey(key)}
+              onAddArgument={handleAddArgument}
+              onContextMenu={handleContextMenu}
+              onSubArgAITitle={handleSubArgAITitle}
+              onZoomChange={setFlowZoom}
+            />
+          </div>
+        ) : (
+          <div
+            ref={containerRef}
+            className={`absolute inset-0 ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+            onMouseDown={handleCanvasMouseDown}
+          >
+            {/* Grid background */}
+            <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 0 }}>
+              <defs>
+                <pattern
+                  id="arg-grid"
+                  width={40 * scale}
+                  height={40 * scale}
+                  patternUnits="userSpaceOnUse"
+                  x={offset.x % (40 * scale)}
+                  y={offset.y % (40 * scale)}
+                >
+                  <path
+                    d={`M ${40 * scale} 0 L 0 0 0 ${40 * scale}`}
+                    fill="none"
+                    stroke="#e2e8f0"
+                    strokeWidth="1"
+                  />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#arg-grid)" />
+            </svg>
+
+            {/* Transformed content */}
+            <div
+              style={{
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transformOrigin: '0 0',
+                position: 'absolute',
+                width: '4000px',
+                height: '3000px',
+                pointerEvents: 'none',
+                zIndex: 1,  // Above grid background (z:0) to prevent clipping
+              }}
+            >
+              {/* Internal connection lines */}
+              <InternalConnectionLines
+                argumentNodes={argumentNodes}
+                standardNodes={standardNodes}
+                subArgumentNodes={subArgumentNodes}
+              />
+
+              {/* Sub-argument nodes */}
+              {subArgumentNodes.map(node => {
+                // Find this sub-arg's standard_key via its parent argument
+                const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
+                const nodeStandardKey = parentArg?.standardKey || null;
+                const isMergeDisabled = isMergeMode && mergeLockedStandardKey !== null && nodeStandardKey !== mergeLockedStandardKey;
+                const isMergeChecked = mergeSelectedIds.has(node.id);
+                return (
+                  <SubArgumentNodeComponent
+                    key={node.id}
+                    node={node}
+                    isSelected={isMergeMode ? isMergeChecked : isSubArgumentHighlighted(node)}
+                    onSelect={() => {
+                      if (isMergeMode) {
+                        if (!isMergeDisabled) handleMergeToggle(node.id);
+                      } else {
+                        handleSubArgumentSelect(node.id);
+                      }
+                    }}
+                    onDrag={isMergeMode ? () => {} : handleNodeDrag}
+                    scale={scale}
+                    t={t}
+                    onPositionReport={handleSubArgumentPositionReport}
+                    transformVersion={transformVersion}
+                    onRegenerate={isMergeMode ? undefined : handleSubArgumentRegenerate}
+                    onTitleChange={isMergeMode ? undefined : handleSubArgumentTitleChange}
+                    onDelete={isMergeMode ? undefined : handleSubArgumentDelete}
+                    onCancelCreate={handleSubArgumentCancelCreate}
+                    autoEdit={node.id === newlyCreatedSubArgId}
+                    onAutoEditComplete={() => setNewlyCreatedSubArgId(null)}
+                    mergeMode={isMergeMode}
+                    mergeChecked={isMergeChecked}
+                    mergeDisabled={isMergeDisabled}
+                    projectId={projectId}
+                    onContextMenu={(e) => {
+                      const parentArg = contextArguments.find(a => a.id === node.data.argumentId);
+                      handleContextMenu(e, 'subargument', node.id, parentArg?.standardKey);
+                    }}
+                  />
+                );
+              })}
+
+              {/* Argument nodes */}
+              {argumentNodes.map(node => (
+                <ArgumentNodeComponent
+                  key={node.id}
+                  node={node}
+                  isSelected={selectedNodeId === node.id || focusState.id === node.id}
+                  onSelect={() => handleArgumentSelect(node.id)}
+                  onDrag={handleNodeDrag}
+                  scale={scale}
+                  onPositionReport={handleArgumentPositionReport}
+                  t={t}
+                  transformVersion={transformVersion}
+                  onAddSubArgument={handleAddSubArgument}
+                  onDelete={handleArgumentDelete}
+                  onAITitle={handleArgumentAITitle}
+                  onRewrite={handleArgumentRewrite}
+                  isRewriting={rewritingArgId === node.id}
+                  isMoveMode={isMoveMode || isConsolidateMode}
+                  isMoveTarget={moveTargetArgumentIds.has(node.id)}
+                  onMoveTarget={isConsolidateMode ? handleConsolidateConfirm : handleMoveConfirm}
+                  onContextMenu={(e) => handleContextMenu(e, 'argument', node.id, node.data.standardKey)}
+                />
+              ))}
+
+              {/* Standard nodes */}
+              {standardNodes.map(node => (
+                <StandardNodeComponent
+                  key={node.id}
+                  node={node}
+                  isSelected={selectedNodeId === node.id || focusState.id === node.id}
+                  onSelect={() => handleStandardSelect(node.id)}
+                  onDrag={handleNodeDrag}
+                  scale={scale}
+                  t={t}
+                  onRewrite={handleStandardRewrite}
+                  onRemove={(key) => setRemoveModalStandardKey(key)}
+                  onRegenerate={(key) => setRegenerateModalStandardKey(key)}
+                  onAddArgument={handleAddArgument}
+                  isRewriting={rewritingStandardKey === node.id}
+                  hasLetterContent={generatedStandardIds.has(node.id)}
+                  onContextMenu={(e) => handleContextMenu(e, 'standard', node.id, node.id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Merge mode floating action bar */}
+        {isMergeMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 bg-white rounded-xl shadow-xl border border-amber-300 px-5 py-3 flex items-center gap-3 whitespace-nowrap">
+            <span className="text-sm text-slate-700 font-medium">
+              {mergeSelectedIds.size} selected
+            </span>
+            <button
+              onClick={exitMergeMode}
+              className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 border border-slate-300 rounded-lg"
+            >
+              Cancel
+            </button>
+            {!isMoveMode && !isConsolidateMode ? (
+              <>
+                <button
+                  onClick={() => setBatchDeleteConfirm(true)}
+                  disabled={mergeSelectedIds.size < 1}
+                  className="px-4 py-1.5 text-xs text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  Delete {mergeSelectedIds.size}
+                </button>
+                <button
+                  onClick={() => setIsMoveMode(true)}
+                  disabled={mergeSelectedIds.size < 1 || isMoving}
+                  className="px-4 py-1.5 text-xs text-white bg-purple-600 hover:bg-purple-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {`Move ${mergeSelectedIds.size} →`}
+                </button>
+                <button
+                  onClick={() => setIsConsolidateMode(true)}
+                  disabled={mergeSelectedIds.size < 2 || isConsolidating}
+                  className="px-4 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {`Consolidate ${mergeSelectedIds.size} →`}
+                </button>
+                <button
+                  onClick={handleMergeConfirm}
+                  disabled={mergeSelectedIds.size < 2 || isMerging}
+                  className="px-4 py-1.5 text-xs text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {isMerging ? 'Merging...' : `Merge ${mergeSelectedIds.size}`}
+                </button>
+              </>
+            ) : isMoveMode ? (
+              <span className="text-xs text-purple-700 font-medium">
+                {isMoving ? 'Moving...' : 'Click a target argument to move selected sub-arguments'}
+              </span>
+            ) : (
+              <span className="text-xs text-blue-700 font-medium">
+                {isConsolidating ? 'Consolidating...' : 'Click a target argument to consolidate into a new sub-argument'}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Argument generation overlay */}
+      {isGeneratingArguments && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
+          <div className="bg-white/90 backdrop-blur-sm rounded-xl shadow-lg px-6 py-4 flex items-center gap-3">
+            <svg className="animate-spin w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <p className="text-sm font-medium text-slate-700">Generating arguments...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Standard remove confirmation modal */}
+      {removeModalStandardKey && (() => {
+        const stdNode = standardNodes.find(n => n.id === removeModalStandardKey);
+        const argCount = contextArguments.filter(a => a.standardKey === removeModalStandardKey).length;
+        const subArgCount = contextSubArguments.filter(sa => {
+          const parentArg = contextArguments.find(a => a.id === sa.argumentId);
+          return parentArg?.standardKey === removeModalStandardKey;
+        }).length;
+        return (
+          <StandardActionModal
+            standardName={stdNode?.data.name || removeModalStandardKey}
+            standardColor={stdNode?.data.color || '#94a3b8'}
+            argumentCount={argCount}
+            subArgumentCount={subArgCount}
+            onConfirm={handleStandardRemoveConfirm}
+            overlayStyle={modalOverlayStyle}
+            onCancel={() => setRemoveModalStandardKey(null)}
+            isRemoving={isRemovingStandard}
+          />
+        );
+      })()}
+
+      {/* Standard regenerate confirmation modal */}
+      {regenerateModalStandardKey && (() => {
+        const stdNode = standardNodes.find(n => n.id === regenerateModalStandardKey);
+        const argCount = contextArguments.filter(a => a.standardKey === regenerateModalStandardKey).length;
+        const subArgCount = contextSubArguments.filter(sa => {
+          const parentArg = contextArguments.find(a => a.id === sa.argumentId);
+          return parentArg?.standardKey === regenerateModalStandardKey;
+        }).length;
+        return (
+          <StandardActionModal
+            mode="regenerate"
+            standardName={stdNode?.data.name || regenerateModalStandardKey}
+            standardColor={stdNode?.data.color || '#94a3b8'}
+            argumentCount={argCount}
+            subArgumentCount={subArgCount}
+            onConfirm={handleStandardRegenerateConfirm}
+            overlayStyle={modalOverlayStyle}
+            onCancel={() => setRegenerateModalStandardKey(null)}
+            isRemoving={isRegeneratingStandard}
+          />
+        );
+      })()}
+
+      {/* SubArgument delete confirmation modal */}
+      {deleteSubArgModalId && (() => {
+        const sa = contextSubArguments.find(s => s.id === deleteSubArgModalId);
+        return (
+          <Portal>
+            <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setDeleteSubArgModalId(null)} />
+              <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeSubArg.title', 'Remove Sub-Argument')}</h3>
+                  </div>
+                </div>
+                <div className="px-5 py-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-emerald-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-slate-700 line-clamp-2">{sa?.title || deleteSubArgModalId}</span>
+                  </div>
+                  <p className="text-sm text-slate-600">
+                    {t('graph.removeSubArg.description', 'This will permanently remove this sub-argument and its associated letter content.')}
+                  </p>
+                  <p className="text-xs text-red-600 font-medium">
+                    {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+                  </p>
+                </div>
+                <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteSubArgModalId(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button
+                    onClick={handleSubArgumentDeleteConfirm}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    {t('graph.removeStandard.confirm', 'Remove')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Portal>
+        );
+      })()}
+
+      {/* Argument delete confirmation modal */}
+      {deleteArgModalId && (() => {
+        const arg = contextArguments.find(a => a.id === deleteArgModalId);
+        const childCount = contextSubArguments.filter(sa => sa.argumentId === deleteArgModalId).length;
+        return (
+          <Portal>
+            <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setDeleteArgModalId(null)} />
+              <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <h3 className="text-sm font-semibold text-slate-800">{t('graph.removeArg.title', 'Remove Argument')}</h3>
+                  </div>
+                </div>
+                <div className="px-5 py-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-purple-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-slate-700 line-clamp-2">{arg?.title || deleteArgModalId}</span>
+                  </div>
+                  <p className="text-sm text-slate-600">
+                    {t('graph.removeArg.description', {
+                      defaultValue: 'This will permanently remove this argument and its {{count}} sub-argument(s).',
+                      count: childCount,
+                    })}
+                  </p>
+                  <p className="text-xs text-red-600 font-medium">
+                    {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+                  </p>
+                </div>
+                <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteArgModalId(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button
+                    onClick={handleArgumentDeleteConfirm}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    {t('graph.removeStandard.confirm', 'Remove')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </Portal>
+        );
+      })()}
+
+      {/* Batch delete confirmation modal */}
+      {batchDeleteConfirm && mergeSelectedIds.size > 0 && (
+        <Portal>
+          <div className="fixed z-50 flex items-center justify-center" style={modalOverlayStyle}>
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm rounded-sm" onClick={() => setBatchDeleteConfirm(false)} />
+            <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <h3 className="text-sm font-semibold text-slate-800">{t('graph.batchDelete.title', 'Batch Delete')}</h3>
+                </div>
+              </div>
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-sm text-slate-600">
+                  {t('graph.batchDelete.description', {
+                    defaultValue: 'This will permanently remove {{count}} selected sub-argument(s) and their associated letter content.',
+                    count: mergeSelectedIds.size,
+                  })}
+                </p>
+                <div className="max-h-32 overflow-y-auto space-y-1">
+                  {Array.from(mergeSelectedIds).map(id => {
+                    const sa = contextSubArguments.find(s => s.id === id);
+                    return (
+                      <div key={id} className="flex items-center gap-2 text-xs text-slate-600">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                        <span className="line-clamp-1">{sa?.title || id}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-red-600 font-medium">
+                  {t('graph.removeStandard.warning', 'This action cannot be undone.')}
+                </p>
+              </div>
+              <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setBatchDeleteConfirm(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  {t('common.cancel', 'Cancel')}
+                </button>
+                <button
+                  onClick={handleBatchDeleteConfirm}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  {t('graph.batchDelete.confirm', { defaultValue: 'Delete {{count}}', count: mergeSelectedIds.size })}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <Portal>
+          <div
+            className="fixed z-[9999] bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[200px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* "Move to Overall Merits" — only for EB-1A, and not for nodes already in OM */}
+            {projectType === 'EB-1A' && (STANDARD_ID_TO_KEY[contextMenu.standardKey || ''] || contextMenu.standardKey) !== 'overall_merits' && (
+              <>
+                <button
+                  onClick={handleContextMenuMoveToOM}
+                  className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                >
+                  <span className="text-gray-500">&#x2192;</span>
+                  Move to Overall Merits
+                </button>
+                <div className="border-t border-slate-100 my-1" />
+              </>
+            )}
+            <button
+              onClick={() => {
+                if (contextMenu.nodeType === 'standard' && contextMenu.standardKey) {
+                  setRemoveModalStandardKey(contextMenu.standardKey);
+                } else if (contextMenu.nodeType === 'argument') {
+                  setDeleteArgModalId(contextMenu.nodeId);
+                } else if (contextMenu.nodeType === 'subargument') {
+                  setDeleteSubArgModalId(contextMenu.nodeId);
+                }
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+            >
+              <span>&#x1F5D1;</span>
+              Remove {contextMenu.nodeType === 'standard' ? 'Standard' : contextMenu.nodeType === 'argument' ? 'Argument' : 'Sub-argument'}
+            </button>
+          </div>
+        </Portal>
+      )}
+
+      {/* Overall Merits move confirmation modal */}
+      {omMoveConfirm && (
+        <Portal>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]">
+            <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md mx-4">
+              <h3 className="text-lg font-semibold text-slate-800 mb-2">
+                Move to Overall Merits
+              </h3>
+              <p className="text-sm text-slate-600 mb-4">
+                Move {omMoveConfirm.label} to the <span className="font-medium text-gray-700">Overall Merits</span> section
+                (Kazarian Step 2 — Final Merits Determination)?
+              </p>
+              <p className="text-xs text-slate-500 mb-4">
+                The content will be removed from its current criterion and appear under Overall Merits.
+                All evidence references (snippet_ids, exhibit_refs) will be preserved.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setOmMoveConfirm(null)}
+                  disabled={isMovingToOM}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleOmMoveConfirm}
+                  disabled={isMovingToOM}
+                  className="px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
+                >
+                  {isMovingToOM ? 'Moving...' : 'Move to Overall Merits'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </div>
+  );
+}

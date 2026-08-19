@@ -10,150 +10,30 @@ SubArgument Generator - 次级子论点生成器
 4. relationship 字段由 LLM 生成（如 "证明管理能力"）
 """
 
-import json
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
+import logging
 import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple
 
+from ..core.prompt_loader import body as _prompt_body
 from .llm_client import call_llm
 
+logger = logging.getLogger(__name__)
 
 # ==================== Prompt Templates ====================
 
-SUBDIVIDE_SYSTEM_PROMPT = """You are an expert EB-1A immigration attorney. Your task is to organize evidence snippets
-within an argument into logical sub-groups (sub-arguments).
-
-Each sub-group should:
-1. Have a clear theme (e.g., "Scope of Responsibilities", "Performance Achievements", "Industry Recognition")
-2. Contain 1-5 related snippets
-3. Have a relationship label explaining how it supports the main argument
-
-Output in English for all titles and relationship labels."""
+SUBDIVIDE_SYSTEM_PROMPT = _prompt_body("subdivider/subdivide_system_prompt")
 
 # ==================== Standard-specific subdivision guidance ====================
 
 STANDARD_SUBDIVISION_GUIDANCE = {
-    "awards": (
-        "Split by INDIVIDUAL AWARD. Each sub-argument = one distinct award. "
-        "Within each: award description → awarding body prestige → selection rigor → competitiveness → peer comparison."
-    ),
-    "membership": (
-        "Split by INDIVIDUAL ASSOCIATION. Each sub-argument = one qualifying association. "
-        "Within each: association intro → membership criteria → review process → notable members."
-    ),
-    "published_material": (
-        "Split by INDIVIDUAL MEDIA COVERAGE. Each sub-argument = one media report about the applicant. "
-        "Within each: article summary → media outlet authority → coverage scope."
-    ),
-    "judging": (
-        "Split by INDIVIDUAL JUDGING ROLE. Each sub-argument = one judging appointment or event. "
-        "Within each: role/title → organization prestige → judging scope → applicant's influence → co-judges."
-    ),
-    "original_contribution": (
-        "Split by INDIVIDUAL CONTRIBUTION. Each sub-argument = one distinct original work or methodology. "
-        "Within each: contribution description → quantified impact → expert endorsements → adoption."
-    ),
-    "scholarly_articles": (
-        "Split by INDIVIDUAL PUBLICATION. Each sub-argument = one article or book. "
-        "Within each: title + venue → journal prestige → research novelty → citation impact."
-    ),
-    "leading_role": (
-        "Split by INDIVIDUAL ORGANIZATION. Each sub-argument = one organization. "
-        "Two-tier structure: (1) organization's distinguished reputation, then (2) applicant's role and achievements."
-    ),
-    "high_salary": (
-        "Typically NO sub-division. Keep as single unified argument. "
-        "If multiple income sources exist, may split by income type (salary, consulting, royalties)."
-    ),
-    "display": (
-        "Split by INDIVIDUAL EXHIBITION or SHOWCASE. Each sub-argument = one exhibition event. "
-        "Within each: exhibition intro → prestige → applicant's work and reception."
-    ),
-    "commercial_success": (
-        "Split by INDIVIDUAL COMMERCIAL ACHIEVEMENT. Each sub-argument = one product or commercial metric. "
-        "Within each: commercial data → industry benchmark → media recognition."
-    ),
-    # L-1A standards
-    "qualifying_relationship": (
-        "Split by type of relationship documentation. Each sub-argument = one aspect: "
-        "corporate registration/incorporation, ownership structure/share transfer, "
-        "physical premises/lease, parent company investment/capitalization."
-    ),
-    "doing_business": (
-        "Split by entity or aspect. Each sub-argument = one entity (U.S. or foreign) or business operation: "
-        "U.S. entity operations/revenue/business plan, foreign parent operations/business model, "
-        "customer relationships/contracts, financial performance/tax returns."
-    ),
-    "executive_capacity": (
-        "Split by management aspect. Each sub-argument = one component: "
-        "organizational structure/hierarchy, executive duties/responsibilities, "
-        "subordinate management/staff credentials, decision-making authority/achievements."
-    ),
-    "qualifying_employment": (
-        "Split by employment aspect. Each sub-argument = one component: "
-        "education/background, employment history/positions abroad, achievements/contracts/growth, "
-        "subordinate management/team credentials."
-    ),
-    # EB-1A overall merits (Kazarian Step 2)
-    "overall_merits": (
-        "Split by EVIDENCE THEME. Each sub-argument = one type of supplemental evidence: "
-        "awards/recognition, speaking engagements, editorial roles, commercial endorsements, "
-        "expert testimonials, international engagements. Group related evidence together."
-    ),
-    # NIW prong guidance (fallback safety net — NIW v2 normally bypasses subdivide)
-    "prong1_merit": (
-        "Split by theme: endeavor description, merit evidence, national importance, "
-        "field impact, contribution significance. Each sub-argument = one aspect of merit/importance."
-    ),
-    "prong2_positioned": (
-        "Split by qualification type: education and training, publications and citations, "
-        "work experience and achievements, expert endorsements, awards and certifications."
-    ),
-    "prong3_balance": (
-        "Split by waiver justification COMPONENT — create one sub-argument per applicable angle: "
-        "(1) Impracticality of Labor Certification — why PERM is unsuitable for this work; "
-        "(2) National Benefit Analysis — concrete benefits to the U.S.; "
-        "(3) Beyond Single Employer — work transcends any one employer; "
-        "(4) Urgency / Time-Sensitivity — only if source materials contain time-sensitive evidence; "
-        "(5) Explicit Balancing — weighing national interest vs labor protection. "
-        "Minimum 2, aim for 3-4 sub-arguments. Combine angles if fewer than 3 snippets."
-    ),
+    k: _prompt_body(f"subdivider/guidance_{k}")
+    for k in ["awards", "membership", "published_material", "judging", "original_contribution", "scholarly_articles", "leading_role", "high_salary", "display", "commercial_success", "qualifying_relationship", "doing_business", "executive_capacity", "qualifying_employment", "overall_merits", "prong1_merit", "prong2_positioned", "prong3_balance"]
 }
 
-SUBDIVIDE_USER_PROMPT = """Main Argument: {argument_title}
-Standard: {standard}
-Total Snippets: {snippet_count}
-
-## How to Split Sub-Arguments for This Standard
-{subdivision_guidance}
-
-## Snippets
-{snippets_formatted}
-
-Organize these snippets into logical sub-groups following the guidance above.
-
-Return JSON:
-{{
-  "sub_arguments": [
-    {{
-      "title": "...",
-      "purpose": "...",
-      "relationship": "...",
-      "snippet_ids": ["S1", "S3"]
-    }}
-  ]
-}}
-
-RULES:
-1. Follow the standard-specific splitting unit above (per-award, per-publication, per-role, etc.)
-2. Each snippet must be assigned to exactly ONE sub-group
-3. Use English for all title, purpose, and relationship fields
-4. Relationship should be 2-5 words explaining how this supports the main argument
-5. If snippets are too few (<=3), create 2 sub-groups
-6. Create at least 2 sub-groups"""
+SUBDIVIDE_USER_PROMPT = _prompt_body("subdivider/subdivide_user_prompt")
 
 
 @dataclass
@@ -239,7 +119,7 @@ async def subdivide_argument(
 
         raw_sub_args = result.get('sub_arguments', [])
         if not raw_sub_args:
-            print(f"[SubArgGenerator] LLM returned no sub-arguments for {argument_title}, using fallback")
+            logger.warning(f"[SubArgGenerator] LLM returned no sub-arguments for {argument_title}, using fallback")
             return [_create_single_subarg(argument_id, snippets, standard)]
 
         # Convert to GeneratedSubArgument
@@ -292,11 +172,11 @@ async def subdivide_argument(
             )
             sub_arguments.append(catch_all)
 
-        print(f"[SubArgGenerator] Subdivided '{argument_title}': {len(sub_arguments)} sub-arguments from {len(snippets)} snippets")
+        logger.info(f"[SubArgGenerator] Subdivided '{argument_title}': {len(sub_arguments)} sub-arguments from {len(snippets)} snippets")
         return sub_arguments
 
     except Exception as e:
-        print(f"[SubArgGenerator] Error subdividing {argument_title}: {e}")
+        logger.warning(f"[SubArgGenerator] Error subdividing {argument_title}: {e}")
         return [_create_single_subarg(argument_id, snippets, standard)]
 
 
@@ -406,5 +286,5 @@ async def generate_sub_arguments_for_composed(
             # Rate limiting
             await asyncio.sleep(0.2)
 
-    print(f"[SubArgGenerator] Generated {len(all_sub_arguments)} sub-arguments for {len(updated_arguments)} arguments")
+    logger.info(f"[SubArgGenerator] Generated {len(all_sub_arguments)} sub-arguments for {len(updated_arguments)} arguments")
     return updated_arguments, all_sub_arguments

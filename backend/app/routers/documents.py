@@ -10,31 +10,23 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from app.core.ids import validate_path_params
 from app.services import storage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["documents"], dependencies=[Depends(validate_path_params)])
 
 
 def _get_source_path(project_id: str) -> Path:
-    """Read source_path from project metadata.json, raise 404 on failure."""
-    metadata_file = storage.get_project_dir(project_id) / "metadata.json"
-    if not metadata_file.exists():
-        raise HTTPException(status_code=404, detail="Project metadata not found")
-
-    with open(metadata_file, "r", encoding="utf-8") as f:
-        metadata = json.load(f)
-
-    source_path = metadata.get("source_path", "")
-    if not source_path:
-        raise HTTPException(
-            status_code=404, detail="No source_path in project metadata"
-        )
-    return Path(source_path)
+    """Resolve the project's original-material directory, 404 if unavailable."""
+    source = storage.resolve_source_path(project_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source material not found for project")
+    return source
 
 
 def _exhibit_to_frontend(project_id: str, exhibit: dict) -> dict:
